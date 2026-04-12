@@ -1,10 +1,12 @@
 use dockerfile_roast::{linter, output, rules};
 
+use std::io;
 use std::path::PathBuf;
 use std::process;
 
 use anyhow::Result;
-use clap::{Parser, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::{generate, Shell};
 use colored::*;
 
 use linter::LintOptions;
@@ -47,6 +49,38 @@ impl From<FormatArg> for OutputFormat {
     }
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ShellArg {
+    Bash,
+    Fish,
+    Zsh,
+}
+
+impl From<ShellArg> for Shell {
+    fn from(s: ShellArg) -> Self {
+        match s {
+            ShellArg::Bash => Shell::Bash,
+            ShellArg::Fish => Shell::Fish,
+            ShellArg::Zsh => Shell::Zsh,
+        }
+    }
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Generate shell completion scripts
+    ///
+    /// Usage examples:
+    ///
+    ///   bash:  source <(droast completion bash)
+    ///   zsh:   droast completion zsh > ~/.zfunc/_droast
+    ///   fish:  droast completion fish | source
+    Completion {
+        #[arg(value_enum)]
+        shell: ShellArg,
+    },
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "droast",
@@ -78,13 +112,20 @@ struct Cli {
     #[arg(long)]
     no_fail: bool,
 
-    /// List all available rules and exit
     #[arg(long)]
     list_rules: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if let Some(Commands::Completion { shell }) = cli.command {
+        generate(Shell::from(shell), &mut Cli::command(), "droast", &mut io::stdout());
+        return Ok(());
+    }
 
     if cli.list_rules {
         print_rule_list();
@@ -100,7 +141,7 @@ fn main() -> Result<()> {
     let files = resolve_files(&cli.files);
     if files.is_empty() {
         eprintln!(
-            "{} No Dockerfile(s) found.",
+            "{} No Dockerfile(s) found. Pass a path or run in a directory that contains a Dockerfile.",
             "x".red().bold()
         );
         process::exit(1);
@@ -170,6 +211,9 @@ fn resolve_files(input: &[PathBuf]) -> Vec<PathBuf> {
         } else if p.is_dir() {
             let candidate = p.join("Dockerfile");
             if candidate.exists() { result.push(candidate); }
+            else {
+                eprintln!("{} No Dockerfile found in directory '{}'", "!".yellow(), p.display());
+            }
         } else {
             result.push(p.clone());
         }
