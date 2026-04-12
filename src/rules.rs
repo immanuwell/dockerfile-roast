@@ -44,8 +44,14 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF013", description: "Avoid storing secrets in ENV variables", func: rule_secrets_in_env },
         Rule { id: "DF014", description: "Avoid hardcoding passwords or tokens in ARG/ENV", func: rule_hardcoded_secrets },
         Rule { id: "DF020", description: "Set explicit non-root USER", func: rule_no_user_instruction },
+        Rule { id: "DF003", description: "Combine RUN commands to reduce layers", func: rule_many_run_layers },
         Rule { id: "DF004", description: "Clean apt/yum/apk cache in the same RUN layer", func: rule_uncleaned_package_cache },
         Rule { id: "DF005", description: "Pin package versions for reproducibility", func: rule_unpinned_packages },
+        Rule { id: "DF006", description: "Avoid ADD for local files; prefer COPY", func: rule_add_instead_of_copy },
+        Rule { id: "DF007", description: "Do not copy the entire build context (COPY . .)", func: rule_copy_all },
+        Rule { id: "DF008", description: "Use WORKDIR instead of inline cd commands", func: rule_cd_instead_of_workdir },
+        Rule { id: "DF009", description: "Use absolute paths in WORKDIR", func: rule_relative_workdir },
+        Rule { id: "DF010", description: "Avoid using sudo inside containers", func: rule_sudo_usage },
         Rule { id: "DF015", description: "Avoid using apt-get without -y flag", func: rule_apt_no_y },
         Rule { id: "DF016", description: "Use --no-install-recommends with apt-get", func: rule_apt_recommends },
         Rule { id: "DF021", description: "Avoid wget|sh pipe patterns (execute remote code)", func: rule_curl_pipe_sh },
@@ -122,6 +128,131 @@ fn rule_no_multistage(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         }];
     }
     vec![]
+}
+
+fn rule_many_run_layers(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let mut consecutive = 0usize;
+    let mut start_line = 0usize;
+    for i in instrs {
+        if i.instruction == "RUN" {
+            if consecutive == 0 { start_line = i.line; }
+            consecutive += 1;
+        } else if i.instruction == "FROM" {
+            consecutive = 0;
+        } else if consecutive > 0 {
+            if consecutive >= 4 {
+                findings.push(Finding {
+                    rule: "DF003",
+                    severity: Severity::Warning,
+                    line: start_line,
+                    message: format!("{} consecutive RUN instructions could be merged into one", consecutive),
+                    roast: format!(
+                        "{} separate RUN layers? Your image has more layers than a mid-2000s emo \
+                         band. Combine them with && and save everyone's bandwidth.", consecutive
+                    ),
+                });
+            }
+            consecutive = 0;
+        }
+    }
+    if consecutive >= 4 {
+        findings.push(Finding {
+            rule: "DF003",
+            severity: Severity::Warning,
+            line: start_line,
+            message: format!("{} consecutive RUN instructions could be merged into one", consecutive),
+            roast: format!(
+                "{} separate RUN layers? Your image is basically an onion — except nobody's \
+                 crying because it's beautiful; they're crying because it takes 10 minutes to pull.", consecutive
+            ),
+        });
+    }
+    findings
+}
+
+fn rule_add_instead_of_copy(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "ADD")
+        .into_iter()
+        .filter(|i| {
+            let args = &i.arguments;
+            !args.contains("http://") && !args.contains("https://")
+                && !args.ends_with(".tar.gz") && !args.ends_with(".tgz")
+        })
+        .map(|i| Finding {
+            rule: "DF006",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "ADD used for local file — prefer COPY".to_string(),
+            roast: "Using ADD to copy local files is like taking a helicopter to cross the \
+                    street. COPY exists, it's right there, it's boring and correct — which is \
+                    everything you want in infrastructure.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_copy_all(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "COPY")
+        .into_iter()
+        .filter(|i| { let a = i.arguments.trim(); a.starts_with(". ") || a == "." })
+        .map(|i| Finding {
+            rule: "DF007",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "COPY . copies the entire build context — consider a .dockerignore file".to_string(),
+            roast: "COPY . — dumping your entire project including node_modules, .git history, \
+                    and that .env file with the production database password into the image. \
+                    Bold. Reckless. Very DevOps of you.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_cd_instead_of_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let re = Regex::new(r"\bcd\s+[^\s;|&]+").unwrap();
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| re.is_match(&i.arguments))
+        .map(|i| Finding {
+            rule: "DF008",
+            severity: Severity::Info,
+            line: i.line,
+            message: "Using 'cd' in RUN — prefer WORKDIR instruction".to_string(),
+            roast: "`cd` in a RUN instruction: not wrong, but every new RUN starts fresh anyway, \
+                    so you're cosplaying as a shell script when you should be writing a Dockerfile. \
+                    WORKDIR is your friend.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_relative_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "WORKDIR")
+        .into_iter()
+        .filter(|i| !i.arguments.trim().starts_with('/') && !i.arguments.trim().starts_with('$'))
+        .map(|i| Finding {
+            rule: "DF009",
+            severity: Severity::Warning,
+            line: i.line,
+            message: format!("WORKDIR '{}' is relative — use an absolute path", i.arguments.trim()),
+            roast: "A relative WORKDIR? You're setting your working directory relative to... \
+                    what, exactly? Hope? Dreams? Use an absolute path like a grown-up.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_sudo_usage(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let re = Regex::new(r"\bsudo\b").unwrap();
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| re.is_match(&i.arguments))
+        .map(|i| Finding {
+            rule: "DF010",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "sudo used inside a container — likely unnecessary".to_string(),
+            roast: "sudo inside a Docker container? You're already root (probably). sudo is \
+                    just a formality at this point, like putting a 'Wet Floor' sign in the ocean.".to_string(),
+        })
+        .collect()
 }
 
 fn rule_uncleaned_package_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
