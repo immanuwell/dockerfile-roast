@@ -52,6 +52,22 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF008", description: "Use WORKDIR instead of inline cd commands", func: rule_cd_instead_of_workdir },
         Rule { id: "DF009", description: "Use absolute paths in WORKDIR", func: rule_relative_workdir },
         Rule { id: "DF010", description: "Avoid using sudo inside containers", func: rule_sudo_usage },
+        Rule { id: "DF012", description: "Set HEALTHCHECK for long-running services", func: rule_no_healthcheck },
+        Rule { id: "DF017", description: "Use ENTRYPOINT with CMD for flexible images", func: rule_cmd_without_entrypoint },
+        Rule { id: "DF018", description: "Avoid using shell form for ENTRYPOINT", func: rule_shell_form_entrypoint },
+        Rule { id: "DF019", description: "Do not use deprecated MAINTAINER; use LABEL instead", func: rule_deprecated_maintainer },
+        Rule { id: "DF022", description: "Specify EXPOSE for documented ports", func: rule_no_expose },
+        Rule { id: "DF023", description: "Avoid multiple FROM without aliases (unintended multistage)", func: rule_multiple_from_no_alias },
+        Rule { id: "DF024", description: "Avoid using :latest in FROM even with aliases", func: rule_from_latest_alias },
+        Rule { id: "DF025", description: "Use JSON array syntax for CMD/ENTRYPOINT", func: rule_shell_form_cmd },
+        Rule { id: "DF026", description: "Avoid recursive COPY from root", func: rule_copy_root },
+        Rule { id: "DF030", description: "Avoid using pip without --no-cache-dir", func: rule_pip_no_cache },
+        Rule { id: "DF031", description: "Avoid npm install without ci/--production for prod images", func: rule_npm_install },
+        Rule { id: "DF032", description: "Set PYTHONDONTWRITEBYTECODE and PYTHONUNBUFFERED for Python images", func: rule_python_env_vars },
+        Rule { id: "DF033", description: "Use .dockerignore to exclude unnecessary files", func: rule_no_dockerignore },
+        Rule { id: "DF034", description: "Avoid chmod 777 — overly permissive", func: rule_chmod_777 },
+        Rule { id: "DF035", description: "Avoid using curl without --fail flags", func: rule_curl_no_fail },
+        Rule { id: "DF036", description: "Avoid Dockerfile with no CMD or ENTRYPOINT", func: rule_no_cmd_or_entrypoint },
         Rule { id: "DF015", description: "Avoid using apt-get without -y flag", func: rule_apt_no_y },
         Rule { id: "DF016", description: "Use --no-install-recommends with apt-get", func: rule_apt_recommends },
         Rule { id: "DF021", description: "Avoid wget|sh pipe patterns (execute remote code)", func: rule_curl_pipe_sh },
@@ -253,6 +269,255 @@ fn rule_sudo_usage(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     just a formality at this point, like putting a 'Wet Floor' sign in the ocean.".to_string(),
         })
         .collect()
+}
+
+fn rule_no_healthcheck(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    if has_instr(instrs, "HEALTHCHECK") { return vec![]; }
+    if !has_instr(instrs, "EXPOSE") && !has_instr(instrs, "CMD") { return vec![]; }
+    vec![Finding {
+        rule: "DF012",
+        severity: Severity::Info,
+        line: 0,
+        message: "No HEALTHCHECK defined".to_string(),
+        roast: "No HEALTHCHECK? Your container is basically on the honor system. 'It's fine, \
+                I'm sure it's fine.' Meanwhile Kubernetes is just restarting it every 30 seconds \
+                wondering what went wrong.".to_string(),
+    }]
+}
+
+fn rule_cmd_without_entrypoint(_instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    vec![]
+}
+
+fn rule_shell_form_entrypoint(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "ENTRYPOINT")
+        .into_iter()
+        .filter(|i| !i.arguments.trim().starts_with('['))
+        .map(|i| Finding {
+            rule: "DF018",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "ENTRYPOINT in shell form prevents signal propagation".to_string(),
+            roast: "Shell-form ENTRYPOINT means your app runs as a child of /bin/sh. When \
+                    Kubernetes sends SIGTERM, your app doesn't get it — /bin/sh does, and \
+                    /bin/sh doesn't care. Use exec form: ENTRYPOINT [\"cmd\", \"arg\"].".to_string(),
+        })
+        .collect()
+}
+
+fn rule_deprecated_maintainer(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "MAINTAINER")
+        .into_iter()
+        .map(|i| Finding {
+            rule: "DF019",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "MAINTAINER is deprecated".to_string(),
+            roast: "MAINTAINER has been deprecated since Docker 1.13. That was 2017. \
+                    Your Dockerfile is old enough to be in middle school. \
+                    Use LABEL maintainer=\"...\" like the rest of us.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_no_expose(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    if has_instr(instrs, "EXPOSE") { return vec![]; }
+    if !has_instr(instrs, "CMD") && !has_instr(instrs, "ENTRYPOINT") { return vec![]; }
+    vec![Finding {
+        rule: "DF022",
+        severity: Severity::Info,
+        line: 0,
+        message: "No EXPOSE instruction — consider documenting which ports this service uses".to_string(),
+        roast: "No EXPOSE? Your container is a mystery box. Is it a web server? A database? \
+                A very slow random number generator? EXPOSE is documentation — it tells the \
+                next developer which port to knock on.".to_string(),
+    }]
+}
+
+fn rule_multiple_from_no_alias(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let froms: Vec<_> = instrs_of(instrs, "FROM");
+    if froms.len() <= 1 { return vec![]; }
+    froms.into_iter()
+        .filter(|i| {
+            let parts: Vec<&str> = i.arguments.split_whitespace().collect();
+            !(parts.len() >= 3 && parts[1].eq_ignore_ascii_case("as"))
+        })
+        .skip(1)
+        .map(|i| Finding {
+            rule: "DF023",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "Multi-stage FROM without AS alias — hard to reference later".to_string(),
+            roast: "Multi-stage FROM without an alias. How will you COPY --from=... this? \
+                    By index? \"--from=2\"? That's fragile. Give your stages names like \
+                    a civilized person. FROM golang:1.21 AS builder.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_from_latest_alias(_instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    vec![]
+}
+
+fn rule_shell_form_cmd(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "CMD")
+        .into_iter()
+        .filter(|i| !i.arguments.trim().starts_with('['))
+        .map(|i| Finding {
+            rule: "DF025",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "CMD in shell form — prefer exec form [\"executable\", \"arg\"]".to_string(),
+            roast: "Shell-form CMD wraps your process in /bin/sh -c, which means PID 1 is the \
+                    shell, not your app. Signal handling breaks, graceful shutdown breaks, and \
+                    your ops team breaks (emotionally). Use exec form.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_copy_root(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "COPY")
+        .into_iter()
+        .filter(|i| {
+            let a = i.arguments.trim();
+            a.ends_with(" /") || a.contains(" / ") || a.ends_with("/.")
+        })
+        .map(|i| Finding {
+            rule: "DF026",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "COPY to filesystem root — this may overwrite system files".to_string(),
+            roast: "Copying files directly to /? Brave. Reckless. Chaotic. You're one typo away \
+                    from overwriting /bin/sh and creating a container that doesn't even boot. \
+                    Use a dedicated app directory.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_pip_no_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| {
+            let a = &i.arguments;
+            (a.contains("pip install") || a.contains("pip3 install")) && !a.contains("--no-cache-dir")
+        })
+        .map(|i| Finding {
+            rule: "DF030",
+            severity: Severity::Info,
+            line: i.line,
+            message: "pip install without --no-cache-dir wastes space in the image layer".to_string(),
+            roast: "pip install without --no-cache-dir? You're carrying around a pip cache in \
+                    your production image like a tourist with a suitcase full of hotel shampoos. \
+                    You don't need those. Add --no-cache-dir.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_npm_install(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| {
+            let a = &i.arguments;
+            a.contains("npm install") && !a.contains("npm ci") && !a.contains("--production") && !a.contains("--omit=dev")
+        })
+        .map(|i| Finding {
+            rule: "DF031",
+            severity: Severity::Info,
+            line: i.line,
+            message: "npm install used — consider npm ci for reproducible builds".to_string(),
+            roast: "`npm install` in a Dockerfile: non-deterministic, slower than `npm ci`, \
+                    and potentially installs different versions than your lockfile specifies. \
+                    `npm ci` exists specifically for CI/CD and containers. Use it.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_python_env_vars(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let first_from = match instrs_of(instrs, "FROM").into_iter().next() {
+        Some(f) => f,
+        None => return vec![],
+    };
+    if !first_from.arguments.to_lowercase().contains("python") { return vec![]; }
+    let env_args: String = instrs_of(instrs, "ENV").iter().map(|i| i.arguments.as_str()).collect::<Vec<_>>().join(" ");
+    let mut findings = Vec::new();
+    if !env_args.contains("PYTHONDONTWRITEBYTECODE") {
+        findings.push(Finding {
+            rule: "DF032",
+            severity: Severity::Info,
+            line: 0,
+            message: "PYTHONDONTWRITEBYTECODE not set — Python will write .pyc files to the image".to_string(),
+            roast: "Python is quietly writing .pyc bytecode files all over your image. \
+                    Set PYTHONDONTWRITEBYTECODE=1 and stop Python from hoarding compiled cache \
+                    files in your container like a digital hoarder.".to_string(),
+        });
+    }
+    if !env_args.contains("PYTHONUNBUFFERED") {
+        findings.push(Finding {
+            rule: "DF032",
+            severity: Severity::Info,
+            line: 0,
+            message: "PYTHONUNBUFFERED not set — Python output may not appear in logs".to_string(),
+            roast: "PYTHONUNBUFFERED not set? Your Python app is buffering stdout, meaning \
+                    logs disappear into the void and you won't see output until the buffer \
+                    flushes — which is never, because your container crashed. Set PYTHONUNBUFFERED=1.".to_string(),
+        });
+    }
+    findings
+}
+
+fn rule_no_dockerignore(_instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    vec![]
+}
+
+fn rule_chmod_777(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let re = Regex::new(r"chmod\s+([-R\s]*)777").unwrap();
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| re.is_match(&i.arguments))
+        .map(|i| Finding {
+            rule: "DF034",
+            severity: Severity::Error,
+            line: i.line,
+            message: "chmod 777 grants world-writable permissions — overly permissive".to_string(),
+            roast: "chmod 777? Giving everyone read, write, and execute access is the filesystem \
+                    equivalent of leaving your front door open with a sign that says \
+                    'free stuff inside'. Minimum permissions, please.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_curl_no_fail(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| {
+            let a = &i.arguments;
+            a.contains("curl ") && !a.contains("--fail") && !a.contains("-fsSL")
+                && !a.contains("-fsS") && !a.contains("-fL")
+        })
+        .map(|i| Finding {
+            rule: "DF035",
+            severity: Severity::Info,
+            line: i.line,
+            message: "curl without --fail — HTTP errors won't cause the RUN step to fail".to_string(),
+            roast: "curl without --fail means a 404 or 500 response silently succeeds. \
+                    Your build will happily continue after downloading an error page and \
+                    treating it as a binary. Add --fail and save yourself a 2am debugging session.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_no_cmd_or_entrypoint(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    if has_instr(instrs, "CMD") || has_instr(instrs, "ENTRYPOINT") { return vec![]; }
+    if instrs.len() < 3 { return vec![]; }
+    vec![Finding {
+        rule: "DF036",
+        severity: Severity::Warning,
+        line: 0,
+        message: "No CMD or ENTRYPOINT defined — the container has no default command".to_string(),
+        roast: "No CMD or ENTRYPOINT? This container starts, does nothing, and immediately exits \
+                like an intern on their first day who didn't read the onboarding docs. \
+                Tell it what to run.".to_string(),
+    }]
 }
 
 fn rule_uncleaned_package_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
