@@ -77,10 +77,20 @@ struct Cli {
 
     #[arg(long)]
     no_fail: bool,
+
+    /// List all available rules and exit
+    #[arg(long)]
+    list_rules: bool,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if cli.list_rules {
+        print_rule_list();
+        return Ok(());
+    }
+
     let format: OutputFormat = cli.format.into();
 
     if format == OutputFormat::Terminal {
@@ -128,6 +138,18 @@ fn main() -> Result<()> {
 
     if any_error && !cli.no_fail { process::exit(1); }
     Ok(())
+}
+
+fn print_rule_list() {
+    println!("\n  {}\n", "Available Rules".bold().underline());
+    println!("  {:<8} {}", "ID".bold(), "DESCRIPTION".bold());
+    println!("  {}", "─".repeat(70));
+    for rule in rules::all_rules() {
+        println!("  {:<8} {}", rule.id.cyan(), rule.description);
+    }
+    println!();
+    println!("  Use --skip DF001,DF002 to suppress specific rules.");
+    println!("  Use --min-severity warning to hide INFO findings.\n");
 }
 
 fn resolve_files(input: &[PathBuf]) -> Vec<PathBuf> {
