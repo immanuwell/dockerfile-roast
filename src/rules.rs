@@ -491,8 +491,25 @@ fn rule_curl_no_fail(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .into_iter()
         .filter(|i| {
             let a = &i.arguments;
-            a.contains("curl ") && !a.contains("--fail") && !a.contains("-fsSL")
-                && !a.contains("-fsS") && !a.contains("-fL")
+            // only flag when curl is actually fetching something, not being installed as a package
+            let has_url = a.contains("http://") || a.contains("https://") || a.contains("ftp://");
+            has_url
+                && a.contains("curl")
+                && !a.contains("--fail")
+                && !a.contains("-fsSL")
+                && !a.contains("-fsS")
+                && !a.contains("-fL")
+                && !a.contains("-fs ")
+                && !{
+                    let mut found = false;
+                    for part in a.split_whitespace() {
+                        if part.starts_with('-') && !part.starts_with("--") && part.contains('f') {
+                            found = true;
+                            break;
+                        }
+                    }
+                    found
+                }
         })
         .map(|i| Finding {
             rule: "DF035",
