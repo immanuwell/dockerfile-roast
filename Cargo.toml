@@ -2,9 +2,11 @@
 name = "dockerfile-roast"
 version = "0.1.0"
 edition = "2021"
+description = "A Dockerfile linter with personality — catches bad practices with snarky, funny error messages"
+license = "MIT"
 
 [[bin]]
-name = "roast"
+name = "droast"
 path = "src/main.rs"
 
 [dependencies]

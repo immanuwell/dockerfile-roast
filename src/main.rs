@@ -1,7 +1,4 @@
-mod linter;
-mod output;
-mod parser;
-mod rules;
+use dockerfile_roast::{linter, output, rules};
 
 use std::path::PathBuf;
 use std::process;
@@ -52,7 +49,7 @@ impl From<FormatArg> for OutputFormat {
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "roast",
+    name = "droast",
     about = "Dockerfile linter with personality",
     long_about = "A Dockerfile linter that catches bad practices and roasts you about them.\n\
                   Think of it as a very opinionated senior engineer doing a code review.",
