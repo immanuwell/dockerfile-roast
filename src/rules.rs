@@ -80,6 +80,9 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF040", description: "EXPOSE port must be in valid range 0-65535", func: rule_expose_port_range },
         Rule { id: "DF041", description: "Multiple HEALTHCHECK instructions — only the last one applies", func: rule_multiple_healthcheck },
         Rule { id: "DF042", description: "FROM stage aliases must be unique", func: rule_unique_stage_aliases },
+        Rule { id: "DF043", description: "zypper install without non-interactive flag", func: rule_zypper_no_y },
+        Rule { id: "DF044", description: "Avoid zypper dist-upgrade in Dockerfiles", func: rule_zypper_dist_upgrade },
+        Rule { id: "DF045", description: "Run zypper clean after zypper install", func: rule_zypper_clean },
     ]
 }
 
@@ -783,6 +786,60 @@ fn rule_curl_pipe_sh(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             roast: "curl | sh: the technical equivalent of 'hold my beer'. You're downloading \
                     code from the internet and executing it blind, inside your container, \
                     and shipping it to prod. Your threat model is vibes.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_zypper_no_y(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| {
+            let a = &i.arguments;
+            (a.contains("zypper install") || a.contains("zypper in "))
+                && !a.contains("-y") && !a.contains("--non-interactive") && !a.contains(" -n ")
+                && !a.contains(" -n\n") && !a.starts_with("-n ")
+        })
+        .map(|i| Finding {
+            rule: "DF043",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "zypper install without non-interactive flag (-y) will hang in a build".to_string(),
+            roast: "zypper install without -y in a container build? It'll wait for input that \
+                    will never arrive, like a chatbot asking for emotional validation.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_zypper_dist_upgrade(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| i.arguments.contains("zypper dist-upgrade") || i.arguments.contains("zypper dup"))
+        .map(|i| Finding {
+            rule: "DF044",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "zypper dist-upgrade upgrades all packages unpredictably — avoid in Dockerfiles".to_string(),
+            roast: "zypper dist-upgrade: the 'nuke everything and hope for the best' approach to \
+                    package management. Your image will be different every single build. Congrats.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_zypper_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| {
+            let a = &i.arguments;
+            (a.contains("zypper install") || a.contains("zypper in "))
+                && !a.contains("zypper clean") && !a.contains("zypper cc")
+        })
+        .map(|i| Finding {
+            rule: "DF045",
+            severity: Severity::Info,
+            line: i.line,
+            message: "zypper cache not cleaned after install — adds unnecessary image bloat".to_string(),
+            roast: "zypper install without `zypper clean --all` afterwards. You're hoarding package \
+                    metadata in your image. Clean it up.".to_string(),
         })
         .collect()
 }
