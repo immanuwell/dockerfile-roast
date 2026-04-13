@@ -96,6 +96,12 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF056", description: "Use wget --progress=dot:giga to avoid bloated build logs", func: rule_wget_no_progress },
         Rule { id: "DF057", description: "Set -o pipefail before RUN commands that use pipes", func: rule_pipefail_missing },
         Rule { id: "DF058", description: "Use either wget or curl consistently, not both", func: rule_wget_and_curl },
+        Rule { id: "DF059", description: "Use apt-get or apt-cache instead of apt in scripts", func: rule_apt_instead_of_apt_get },
+        Rule { id: "DF060", description: "Avoid running pointless interactive commands inside containers", func: rule_useless_commands },
+        Rule { id: "DF061", description: "Do not use --platform in FROM unless required", func: rule_from_platform_flag },
+        Rule { id: "DF062", description: "ENV variable must not reference itself in the same statement", func: rule_env_self_reference },
+        Rule { id: "DF063", description: "COPY to relative destination requires WORKDIR to be set first", func: rule_copy_relative_no_workdir },
+        Rule { id: "DF064", description: "useradd without -l flag may create excessively large images", func: rule_useradd_no_l },
     ]
 }
 
@@ -799,6 +805,152 @@ fn rule_curl_pipe_sh(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             roast: "curl | sh: the technical equivalent of 'hold my beer'. You're downloading \
                     code from the internet and executing it blind, inside your container, \
                     and shipping it to prod. Your threat model is vibes.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_apt_instead_of_apt_get(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let re = Regex::new(r"\bapt\s+(install|remove|update|upgrade|list|search|show|purge)\b").unwrap();
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| re.is_match(&i.arguments))
+        .map(|i| Finding {
+            rule: "DF059",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "apt used instead of apt-get — apt is an end-user tool, not suited for scripts".to_string(),
+            roast: "`apt` is designed for humans: it has progress bars, color output, and a \
+                    warning that says 'do not use in scripts'. You are in a script. \
+                    Use apt-get or apt-cache instead.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_useless_commands(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let useless = ["ssh ", "vim ", "nano ", "emacs ", "shutdown", "reboot",
+                   "service ", "systemctl ", "ifconfig ", "iwconfig",
+                   "free ", "top ", "htop ", "mount ", "umount "];
+    let mut findings = Vec::new();
+    for i in instrs_of(instrs, "RUN") {
+        for cmd in &useless {
+            if i.arguments.contains(cmd) {
+                findings.push(Finding {
+                    rule: "DF060",
+                    severity: Severity::Info,
+                    line: i.line,
+                    message: format!(
+                        "Command '{}' makes little sense inside a container",
+                        cmd.trim()
+                    ),
+                    roast: format!(
+                        "`{}` in a Dockerfile: you're running a command that assumes a full \
+                         interactive OS environment inside a container. It doesn't apply here. \
+                         Containers are not VMs.",
+                        cmd.trim()
+                    ),
+                });
+                break;
+            }
+        }
+    }
+    findings
+}
+
+fn rule_from_platform_flag(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "FROM")
+        .into_iter()
+        .filter(|i| i.arguments.contains("--platform"))
+        .map(|i| Finding {
+            rule: "DF061",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "FROM uses --platform flag — consider whether cross-platform targeting is intentional".to_string(),
+            roast: "--platform in FROM forces a specific architecture. If you're building for \
+                    amd64 but deploying on arm64, your image will be slow or broken. \
+                    Make sure this is intentional and documented.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_env_self_reference(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let re = Regex::new(r"(\w+)=.*\$\{?(\w+)\}?").unwrap();
+    let mut findings = Vec::new();
+    for i in instrs_of(instrs, "ENV") {
+        for cap in re.captures_iter(&i.arguments) {
+            let defined = &cap[1];
+            let referenced = &cap[2];
+            if defined == referenced {
+                findings.push(Finding {
+                    rule: "DF062",
+                    severity: Severity::Error,
+                    line: i.line,
+                    message: format!(
+                        "ENV variable '{}' references itself in the same statement",
+                        defined
+                    ),
+                    roast: format!(
+                        "ENV {}=${{{}}} — you're defining a variable using itself. \
+                         It hasn't been set yet at this point in the same ENV instruction. \
+                         The result will be an empty string. Split it into two ENV statements.",
+                        defined, referenced
+                    ),
+                });
+                break;
+            }
+        }
+    }
+    findings
+}
+
+fn rule_copy_relative_no_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let mut workdir_set = false;
+    let mut findings = Vec::new();
+    for i in instrs {
+        if i.instruction == "FROM" {
+            workdir_set = false;
+        } else if i.instruction == "WORKDIR" {
+            workdir_set = true;
+        } else if i.instruction == "COPY" {
+            let args: Vec<&str> = i.arguments.split_whitespace()
+                .filter(|t| !t.starts_with("--"))
+                .collect();
+            if let Some(dest) = args.last() {
+                if !dest.starts_with('/') && !dest.starts_with('$') && !workdir_set {
+                    findings.push(Finding {
+                        rule: "DF063",
+                        severity: Severity::Warning,
+                        line: i.line,
+                        message: format!(
+                            "COPY to relative destination '{}' but no WORKDIR has been set",
+                            dest
+                        ),
+                        roast: format!(
+                            "COPY to '{}' with no WORKDIR set. Relative destinations depend on \
+                             the working directory, which defaults to /. \
+                             Set WORKDIR explicitly before using relative paths.",
+                            dest
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    findings
+}
+
+fn rule_useradd_no_l(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let re = Regex::new(r"\buseradd\b").unwrap();
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| re.is_match(&i.arguments) && !i.arguments.contains(" -l") && !i.arguments.contains("--no-log-init"))
+        .map(|i| Finding {
+            rule: "DF064",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "useradd without -l flag — high UIDs create oversized /var/log/lastlog entries".to_string(),
+            roast: "useradd without -l (--no-log-init): with a high UID, this creates a sparse \
+                    file in /var/log/lastlog that can balloon your image size by gigabytes. \
+                    Add -l or use --no-log-init.".to_string(),
         })
         .collect()
 }
