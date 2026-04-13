@@ -85,6 +85,9 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF045", description: "Run zypper clean after zypper install", func: rule_zypper_clean },
         Rule { id: "DF046", description: "Run dnf clean all after dnf install", func: rule_dnf_clean },
         Rule { id: "DF047", description: "Run yum clean all after yum install", func: rule_yum_clean },
+        Rule { id: "DF048", description: "COPY with multiple sources requires destination to end with /", func: rule_copy_multi_arg_slash },
+        Rule { id: "DF049", description: "COPY --from must reference a previously defined stage", func: rule_copy_from_undefined_stage },
+        Rule { id: "DF050", description: "COPY --from cannot reference the current stage", func: rule_copy_from_self },
     ]
 }
 
@@ -790,6 +793,109 @@ fn rule_curl_pipe_sh(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     and shipping it to prod. Your threat model is vibes.".to_string(),
         })
         .collect()
+}
+
+fn rule_copy_multi_arg_slash(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "COPY")
+        .into_iter()
+        .filter(|i| {
+            let args: Vec<&str> = i.arguments.split_whitespace()
+                .filter(|t| !t.starts_with("--"))
+                .collect();
+            if args.len() > 2 {
+                let dest = args.last().unwrap_or(&"");
+                !dest.ends_with('/')
+            } else {
+                false
+            }
+        })
+        .map(|i| Finding {
+            rule: "DF048",
+            severity: Severity::Error,
+            line: i.line,
+            message: "COPY with multiple sources requires the destination to end with /".to_string(),
+            roast: "COPY with multiple sources and a destination that doesn't end with /? \
+                    Docker will complain. Or worse, silently do something weird. \
+                    Add a trailing slash to the destination.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_copy_from_undefined_stage(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let mut defined_aliases: Vec<String> = Vec::new();
+    let mut findings = Vec::new();
+    let re_from = Regex::new(r"(?i)--from=(\S+)").unwrap();
+    for i in instrs {
+        if i.instruction == "FROM" {
+            let parts: Vec<&str> = i.arguments.split_whitespace().collect();
+            if parts.len() >= 3 && parts[1].eq_ignore_ascii_case("as") {
+                defined_aliases.push(parts[2].to_lowercase());
+            }
+        } else if i.instruction == "COPY" {
+            if let Some(cap) = re_from.captures(&i.arguments) {
+                let from_ref = cap[1].to_lowercase();
+                // skip numeric references like --from=0
+                if from_ref.parse::<usize>().is_ok() { continue; }
+                if !defined_aliases.contains(&from_ref) {
+                    findings.push(Finding {
+                        rule: "DF049",
+                        severity: Severity::Warning,
+                        line: i.line,
+                        message: format!(
+                            "COPY --from={} references an undefined build stage",
+                            &cap[1]
+                        ),
+                        roast: format!(
+                            "COPY --from={} and there's no FROM ... AS {} anywhere above. \
+                             Copying from thin air. Docker will reject this.",
+                            &cap[1], &cap[1]
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    findings
+}
+
+fn rule_copy_from_self(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let re_from = Regex::new(r"(?i)--from=(\S+)").unwrap();
+    let mut current_alias: Option<String> = None;
+    let mut findings = Vec::new();
+    for i in instrs {
+        if i.instruction == "FROM" {
+            let parts: Vec<&str> = i.arguments.split_whitespace().collect();
+            current_alias = if parts.len() >= 3 && parts[1].eq_ignore_ascii_case("as") {
+                Some(parts[2].to_lowercase())
+            } else {
+                None
+            };
+        } else if i.instruction == "COPY" {
+            if let Some(cap) = re_from.captures(&i.arguments) {
+                let from_ref = cap[1].to_lowercase();
+                if let Some(ref alias) = current_alias {
+                    if &from_ref == alias {
+                        findings.push(Finding {
+                            rule: "DF050",
+                            severity: Severity::Error,
+                            line: i.line,
+                            message: format!(
+                                "COPY --from={} references the current build stage — circular dependency",
+                                &cap[1]
+                            ),
+                            roast: format!(
+                                "COPY --from={} inside the same stage named {}. \
+                                 That's a circular reference. Docker cannot copy from itself. \
+                                 This will fail at build time.",
+                                &cap[1], &cap[1]
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    findings
 }
 
 fn rule_dnf_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
