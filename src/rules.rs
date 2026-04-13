@@ -77,6 +77,9 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF037", description: "Dockerfile must begin with FROM, ARG, or a comment", func: rule_invalid_instruction_order },
         Rule { id: "DF038", description: "Multiple CMD instructions — only the last one takes effect", func: rule_multiple_cmd },
         Rule { id: "DF039", description: "Multiple ENTRYPOINT instructions — only the last one takes effect", func: rule_multiple_entrypoint },
+        Rule { id: "DF040", description: "EXPOSE port must be in valid range 0-65535", func: rule_expose_port_range },
+        Rule { id: "DF041", description: "Multiple HEALTHCHECK instructions — only the last one applies", func: rule_multiple_healthcheck },
+        Rule { id: "DF042", description: "FROM stage aliases must be unique", func: rule_unique_stage_aliases },
     ]
 }
 
@@ -782,6 +785,74 @@ fn rule_curl_pipe_sh(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     and shipping it to prod. Your threat model is vibes.".to_string(),
         })
         .collect()
+}
+
+fn rule_expose_port_range(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for i in instrs_of(instrs, "EXPOSE") {
+        for port_spec in i.arguments.split_whitespace() {
+            let port_str = port_spec.split('/').next().unwrap_or(port_spec);
+            if let Ok(port) = port_str.parse::<u32>() {
+                if port > 65535 {
+                    findings.push(Finding {
+                        rule: "DF040",
+                        severity: Severity::Error,
+                        line: i.line,
+                        message: format!("EXPOSE port {} is out of valid range (0-65535)", port),
+                        roast: format!(
+                            "Port {}? That's not a port, that's a zip code. \
+                             Valid UNIX ports are 0-65535. Pick a real one.",
+                            port
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    findings
+}
+
+fn rule_multiple_healthcheck(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let checks: Vec<_> = instrs_of(instrs, "HEALTHCHECK");
+    if checks.len() <= 1 { return vec![]; }
+    checks[1..].iter().map(|i| Finding {
+        rule: "DF041",
+        severity: Severity::Error,
+        line: i.line,
+        message: "Multiple HEALTHCHECK instructions — only the last one applies".to_string(),
+        roast: "Multiple HEALTHCHECKs but only the last one counts. The earlier ones are \
+                haunting your image for no reason. One health check, one truth.".to_string(),
+    }).collect()
+}
+
+fn rule_unique_stage_aliases(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut findings = Vec::new();
+    for i in instrs_of(instrs, "FROM") {
+        let parts: Vec<&str> = i.arguments.split_whitespace().collect();
+        if parts.len() >= 3 && parts[1].eq_ignore_ascii_case("as") {
+            let alias = parts[2].to_lowercase();
+            if let Some(&prev_line) = seen.get(&alias) {
+                findings.push(Finding {
+                    rule: "DF042",
+                    severity: Severity::Error,
+                    line: i.line,
+                    message: format!(
+                        "FROM alias '{}' is already defined on line {}",
+                        parts[2], prev_line
+                    ),
+                    roast: format!(
+                        "Two stages named '{}'. Docker uses the last one; the first is dead code. \
+                         Give your stages unique names.",
+                        parts[2]
+                    ),
+                });
+            } else {
+                seen.insert(alias, i.line);
+            }
+        }
+    }
+    findings
 }
 
 fn rule_invalid_instruction_order(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
