@@ -1,0 +1,7 @@
+target/
+dist/
+.git/
+.github/
+media/
+tests/
+*.md

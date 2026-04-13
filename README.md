@@ -40,6 +40,29 @@ droast --format json Dockerfile      # machine-readable
 droast --format compact Dockerfile   # one line per finding
 ```
 
+## docker
+
+no install needed:
+
+```bash
+# lint a Dockerfile in the current directory
+docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile ghcr.io/immanuwell/dockerfile-roast /Dockerfile
+
+# lint any file, anywhere
+docker run --rm -v /path/to/your/Dockerfile:/Dockerfile ghcr.io/immanuwell/dockerfile-roast /Dockerfile
+
+# pass flags as usual
+docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile ghcr.io/immanuwell/dockerfile-roast \
+    --no-roast --min-severity warning /Dockerfile
+```
+
+or build the image yourself:
+
+```bash
+docker build -t droast .
+docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile droast /Dockerfile
+```
+
 ## shell completions
 
 add this once, never mistype `--min-severity` again:
