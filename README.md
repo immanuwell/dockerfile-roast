@@ -57,7 +57,7 @@ droast completion fish | source
 
 ## what it catches
 
-36 rules, ngl thats a lot. run `droast --list-rules` for the full breakdown.
+64 rules, ngl thats a lot. run `droast --list-rules` for the full breakdown.
 
 the greatest hits:
 
@@ -71,6 +71,13 @@ the greatest hits:
 | DF021 | `curl \| sh` — no. |
 | DF028 | split `apt-get update` + install in separate RUN layers |
 | DF034 | `chmod 777` somewhere in there |
+| DF037 | instruction before FROM (invalid Dockerfile) |
+| DF039 | multiple ENTRYPOINT instructions |
+| DF046 | dnf install without cache cleanup |
+| DF051 | pip install without version pins |
+| DF057 | pipe in RUN without `set -o pipefail` |
+| DF059 | `apt` used instead of `apt-get` in scripts |
+| DF063 | COPY to relative path with no WORKDIR set |
 
 rule categories: base images · security · package managers · layer hygiene · instruction quality · service quality · python/node specifics
 
