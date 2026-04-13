@@ -83,6 +83,8 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF043", description: "zypper install without non-interactive flag", func: rule_zypper_no_y },
         Rule { id: "DF044", description: "Avoid zypper dist-upgrade in Dockerfiles", func: rule_zypper_dist_upgrade },
         Rule { id: "DF045", description: "Run zypper clean after zypper install", func: rule_zypper_clean },
+        Rule { id: "DF046", description: "Run dnf clean all after dnf install", func: rule_dnf_clean },
+        Rule { id: "DF047", description: "Run yum clean all after yum install", func: rule_yum_clean },
     ]
 }
 
@@ -786,6 +788,42 @@ fn rule_curl_pipe_sh(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             roast: "curl | sh: the technical equivalent of 'hold my beer'. You're downloading \
                     code from the internet and executing it blind, inside your container, \
                     and shipping it to prod. Your threat model is vibes.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_dnf_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| {
+            let a = &i.arguments;
+            a.contains("dnf install") && !a.contains("dnf clean all") && !a.contains("dnf clean")
+        })
+        .map(|i| Finding {
+            rule: "DF046",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "dnf clean all missing after dnf install — RPM cache bloats the image".to_string(),
+            roast: "dnf install without `dnf clean all` afterwards? You're shipping RPM cache \
+                    metadata to production. That's not a feature. Add `&& dnf clean all`.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_yum_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| {
+            let a = &i.arguments;
+            a.contains("yum install") && !a.contains("yum clean all") && !a.contains("yum clean")
+        })
+        .map(|i| Finding {
+            rule: "DF047",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "yum clean all missing after yum install — cache stays in the image".to_string(),
+            roast: "yum install without cleanup is just permanently housing the package cache in \
+                    your image. Every MB of yum cache is a MB of shame in your registry.".to_string(),
         })
         .collect()
 }
