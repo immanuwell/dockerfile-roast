@@ -2,19 +2,29 @@
 # build-release.sh — cross-compile droast for all platforms and upload to a GitHub release
 #
 # Usage:
-#   ./scripts/build-release.sh 1.0.0
+#   ./scripts/build-release.sh 1.0.0              # binaries only
+#   ./scripts/build-release.sh 1.0.0 --docker     # binaries + build and push Docker image
 #
 # Requirements:
 #   - cargo-zigbuild  (cargo install cargo-zigbuild)
 #   - zig             (in PATH)
 #   - gh              (GitHub CLI, authenticated)
 #   - rustup targets  (installed automatically if missing)
+#   - docker          (only required with --docker)
 
 set -euo pipefail
 
 RELEASE="${1:-}"
+PUSH_DOCKER=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --docker) PUSH_DOCKER=true ;;
+    esac
+done
+
 if [[ -z "$RELEASE" ]]; then
-    echo "Usage: $0 <release-tag>  (e.g. $0 1.0.0)" >&2
+    echo "Usage: $0 <release-tag> [--docker]  (e.g. $0 1.0.0 --docker)" >&2
     exit 1
 fi
 
@@ -46,7 +56,7 @@ require cargo
 require cargo-zigbuild
 require zig
 require gh
-require docker
+if $PUSH_DOCKER; then require docker; fi
 
 log "Verifying GitHub release '$RELEASE' exists..."
 gh release view "$RELEASE" --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" \
@@ -109,21 +119,23 @@ gh release upload "$RELEASE" \
 echo ""
 ok "All done. Artifacts uploaded to: https://github.com/$REPO/releases/tag/$RELEASE"
 
-# ── docker ───────────────────────────────────────────────────────────────────
+# ── docker (optional) ────────────────────────────────────────────────────────
 
-GHCR_IMAGE="ghcr.io/$(gh repo view --json owner -q .owner.login)/dockerfile-roast"
+if $PUSH_DOCKER; then
+    GHCR_IMAGE="ghcr.io/$(gh repo view --json owner -q .owner.login)/dockerfile-roast"
 
-log "Logging in to GHCR..."
-gh auth token | docker login ghcr.io -u "$(gh api user -q .login)" --password-stdin
+    log "Logging in to GHCR..."
+    gh auth token | docker login ghcr.io -u "$(gh api user -q .login)" --password-stdin
 
-log "Building Docker image..."
-docker build -t "$GHCR_IMAGE:$RELEASE" -t "$GHCR_IMAGE:latest" "$REPO_ROOT"
+    log "Building Docker image..."
+    docker build -t "$GHCR_IMAGE:$RELEASE" -t "$GHCR_IMAGE:latest" "$REPO_ROOT"
 
-log "Pushing Docker image..."
-docker push "$GHCR_IMAGE:$RELEASE"
-docker push "$GHCR_IMAGE:latest"
-ok "$GHCR_IMAGE:$RELEASE"
-ok "$GHCR_IMAGE:latest"
+    log "Pushing Docker image..."
+    docker push "$GHCR_IMAGE:$RELEASE"
+    docker push "$GHCR_IMAGE:latest"
+    ok "$GHCR_IMAGE:$RELEASE"
+    ok "$GHCR_IMAGE:latest"
+fi
 
 # ── cleanup ───────────────────────────────────────────────────────────────────
 
