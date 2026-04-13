@@ -92,6 +92,8 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF052", description: "Pin versions in apk add", func: rule_apk_version_pinning },
         Rule { id: "DF053", description: "Pin versions in gem install", func: rule_gem_version_pinning },
         Rule { id: "DF054", description: "Pin versions in go install with @version", func: rule_go_install_version },
+        Rule { id: "DF055", description: "Run yarn cache clean after yarn install", func: rule_yarn_cache_clean },
+        Rule { id: "DF056", description: "Use wget --progress=dot:giga to avoid bloated build logs", func: rule_wget_no_progress },
     ]
 }
 
@@ -795,6 +797,47 @@ fn rule_curl_pipe_sh(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             roast: "curl | sh: the technical equivalent of 'hold my beer'. You're downloading \
                     code from the internet and executing it blind, inside your container, \
                     and shipping it to prod. Your threat model is vibes.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_yarn_cache_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| {
+            let a = &i.arguments;
+            (a.contains("yarn install") || a.contains("yarn add"))
+                && !a.contains("yarn cache clean")
+        })
+        .map(|i| Finding {
+            rule: "DF055",
+            severity: Severity::Info,
+            line: i.line,
+            message: "yarn install without yarn cache clean — yarn cache is left in the image".to_string(),
+            roast: "yarn install without cleaning the cache. Yarn dutifully stores downloaded \
+                    packages in a cache that you are now shipping to production. \
+                    Add `&& yarn cache clean` after install.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_wget_no_progress(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| {
+            let a = &i.arguments;
+            a.contains("wget ") && !a.contains("--progress") && !a.contains("-q")
+                && !a.contains("--quiet")
+                && (a.contains("http://") || a.contains("https://") || a.contains("ftp://"))
+        })
+        .map(|i| Finding {
+            rule: "DF056",
+            severity: Severity::Info,
+            line: i.line,
+            message: "wget without --progress flag produces verbose progress output in build logs".to_string(),
+            roast: "wget without --progress=dot:giga will spam your build logs with a progress \
+                    bar that looks great locally and fills 50MB of CI log storage. \
+                    Use --progress=dot:giga or -q to stay quiet.".to_string(),
         })
         .collect()
 }
