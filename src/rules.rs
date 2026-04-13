@@ -74,6 +74,9 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF027", description: "Do not use yum without -y flag", func: rule_yum_no_y },
         Rule { id: "DF028", description: "Cache-bust apt-get update", func: rule_apt_get_update_alone },
         Rule { id: "DF029", description: "Avoid apk add without --no-cache", func: rule_apk_no_cache },
+        Rule { id: "DF037", description: "Dockerfile must begin with FROM, ARG, or a comment", func: rule_invalid_instruction_order },
+        Rule { id: "DF038", description: "Multiple CMD instructions — only the last one takes effect", func: rule_multiple_cmd },
+        Rule { id: "DF039", description: "Multiple ENTRYPOINT instructions — only the last one takes effect", func: rule_multiple_entrypoint },
     ]
 }
 
@@ -779,6 +782,51 @@ fn rule_curl_pipe_sh(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     and shipping it to prod. Your threat model is vibes.".to_string(),
         })
         .collect()
+}
+
+fn rule_invalid_instruction_order(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    if instrs.is_empty() { return vec![]; }
+    let first = &instrs[0];
+    if first.instruction != "FROM" && first.instruction != "ARG" {
+        return vec![Finding {
+            rule: "DF037",
+            severity: Severity::Error,
+            line: first.line,
+            message: format!(
+                "'{}' before FROM — Dockerfile must begin with FROM, ARG, or a comment",
+                first.instruction
+            ),
+            roast: "Your Dockerfile doesn't start with FROM. That's like starting a recipe with \
+                    'season to taste' before listing any ingredients. Docker is confused. So am I.".to_string(),
+        }];
+    }
+    vec![]
+}
+
+fn rule_multiple_cmd(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let cmds: Vec<_> = instrs_of(instrs, "CMD");
+    if cmds.len() <= 1 { return vec![]; }
+    cmds[1..].iter().map(|i| Finding {
+        rule: "DF038",
+        severity: Severity::Warning,
+        line: i.line,
+        message: "Multiple CMD instructions — only the last one takes effect".to_string(),
+        roast: "Multiple CMDs and only the last one counts. The others are ghosts haunting your \
+                Dockerfile, contributing nothing except confusion. Pick one.".to_string(),
+    }).collect()
+}
+
+fn rule_multiple_entrypoint(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let eps: Vec<_> = instrs_of(instrs, "ENTRYPOINT");
+    if eps.len() <= 1 { return vec![]; }
+    eps[1..].iter().map(|i| Finding {
+        rule: "DF039",
+        severity: Severity::Error,
+        line: i.line,
+        message: "Multiple ENTRYPOINT instructions — only the last one takes effect".to_string(),
+        roast: "Two ENTRYPOINTs. Bold. Only the last one runs; the first is just expensive \
+                furniture. Delete it.".to_string(),
+    }).collect()
 }
 
 fn rule_no_user_instruction(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
