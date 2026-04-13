@@ -46,6 +46,7 @@ require cargo
 require cargo-zigbuild
 require zig
 require gh
+require docker
 
 log "Verifying GitHub release '$RELEASE' exists..."
 gh release view "$RELEASE" --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" \
@@ -108,7 +109,23 @@ gh release upload "$RELEASE" \
 echo ""
 ok "All done. Artifacts uploaded to: https://github.com/$REPO/releases/tag/$RELEASE"
 
-# ── cleanup ──────────────────────────────────────────────────────────────────
+# ── docker ───────────────────────────────────────────────────────────────────
+
+GHCR_IMAGE="ghcr.io/$(gh repo view --json owner -q .owner.login)/dockerfile-roast"
+
+log "Logging in to GHCR..."
+gh auth token | docker login ghcr.io -u "$(gh api user -q .login)" --password-stdin
+
+log "Building Docker image..."
+docker build -t "$GHCR_IMAGE:$RELEASE" -t "$GHCR_IMAGE:latest" "$REPO_ROOT"
+
+log "Pushing Docker image..."
+docker push "$GHCR_IMAGE:$RELEASE"
+docker push "$GHCR_IMAGE:latest"
+ok "$GHCR_IMAGE:$RELEASE"
+ok "$GHCR_IMAGE:latest"
+
+# ── cleanup ───────────────────────────────────────────────────────────────────
 
 log "Cleaning up dist/..."
 rm -rf "$OUT_DIR"

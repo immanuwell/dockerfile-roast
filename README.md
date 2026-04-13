@@ -42,7 +42,7 @@ droast --format compact Dockerfile   # one line per finding
 
 ## docker
 
-no install needed:
+pull from ghcr and use immediately, no install needed:
 
 ```bash
 # lint a Dockerfile in the current directory
@@ -56,12 +56,14 @@ docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile ghcr.io/immanuwell/dockerfile
     --no-roast --min-severity warning /Dockerfile
 ```
 
-or build the image yourself:
+or build locally from source:
 
 ```bash
 docker build -t droast .
 docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile droast /Dockerfile
 ```
+
+the image is published automatically to `ghcr.io/immanuwell/dockerfile-roast` on every release tag.
 
 ## shell completions
 
