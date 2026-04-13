@@ -94,6 +94,8 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF054", description: "Pin versions in go install with @version", func: rule_go_install_version },
         Rule { id: "DF055", description: "Run yarn cache clean after yarn install", func: rule_yarn_cache_clean },
         Rule { id: "DF056", description: "Use wget --progress=dot:giga to avoid bloated build logs", func: rule_wget_no_progress },
+        Rule { id: "DF057", description: "Set -o pipefail before RUN commands that use pipes", func: rule_pipefail_missing },
+        Rule { id: "DF058", description: "Use either wget or curl consistently, not both", func: rule_wget_and_curl },
     ]
 }
 
@@ -799,6 +801,49 @@ fn rule_curl_pipe_sh(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     and shipping it to prod. Your threat model is vibes.".to_string(),
         })
         .collect()
+}
+
+fn rule_pipefail_missing(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| {
+            let a = &i.arguments;
+            // has a pipe that isn't curl|sh (that's covered separately) and isn't pipefail already set
+            a.contains(" | ")
+                && !a.contains("pipefail")
+                && !a.contains("set -o pipefail")
+                && !a.contains("set -eo pipefail")
+                && !a.contains("set -euo pipefail")
+                // only flag if it's not a trivial pipe to tee/grep/wc for log filtering
+                && !a.trim_start().starts_with("set ")
+        })
+        .map(|i| Finding {
+            rule: "DF057",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "RUN with pipe but no pipefail — failed commands in the pipe are silently ignored".to_string(),
+            roast: "A pipe in RUN without `set -o pipefail`. If the left side of that pipe fails, \
+                    bash shrugs and moves on. The exit code is whatever the last command returns. \
+                    Add `set -o pipefail` at the start of the RUN.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_wget_and_curl(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let uses_wget = instrs_of(instrs, "RUN").iter().any(|i| i.arguments.contains("wget "));
+    let uses_curl = instrs_of(instrs, "RUN").iter().any(|i| i.arguments.contains("curl "));
+    if uses_wget && uses_curl {
+        return vec![Finding {
+            rule: "DF058",
+            severity: Severity::Warning,
+            line: 0,
+            message: "Both wget and curl are used — pick one and use it consistently".to_string(),
+            roast: "You're using both wget and curl in the same Dockerfile. They do the same \
+                    thing. Pick one. Commit to it. Your image doesn't need two download tools \
+                    any more than it needs two fire extinguishers.".to_string(),
+        }];
+    }
+    vec![]
 }
 
 fn rule_yarn_cache_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
