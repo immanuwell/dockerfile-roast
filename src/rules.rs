@@ -88,6 +88,10 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF048", description: "COPY with multiple sources requires destination to end with /", func: rule_copy_multi_arg_slash },
         Rule { id: "DF049", description: "COPY --from must reference a previously defined stage", func: rule_copy_from_undefined_stage },
         Rule { id: "DF050", description: "COPY --from cannot reference the current stage", func: rule_copy_from_self },
+        Rule { id: "DF051", description: "Pin versions in pip install", func: rule_pip_version_pinning },
+        Rule { id: "DF052", description: "Pin versions in apk add", func: rule_apk_version_pinning },
+        Rule { id: "DF053", description: "Pin versions in gem install", func: rule_gem_version_pinning },
+        Rule { id: "DF054", description: "Pin versions in go install with @version", func: rule_go_install_version },
     ]
 }
 
@@ -791,6 +795,95 @@ fn rule_curl_pipe_sh(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             roast: "curl | sh: the technical equivalent of 'hold my beer'. You're downloading \
                     code from the internet and executing it blind, inside your container, \
                     and shipping it to prod. Your threat model is vibes.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_pip_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| {
+            let a = &i.arguments;
+            (a.contains("pip install") || a.contains("pip3 install"))
+                && !a.contains("-r ") && !a.contains("--requirement")
+                && !a.contains("==") && !a.contains(">=") && !a.contains("<=")
+                && !a.contains("~=") && !a.contains(".txt")
+        })
+        .map(|i| Finding {
+            rule: "DF051",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "pip install without version pinning — use package==version for reproducibility".to_string(),
+            roast: "pip install with no version pins. Every build pulls 'latest' and \
+                    one day something breaks and you spend three hours bisecting which \
+                    transitive dependency changed. Use package==version.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_apk_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| {
+            let a = &i.arguments;
+            if !a.contains("apk add") { return false; }
+            // check if any non-flag arg after "add" has no = for version pinning
+            let after_add = match a.find("apk add") {
+                Some(pos) => &a[pos + 7..],
+                None => return false,
+            };
+            after_add.split_whitespace()
+                .filter(|t| !t.starts_with('-') && !t.is_empty())
+                .any(|t| !t.contains('=') && !t.contains('>') && !t.contains('<'))
+        })
+        .map(|i| Finding {
+            rule: "DF052",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "apk add without version pinning — use package=version for reproducibility".to_string(),
+            roast: "apk add with no version? You chose Alpine to be minimal and fast, then \
+                    immediately added unpinned packages. Your builds are non-deterministic \
+                    by design now. Use package=version.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_gem_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| {
+            let a = &i.arguments;
+            a.contains("gem install")
+                && !a.contains(" -v ") && !a.contains("--version")
+                && !a.contains(':')
+        })
+        .map(|i| Finding {
+            rule: "DF053",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "gem install without version pinning — use gem install <gem>:<version>".to_string(),
+            roast: "gem install with no version. RubyGems will grab whatever's latest today. \
+                    Next week it grabs something else. Your builds are a dice roll. \
+                    Use gem install name:version.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_go_install_version(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| {
+            let a = &i.arguments;
+            a.contains("go install") && !a.contains("@latest") && !a.contains('@')
+        })
+        .map(|i| Finding {
+            rule: "DF054",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "go install without @version — use go install package@version".to_string(),
+            roast: "go install without @version. The Go toolchain requires a version suffix \
+                    in module-aware mode. Use `go install pkg@v1.2.3` or at minimum `@latest` \
+                    if you enjoy living dangerously.".to_string(),
         })
         .collect()
 }
