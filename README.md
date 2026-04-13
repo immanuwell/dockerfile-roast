@@ -57,7 +57,7 @@ droast completion fish | source
 
 ## what it catches
 
-64 rules, ngl thats a lot. run `droast --list-rules` for the full breakdown.
+63 rules, ngl thats a lot. run `droast --list-rules` for the full breakdown.
 
 the greatest hits:
 

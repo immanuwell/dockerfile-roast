@@ -40,7 +40,6 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF001", description: "Use specific base image tags instead of 'latest'", func: rule_latest_tag },
         Rule { id: "DF002", description: "Do not run as root", func: rule_running_as_root },
         Rule { id: "DF011", description: "Use multi-stage builds to reduce image size", func: rule_no_multistage },
-        Rule { id: "DF011", description: "Use multi-stage builds to reduce image size", func: rule_no_multistage },
         Rule { id: "DF013", description: "Avoid storing secrets in ENV variables", func: rule_secrets_in_env },
         Rule { id: "DF014", description: "Avoid hardcoding passwords or tokens in ARG/ENV", func: rule_hardcoded_secrets },
         Rule { id: "DF020", description: "Set explicit non-root USER", func: rule_no_user_instruction },
