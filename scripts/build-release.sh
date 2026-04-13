@@ -107,3 +107,9 @@ gh release upload "$RELEASE" \
 
 echo ""
 ok "All done. Artifacts uploaded to: https://github.com/$REPO/releases/tag/$RELEASE"
+
+# ── cleanup ──────────────────────────────────────────────────────────────────
+
+log "Cleaning up dist/..."
+rm -rf "$OUT_DIR"
+ok "dist/ removed"
