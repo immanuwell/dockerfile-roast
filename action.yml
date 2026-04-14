@@ -1,0 +1,65 @@
+name: 'droast — Dockerfile linter'
+description: 'Lint Dockerfiles with droast. Reports findings as GitHub annotations.'
+author: 'immanuwell'
+
+branding:
+  icon: 'alert-triangle'
+  color: 'red'
+
+inputs:
+  files:
+    description: >
+      Dockerfile(s) to lint. Space-separated list or glob pattern.
+      Defaults to 'Dockerfile' in the repository root.
+    required: false
+    default: 'Dockerfile'
+  min-severity:
+    description: 'Minimum severity to report: info, warning, or error'
+    required: false
+    default: 'info'
+  skip:
+    description: 'Comma-separated rule IDs to skip, e.g. DF001,DF012'
+    required: false
+    default: ''
+  no-roast:
+    description: 'Suppress the snarky messages — show technical findings only'
+    required: false
+    default: 'false'
+  no-fail:
+    description: 'Exit 0 even when errors are found (non-blocking / advisory mode)'
+    required: false
+    default: 'false'
+  image-tag:
+    description: 'droast image tag to pull (e.g. latest, 1.0.0)'
+    required: false
+    default: 'latest'
+
+runs:
+  using: composite
+  steps:
+    - name: Run droast
+      shell: bash
+      run: |
+        ARGS=()
+
+        ARGS+=(--format github)
+        ARGS+=(--min-severity "${{ inputs.min-severity }}")
+
+        if [[ -n "${{ inputs.skip }}" ]]; then
+          ARGS+=(--skip "${{ inputs.skip }}")
+        fi
+
+        if [[ "${{ inputs.no-roast }}" == "true" ]]; then
+          ARGS+=(--no-roast)
+        fi
+
+        if [[ "${{ inputs.no-fail }}" == "true" ]]; then
+          ARGS+=(--no-fail)
+        fi
+
+        docker run --rm \
+          -v "${{ github.workspace }}:/workspace" \
+          -w /workspace \
+          "ghcr.io/immanuwell/droast:${{ inputs.image-tag }}" \
+          "${ARGS[@]}" \
+          ${{ inputs.files }}
