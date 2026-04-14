@@ -20,8 +20,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      # needed to set package visibility via API
-      metadata: read
 
     steps:
       - name: Checkout
