@@ -20,6 +20,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # needed to set package visibility via API
+      metadata: read
 
     steps:
       - name: Checkout
@@ -47,6 +49,16 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Ensure package is public
+        run: |
+          gh api \
+            --method PATCH \
+            -H "Accept: application/vnd.github+json" \
+            /user/packages/container/droast \
+            -f visibility=public || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
