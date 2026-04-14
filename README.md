@@ -46,13 +46,13 @@ pull from ghcr and use immediately, no install needed:
 
 ```bash
 # lint a Dockerfile in the current directory
-docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile ghcr.io/immanuwell/dockerfile-roast /Dockerfile
+docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile ghcr.io/immanuwell/droast /Dockerfile
 
 # lint any file, anywhere
-docker run --rm -v /path/to/your/Dockerfile:/Dockerfile ghcr.io/immanuwell/dockerfile-roast /Dockerfile
+docker run --rm -v /path/to/your/Dockerfile:/Dockerfile ghcr.io/immanuwell/droast /Dockerfile
 
 # pass flags as usual
-docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile ghcr.io/immanuwell/dockerfile-roast \
+docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile ghcr.io/immanuwell/droast \
     --no-roast --min-severity warning /Dockerfile
 ```
 
@@ -63,7 +63,7 @@ docker build -t droast .
 docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile droast /Dockerfile
 ```
 
-the image is published automatically to `ghcr.io/immanuwell/dockerfile-roast` on every release tag.
+the image is published automatically to `ghcr.io/immanuwell/droast` on every release tag.
 
 ## shell completions
 

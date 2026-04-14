@@ -122,7 +122,7 @@ ok "All done. Artifacts uploaded to: https://github.com/$REPO/releases/tag/$RELE
 # ── docker (optional) ────────────────────────────────────────────────────────
 
 if $PUSH_DOCKER; then
-    GHCR_IMAGE="ghcr.io/$(gh repo view --json owner -q .owner.login)/dockerfile-roast"
+    GHCR_IMAGE="ghcr.io/$(gh repo view --json owner -q .owner.login)/droast"
 
     log "Logging in to GHCR..."
     gh auth token | docker login ghcr.io -u "$(gh api user -q .login)" --password-stdin

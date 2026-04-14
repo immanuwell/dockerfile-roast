@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ghcr.io/${{ github.repository_owner }}/dockerfile-roast
+  IMAGE: ghcr.io/${{ github.repository_owner }}/droast
 
 jobs:
   build-and-push:
