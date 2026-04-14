@@ -131,6 +131,87 @@ droast completion fish | source
 
 63 rules, ngl thats a lot. run `droast --list-rules` for the full breakdown.
 
+<!-- BEGIN RULES -->
+<details>
+<summary>all 63 rules</summary>
+
+```
+  Available Rules
+
+  ID       DESCRIPTION
+  ──────────────────────────────────────────────────────────────────────
+  DF001    Use specific base image tags instead of 'latest'
+  DF002    Do not run as root
+  DF011    Use multi-stage builds to reduce image size
+  DF013    Avoid storing secrets in ENV variables
+  DF014    Avoid hardcoding passwords or tokens in ARG/ENV
+  DF020    Set explicit non-root USER
+  DF003    Combine RUN commands to reduce layers
+  DF004    Clean apt/yum/apk cache in the same RUN layer
+  DF005    Pin package versions for reproducibility
+  DF006    Avoid ADD for local files; prefer COPY
+  DF007    Do not copy the entire build context (COPY . .)
+  DF008    Use WORKDIR instead of inline cd commands
+  DF009    Use absolute paths in WORKDIR
+  DF010    Avoid using sudo inside containers
+  DF012    Set HEALTHCHECK for long-running services
+  DF017    Use ENTRYPOINT with CMD for flexible images
+  DF018    Avoid using shell form for ENTRYPOINT
+  DF019    Do not use deprecated MAINTAINER; use LABEL instead
+  DF022    Specify EXPOSE for documented ports
+  DF023    Avoid multiple FROM without aliases (unintended multistage)
+  DF024    Avoid using :latest in FROM even with aliases
+  DF025    Use JSON array syntax for CMD/ENTRYPOINT
+  DF026    Avoid recursive COPY from root
+  DF030    Avoid using pip without --no-cache-dir
+  DF031    Avoid npm install without ci/--production for prod images
+  DF032    Set PYTHONDONTWRITEBYTECODE and PYTHONUNBUFFERED for Python images
+  DF033    Use .dockerignore to exclude unnecessary files
+  DF034    Avoid chmod 777 — overly permissive
+  DF035    Avoid using curl without --fail flags
+  DF036    Avoid Dockerfile with no CMD or ENTRYPOINT
+  DF015    Avoid using apt-get without -y flag
+  DF016    Use --no-install-recommends with apt-get
+  DF021    Avoid wget|sh pipe patterns (execute remote code)
+  DF027    Do not use yum without -y flag
+  DF028    Cache-bust apt-get update
+  DF029    Avoid apk add without --no-cache
+  DF037    Dockerfile must begin with FROM, ARG, or a comment
+  DF038    Multiple CMD instructions — only the last one takes effect
+  DF039    Multiple ENTRYPOINT instructions — only the last one takes effect
+  DF040    EXPOSE port must be in valid range 0-65535
+  DF041    Multiple HEALTHCHECK instructions — only the last one applies
+  DF042    FROM stage aliases must be unique
+  DF043    zypper install without non-interactive flag
+  DF044    Avoid zypper dist-upgrade in Dockerfiles
+  DF045    Run zypper clean after zypper install
+  DF046    Run dnf clean all after dnf install
+  DF047    Run yum clean all after yum install
+  DF048    COPY with multiple sources requires destination to end with /
+  DF049    COPY --from must reference a previously defined stage
+  DF050    COPY --from cannot reference the current stage
+  DF051    Pin versions in pip install
+  DF052    Pin versions in apk add
+  DF053    Pin versions in gem install
+  DF054    Pin versions in go install with @version
+  DF055    Run yarn cache clean after yarn install
+  DF056    Use wget --progress=dot:giga to avoid bloated build logs
+  DF057    Set -o pipefail before RUN commands that use pipes
+  DF058    Use either wget or curl consistently, not both
+  DF059    Use apt-get or apt-cache instead of apt in scripts
+  DF060    Avoid running pointless interactive commands inside containers
+  DF061    Do not use --platform in FROM unless required
+  DF062    ENV variable must not reference itself in the same statement
+  DF063    COPY to relative destination requires WORKDIR to be set first
+  DF064    useradd without -l flag may create excessively large images
+
+  Use --skip DF001,DF002 to suppress specific rules.
+  Use --min-severity warning to hide INFO findings.
+```
+
+</details>
+<!-- END RULES -->
+
 the greatest hits:
 
 | rule | crime |
