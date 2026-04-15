@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>droast — Dockerfile linter</title>
+  <style>
+    body { font-family: sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    h1   { margin-bottom: 0.25rem; }
+    p.sub { color: #666; margin-bottom: 1rem; font-size: 0.9rem; }
+    textarea { width: 100%; height: 280px; font-family: monospace; font-size: 0.82rem; padding: 0.5rem; }
+    button { margin-top: 0.5rem; padding: 0.4rem 1.1rem; cursor: pointer; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    #status { margin-left: 0.6rem; font-size: 0.85rem; color: #888; }
+    #results { margin-top: 1.5rem; }
+    .finding { border: 1px solid #ddd; padding: 0.75rem; margin-bottom: 0.5rem; border-radius: 4px; }
+    .finding.error   { border-left: 4px solid #e53; }
+    .finding.warning { border-left: 4px solid #f90; }
+    .finding.info    { border-left: 4px solid #4af; }
+    .finding em { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>🔥 droast</h1>
+  <p class="sub">Dockerfile linter with personality — runs entirely in your browser via WebAssembly.</p>
+
+  <textarea id="df-input" placeholder="Paste your Dockerfile here…"></textarea>
+  <br>
+  <button id="roast-btn" disabled>Roast it!</button>
+  <span id="status">Loading WASM…</span>
+
+  <div id="results"></div>
+
+  <script type="module">
+    import init, { lint } from './pkg/dockerfile_roast.js';
+
+    const btn    = document.getElementById('roast-btn');
+    const status = document.getElementById('status');
+
+    init()
+      .then(() => { btn.disabled = false; status.textContent = 'Ready'; })
+      .catch(() => { status.textContent = 'Failed to load WASM'; });
+
+    btn.addEventListener('click', () => {
+      const content = document.getElementById('df-input').value;
+      if (!content.trim()) return;
+      const result = JSON.parse(lint(content));
+      render(result);
+    });
+
+    function render(result) {
+      const div = document.getElementById('results');
+      if (result.total === 0) {
+        div.innerHTML = '<p>✅ No issues found. Impressive restraint.</p>';
+        return;
+      }
+      const summary = `<p><strong>${result.errors}</strong> error(s) · <strong>${result.warnings}</strong> warning(s) · <strong>${result.infos}</strong> info</p>`;
+      const cards = result.findings.map(f => {
+        const cls = f.severity === 'ERROR' ? 'error' : f.severity === 'WARN' ? 'warning' : 'info';
+        const line = f.line > 0 ? ` — line ${f.line}` : '';
+        return `<div class="finding ${cls}">
+          <strong>[${esc(f.rule)}] ${esc(f.message)}</strong><small>${line}</small>
+          <p><em>${esc(f.roast)}</em></p>
+        </div>`;
+      }).join('');
+      div.innerHTML = summary + cards;
+    }
+
+    function esc(s) {
+      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+  </script>
+</body>
+</html>
