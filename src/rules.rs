@@ -103,6 +103,8 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF064", description: "useradd without -l flag may create excessively large images", func: rule_useradd_no_l },
         Rule { id: "DF065", description: "FROM uses an unrecognised image registry", func: rule_untrusted_registry },
         Rule { id: "DF066", description: "Bash-specific syntax used without a SHELL instruction", func: rule_bash_syntax_no_shell },
+        Rule { id: "DF067", description: "COPY of a local archive — ADD auto-extracts tarballs", func: rule_copy_archive_use_add },
+        Rule { id: "DF068", description: "FROM, ONBUILD, and MAINTAINER are forbidden as ONBUILD triggers", func: rule_onbuild_forbidden },
     ]
 }
 
@@ -954,6 +956,73 @@ fn rule_useradd_no_l(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     Add -l or use --no-log-init.".to_string(),
         })
         .collect()
+}
+
+fn rule_copy_archive_use_add(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    const ARCHIVE_EXTS: &[&str] = &[
+        ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar.zst", ".tar",
+    ];
+    instrs_of(instrs, "COPY")
+        .into_iter()
+        .filter(|i| {
+            // Ignore multi-stage COPY --from=... (the source is a container path, not a local file)
+            if i.arguments.contains("--from=") || i.arguments.contains("--from =") {
+                return false;
+            }
+            let sources: Vec<&str> = i.arguments
+                .split_whitespace()
+                .filter(|t| !t.starts_with("--"))
+                .collect();
+            // Need at least one source and one destination
+            if sources.len() < 2 { return false; }
+            // Check if any source (all but last) is an archive
+            sources[..sources.len() - 1]
+                .iter()
+                .any(|s| ARCHIVE_EXTS.iter().any(|ext| s.ends_with(ext)))
+        })
+        .map(|i| Finding {
+            rule: "DF067",
+            severity: Severity::Info,
+            line: i.line,
+            message: "COPY of archive file — consider ADD which auto-extracts local tarballs".to_string(),
+            roast: "COPY drops the compressed archive as-is; you'll need a separate \
+                    RUN tar -xzf layer to unpack it. ADD auto-extracts local tarballs into \
+                    the destination directory and saves you the extra layer. \
+                    Yes, this is the one situation where ADD is actually the right choice.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_onbuild_forbidden(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    const FORBIDDEN: &[&str] = &["FROM", "ONBUILD", "MAINTAINER"];
+    let mut findings = Vec::new();
+    for i in instrs_of(instrs, "ONBUILD") {
+        let triggered = i.arguments
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_uppercase();
+        if FORBIDDEN.contains(&triggered.as_str()) {
+            findings.push(Finding {
+                rule: "DF068",
+                severity: Severity::Error,
+                line: i.line,
+                message: format!(
+                    "ONBUILD {} is forbidden — {} cannot be used as an ONBUILD trigger",
+                    triggered, triggered
+                ),
+                roast: format!(
+                    "ONBUILD {} is explicitly prohibited by Docker. \
+                     FROM would create a recursive inheritance loop, \
+                     ONBUILD ONBUILD is a depth-2 trap nobody asked for, \
+                     and MAINTAINER is deprecated everywhere, including here. \
+                     This fails at build time.",
+                    triggered
+                ),
+            });
+        }
+    }
+    findings
 }
 
 fn rule_bash_syntax_no_shell(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
