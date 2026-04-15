@@ -1,0 +1,83 @@
+name: Update Homebrew tap
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-tap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download checksums from release
+        run: |
+          curl -fsSL \
+            "https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/sha256sums.txt" \
+            -o sha256sums.txt
+
+      - name: Checkout tap repo
+        uses: actions/checkout@v6
+        with:
+          repository: immanuwell/homebrew-droast
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Generate updated formula
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          BASE="https://github.com/${{ github.repository }}/releases/download/${VERSION}"
+
+          SHA_MACOS_ARM=$(awk '/droast-macos-arm64$/{print $1}' sha256sums.txt)
+          SHA_MACOS_X86=$(awk '/droast-macos-x86_64$/{print $1}' sha256sums.txt)
+          SHA_LINUX_ARM=$(awk '/droast-linux-arm64$/{print $1}' sha256sums.txt)
+          SHA_LINUX_X86=$(awk '/droast-linux-x86_64$/{print $1}' sha256sums.txt)
+
+          mkdir -p tap/Formula
+          cat > tap/Formula/droast.rb << FORMULA
+class Droast < Formula
+  desc "Dockerfile linter with personality"
+  homepage "https://github.com/${{ github.repository }}"
+  version "${VERSION}"
+  license "MIT"
+
+  on_macos do
+    on_arm do
+      url "${BASE}/droast-macos-arm64"
+      sha256 "${SHA_MACOS_ARM}"
+    end
+    on_intel do
+      url "${BASE}/droast-macos-x86_64"
+      sha256 "${SHA_MACOS_X86}"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "${BASE}/droast-linux-arm64"
+      sha256 "${SHA_LINUX_ARM}"
+    end
+    on_intel do
+      url "${BASE}/droast-linux-x86_64"
+      sha256 "${SHA_LINUX_X86}"
+    end
+  end
+
+  def install
+    downloaded = Dir["droast-*"].first
+    chmod 0755, downloaded
+    bin.install downloaded => "droast"
+  end
+
+  test do
+    system bin/"droast", "--version"
+  end
+end
+FORMULA
+
+      - name: Commit and push
+        run: |
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/droast.rb
+          git diff --staged --quiet || git commit -m "droast ${{ github.event.release.tag_name }}"
+          git push
