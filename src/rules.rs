@@ -102,6 +102,7 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF063", description: "COPY to relative destination requires WORKDIR to be set first", func: rule_copy_relative_no_workdir },
         Rule { id: "DF064", description: "useradd without -l flag may create excessively large images", func: rule_useradd_no_l },
         Rule { id: "DF065", description: "FROM uses an unrecognised image registry", func: rule_untrusted_registry },
+        Rule { id: "DF066", description: "Bash-specific syntax used without a SHELL instruction", func: rule_bash_syntax_no_shell },
     ]
 }
 
@@ -953,6 +954,45 @@ fn rule_useradd_no_l(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     Add -l or use --no-log-init.".to_string(),
         })
         .collect()
+}
+
+fn rule_bash_syntax_no_shell(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    // If an explicit SHELL instruction is present, the developer knows what they're doing
+    if has_instr(instrs, "SHELL") { return vec![]; }
+    // Patterns that are valid bash but not POSIX sh — meaningless or broken on /bin/sh
+    const BASH_ONLY: &[(&str, &str)] = &[
+        ("[[ ",   "double-bracket conditional"),
+        ("source ", "source builtin (use '.' in POSIX sh)"),
+        ("declare ", "declare builtin"),
+        ("mapfile ", "mapfile builtin"),
+        ("readarray ", "readarray builtin"),
+        ("${!", "indirect variable expansion"),
+    ];
+    let mut findings = Vec::new();
+    for i in instrs_of(instrs, "RUN") {
+        for (pattern, label) in BASH_ONLY {
+            if i.arguments.contains(pattern) {
+                findings.push(Finding {
+                    rule: "DF066",
+                    severity: Severity::Warning,
+                    line: i.line,
+                    message: format!(
+                        "RUN uses bash-specific syntax ({}) but no SHELL instruction is set",
+                        label
+                    ),
+                    roast: format!(
+                        "'{}' is bash syntax. The default shell is /bin/sh, which on Alpine, \
+                         Debian-slim, and distroless is NOT bash. Add \
+                         `SHELL [\"/bin/bash\", \"-c\"]` before this RUN or your build \
+                         will fail in ways that are confusing to debug.",
+                        pattern.trim()
+                    ),
+                });
+                break;
+            }
+        }
+    }
+    findings
 }
 
 fn rule_untrusted_registry(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
