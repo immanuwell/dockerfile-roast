@@ -3,72 +3,441 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>droast — Dockerfile linter</title>
+  <title>droast — Dockerfile linter with personality</title>
   <style>
-    body { font-family: sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
-    h1   { margin-bottom: 0.25rem; }
-    p.sub { color: #666; margin-bottom: 1rem; font-size: 0.9rem; }
-    textarea { width: 100%; height: 280px; font-family: monospace; font-size: 0.82rem; padding: 0.5rem; }
-    button { margin-top: 0.5rem; padding: 0.4rem 1.1rem; cursor: pointer; }
-    button:disabled { opacity: 0.4; cursor: not-allowed; }
-    #status { margin-left: 0.6rem; font-size: 0.85rem; color: #888; }
-    #results { margin-top: 1.5rem; }
-    .finding { border: 1px solid #ddd; padding: 0.75rem; margin-bottom: 0.5rem; border-radius: 4px; }
-    .finding.error   { border-left: 4px solid #e53; }
-    .finding.warning { border-left: 4px solid #f90; }
-    .finding.info    { border-left: 4px solid #4af; }
-    .finding em { color: #555; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #0d0d0d;
+      --surface:     #161616;
+      --surface2:    #1c1c1c;
+      --border:      #282828;
+      --text:        #e2e2e2;
+      --muted:       #777;
+      --accent:      #ff6b35;
+      --error:       #ff4f4f;
+      --error-bg:    rgba(255,79,79,.10);
+      --warning:     #ffb020;
+      --warning-bg:  rgba(255,176,32,.10);
+      --info:        #29c6e0;
+      --info-bg:     rgba(41,198,224,.10);
+      --success:     #3ddc84;
+      --success-bg:  rgba(61,220,132,.08);
+      --radius:      8px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      padding: 1.5rem 2rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: baseline;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .logo {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 1.6rem;
+      font-weight: 800;
+      color: var(--accent);
+      letter-spacing: -0.5px;
+    }
+
+    .tagline {
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    /* ── Main grid ── */
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.25rem;
+      padding: 1.25rem;
+      max-width: 1400px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    @media (max-width: 860px) {
+      main { grid-template-columns: 1fr; }
+    }
+
+    /* ── Panel ── */
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      display: flex;
+      flex-direction: column;
+      min-height: 520px;
+    }
+
+    .panel-header {
+      padding: 0.7rem 1.1rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+    }
+
+    /* ── Editor ── */
+    textarea {
+      flex: 1;
+      width: 100%;
+      background: transparent;
+      border: none;
+      outline: none;
+      resize: vertical;
+      padding: 1rem 1.1rem;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 0.82rem;
+      line-height: 1.65;
+      color: var(--text);
+      tab-size: 2;
+      min-height: 400px;
+    }
+
+    textarea::placeholder { color: var(--muted); }
+
+    .editor-footer {
+      padding: 0.85rem 1.1rem;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    #roast-btn {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 0.55rem 1.35rem;
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+
+    #roast-btn:hover:not(:disabled) { opacity: 0.82; }
+    #roast-btn:active:not(:disabled) { transform: scale(0.96); }
+    #roast-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--muted);
+      flex-shrink: 0;
+    }
+    .dot.loading { background: var(--warning); animation: blink 1.1s ease-in-out infinite; }
+    .dot.ready   { background: var(--success); }
+    .dot.failed  { background: var(--error); }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.3; }
+    }
+
+    .status-label {
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    /* ── Results ── */
+    .results-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem 1.1rem;
+    }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      min-height: 380px;
+      color: var(--muted);
+      text-align: center;
+      gap: 0.6rem;
+    }
+
+    .empty-state .big { font-size: 2.2rem; }
+    .empty-state p    { font-size: 0.875rem; }
+
+    /* summary row */
+    .summary {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      padding: 0.25rem 0.65rem;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
+
+    .badge.error   { background: var(--error-bg);   color: var(--error);   border: 1px solid var(--error); }
+    .badge.warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
+    .badge.info    { background: var(--info-bg);    color: var(--info);    border: 1px solid var(--info); }
+    .badge.success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
+
+    /* finding card */
+    .finding {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-left: 3px solid transparent;
+      border-radius: var(--radius);
+      padding: 0.85rem 1rem;
+      margin-bottom: 0.6rem;
+    }
+
+    .finding.error   { border-left-color: var(--error); }
+    .finding.warning { border-left-color: var(--warning); }
+    .finding.info    { border-left-color: var(--info); }
+
+    .finding-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      margin-bottom: 0.45rem;
+    }
+
+    .rule-id {
+      font-family: 'Courier New', monospace;
+      font-size: 0.7rem;
+      color: var(--muted);
+      background: rgba(255,255,255,0.05);
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+    }
+
+    .line-no {
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-left: auto;
+    }
+
+    .finding-msg {
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 0.45rem;
+      line-height: 1.4;
+    }
+
+    .finding-roast {
+      font-size: 0.8rem;
+      color: var(--muted);
+      font-style: italic;
+      line-height: 1.5;
+    }
+
+    .finding-roast::before { content: '\1F4AC\A0\201C'; }
+    .finding-roast::after  { content: '\201D'; }
+
+    /* pass state */
+    .pass-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      min-height: 380px;
+      text-align: center;
+      gap: 0.75rem;
+    }
+
+    .pass-state .big { font-size: 2.5rem; }
+    .pass-state p    { color: var(--success); font-size: 0.95rem; font-weight: 600; }
+    .pass-state small { color: var(--muted); font-size: 0.8rem; }
+
+    /* ── Footer ── */
+    footer {
+      padding: 0.85rem 2rem;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 1.25rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      flex-wrap: wrap;
+    }
+
+    footer a { color: var(--muted); text-decoration: none; }
+    footer a:hover { color: var(--text); }
   </style>
 </head>
 <body>
-  <h1>🔥 droast</h1>
-  <p class="sub">Dockerfile linter with personality — runs entirely in your browser via WebAssembly.</p>
 
-  <textarea id="df-input" placeholder="Paste your Dockerfile here…"></textarea>
-  <br>
-  <button id="roast-btn" disabled>Roast it!</button>
-  <span id="status">Loading WASM…</span>
+<header>
+  <span class="logo">🔥 droast</span>
+  <span class="tagline">Dockerfile linter with personality — 61 rules, zero servers, 100% client-side</span>
+</header>
 
-  <div id="results"></div>
+<main>
+  <!-- Editor panel -->
+  <div class="panel">
+    <div class="panel-header">Dockerfile</div>
+    <textarea id="df-input" spellcheck="false" placeholder="Paste your Dockerfile here…">FROM ubuntu:latest
+MAINTAINER dev@example.com
 
-  <script type="module">
-    import init, { lint } from './pkg/dockerfile_roast.js';
+RUN apt-get update
+RUN apt-get install -y curl python3 python3-pip
 
-    const btn    = document.getElementById('roast-btn');
-    const status = document.getElementById('status');
+ENV DB_PASSWORD=super_secret_123
+ENV API_KEY=sk-1234567890abcdef
 
-    init()
-      .then(() => { btn.disabled = false; status.textContent = 'Ready'; })
-      .catch(() => { status.textContent = 'Failed to load WASM'; });
+ADD . /app
 
-    btn.addEventListener('click', () => {
-      const content = document.getElementById('df-input').value;
-      if (!content.trim()) return;
-      const result = JSON.parse(lint(content));
-      render(result);
+RUN chmod 777 /app
+
+CMD python3 app.py</textarea>
+    <div class="editor-footer">
+      <button id="roast-btn" disabled>🔥 Roast it!</button>
+      <span class="dot loading" id="dot"></span>
+      <span class="status-label" id="status-label">Loading WASM engine…</span>
+    </div>
+  </div>
+
+  <!-- Results panel -->
+  <div class="panel">
+    <div class="panel-header">Results</div>
+    <div class="results-body" id="results-body">
+      <div class="empty-state">
+        <div class="big">📋</div>
+        <p>Paste a Dockerfile and click <strong>Roast it!</strong></p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <span>Powered by <a href="https://github.com/immanuwell/dockerfile-roast" target="_blank" rel="noopener">dockerfile-roast</a> compiled to WebAssembly</span>
+  <span>·</span>
+  <a href="https://github.com/immanuwell/dockerfile-roast/blob/main/src/rules.rs" target="_blank" rel="noopener">Browse all 61 rules</a>
+  <span>·</span>
+  <a href="https://github.com/immanuwell/dockerfile-roast/issues" target="_blank" rel="noopener">Report an issue</a>
+</footer>
+
+<script type="module">
+  import init, { lint } from './pkg/dockerfile_roast.js';
+
+  const btn   = document.getElementById('roast-btn');
+  const dot   = document.getElementById('dot');
+  const label = document.getElementById('status-label');
+
+  init()
+    .then(() => {
+      btn.disabled    = false;
+      dot.className   = 'dot ready';
+      label.textContent = 'WASM engine ready';
+    })
+    .catch(err => {
+      dot.className   = 'dot failed';
+      label.textContent = 'Failed to load WASM engine';
+      console.error('wasm-pack init failed:', err);
     });
 
-    function render(result) {
-      const div = document.getElementById('results');
-      if (result.total === 0) {
-        div.innerHTML = '<p>✅ No issues found. Impressive restraint.</p>';
-        return;
-      }
-      const summary = `<p><strong>${result.errors}</strong> error(s) · <strong>${result.warnings}</strong> warning(s) · <strong>${result.infos}</strong> info</p>`;
-      const cards = result.findings.map(f => {
-        const cls = f.severity === 'ERROR' ? 'error' : f.severity === 'WARN' ? 'warning' : 'info';
-        const line = f.line > 0 ? ` — line ${f.line}` : '';
-        return `<div class="finding ${cls}">
-          <strong>[${esc(f.rule)}] ${esc(f.message)}</strong><small>${line}</small>
-          <p><em>${esc(f.roast)}</em></p>
-        </div>`;
-      }).join('');
-      div.innerHTML = summary + cards;
+  btn.addEventListener('click', () => {
+    const content = document.getElementById('df-input').value;
+    if (!content.trim()) return;
+
+    let result;
+    try {
+      result = JSON.parse(lint(content));
+    } catch (e) {
+      console.error('lint() failed:', e);
+      return;
     }
 
-    function esc(s) {
-      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    render(result);
+  });
+
+  function render(result) {
+    const body = document.getElementById('results-body');
+
+    if (result.total === 0) {
+      body.innerHTML = `
+        <div class="pass-state">
+          <div class="big">✅</div>
+          <p>Passed with no issues.</p>
+          <small>Impressive restraint.</small>
+        </div>`;
+      return;
     }
-  </script>
+
+    const html = [];
+
+    // summary badges
+    html.push('<div class="summary">');
+    if (result.errors)   html.push(badge('error',   `${result.errors} error${result.errors   !== 1 ? 's' : ''}`));
+    if (result.warnings) html.push(badge('warning', `${result.warnings} warning${result.warnings !== 1 ? 's' : ''}`));
+    if (result.infos)    html.push(badge('info',    `${result.infos} info`));
+    html.push('</div>');
+
+    // finding cards
+    for (const f of result.findings) {
+      const cls = sevClass(f.severity);
+      const lineHtml = f.line > 0
+        ? `<span class="line-no">line ${f.line}</span>`
+        : '';
+      const roastHtml = f.roast
+        ? `<div class="finding-roast">${esc(f.roast)}</div>`
+        : '';
+
+      html.push(`
+        <div class="finding ${cls}">
+          <div class="finding-meta">
+            ${badge(cls, f.severity)}
+            <span class="rule-id">${esc(f.rule)}</span>
+            ${lineHtml}
+          </div>
+          <div class="finding-msg">${esc(f.message)}</div>
+          ${roastHtml}
+        </div>`);
+    }
+
+    body.innerHTML = html.join('');
+  }
+
+  function sevClass(sev) {
+    switch (sev.toUpperCase()) {
+      case 'ERROR': return 'error';
+      case 'WARN':  return 'warning';
+      default:      return 'info';
+    }
+  }
+
+  function badge(cls, text) {
+    return `<span class="badge ${cls}">${esc(text)}</span>`;
+  }
+
+  function esc(s) {
+    return s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+</script>
 </body>
 </html>
