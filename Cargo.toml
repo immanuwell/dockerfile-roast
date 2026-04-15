@@ -5,6 +5,9 @@ edition = "2021"
 description = "A Dockerfile linter with personality — catches bad practices with snarky, funny error messages"
 license = "MIT"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [[bin]]
 name = "droast"
 path = "src/main.rs"
@@ -18,3 +21,6 @@ glob = "0.3"
 regex = "1"
 anyhow = "1"
 clap_complete = "4"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
