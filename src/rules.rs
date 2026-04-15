@@ -101,6 +101,7 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF062", description: "ENV variable must not reference itself in the same statement", func: rule_env_self_reference },
         Rule { id: "DF063", description: "COPY to relative destination requires WORKDIR to be set first", func: rule_copy_relative_no_workdir },
         Rule { id: "DF064", description: "useradd without -l flag may create excessively large images", func: rule_useradd_no_l },
+        Rule { id: "DF065", description: "FROM uses an unrecognised image registry", func: rule_untrusted_registry },
     ]
 }
 
@@ -952,6 +953,45 @@ fn rule_useradd_no_l(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     Add -l or use --no-log-init.".to_string(),
         })
         .collect()
+}
+
+fn rule_untrusted_registry(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    const TRUSTED: &[&str] = &[
+        "docker.io", "registry-1.docker.io",
+        "ghcr.io", "gcr.io", "quay.io",
+        "mcr.microsoft.com", "registry.access.redhat.com",
+        "public.ecr.aws", "registry.k8s.io", "k8s.gcr.io",
+    ];
+    let mut findings = Vec::new();
+    for i in instrs_of(instrs, "FROM") {
+        // Skip --platform=... flags to find the actual image reference
+        let image = match i.arguments.split_whitespace().find(|t| !t.starts_with("--")) {
+            Some(img) => img,
+            None => continue,
+        };
+        if image.eq_ignore_ascii_case("scratch") { continue; }
+        // The registry is the first path component when it contains a dot or colon,
+        // or is the literal "localhost". Plain names like "ubuntu" imply docker.io.
+        let first = image.split('@').next().unwrap_or(image)
+            .split('/').next().unwrap_or("");
+        if first.contains('.') || first.contains(':') || first == "localhost" {
+            if !TRUSTED.iter().any(|t| first.eq_ignore_ascii_case(t)) {
+                findings.push(Finding {
+                    rule: "DF065",
+                    severity: Severity::Warning,
+                    line: i.line,
+                    message: format!("FROM pulls from unrecognised registry '{}'", first),
+                    roast: format!(
+                        "Pulling base images from '{}' — a registry you don't hear about at \
+                         KubeCon. Supply-chain attacks love Dockerfiles that blindly trust \
+                         random registries. Verify this is intentional and pin to a digest.",
+                        first
+                    ),
+                });
+            }
+        }
+    }
+    findings
 }
 
 fn rule_pipefail_missing(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
