@@ -11,6 +11,11 @@ think of it as code review from a senior dev who's seen too many prod incidents 
 ## install
 
 ```bash
+brew tap immanuwell/droast git@github.com:immanuwell/homebrew-droast.git
+brew install immanuwell/droast/droast
+
+# or:
+
 cargo install dockerfile-roast
 ```
 
