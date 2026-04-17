@@ -14,6 +14,11 @@
   <meta property="og:title"       content="droast — Free Online Dockerfile Linter">
   <meta property="og:description" content="68 rules. Instant results. Runs entirely in your browser — your Dockerfile never leaves your machine.">
 
+  <!-- Twitter Card -->
+  <meta name="twitter:card"        content="summary">
+  <meta name="twitter:title"       content="droast — Free Online Dockerfile Linter">
+  <meta name="twitter:description" content="Paste your Dockerfile and get instant linting results. 68 rules catch secrets, CVEs, layer bloat, and misconfigs. Runs 100% in-browser via WebAssembly.">
+
   <!-- JSON-LD -->
   <script type="application/ld+json">
   {
@@ -297,6 +302,44 @@
     .pass-state p    { color: var(--success); font-size: 0.95rem; font-weight: 600; }
     .pass-state small { color: var(--muted); font-size: 0.8rem; }
 
+    /* ── About section ── */
+    .about {
+      max-width: 1400px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 1.5rem 1.25rem 0.5rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1.25rem;
+    }
+
+    .about-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.1rem 1.25rem;
+    }
+
+    .about-card h2 {
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--accent);
+      margin-bottom: 0.6rem;
+    }
+
+    .about-card p {
+      font-size: 0.82rem;
+      color: var(--muted);
+      line-height: 1.65;
+    }
+
+    .about-card p + p { margin-top: 0.5rem; }
+
+    .about-card a { color: var(--muted); text-decoration: underline; }
+    .about-card a:hover { color: var(--text); }
+
     /* ── Footer ── */
     footer {
       padding: 0.85rem 2rem;
@@ -388,6 +431,26 @@ CMD python3 app.py</textarea>
     </div>
   </div>
 </main>
+
+<section class="about" aria-label="About droast">
+  <div class="about-card">
+    <h2>Free online Dockerfile linter</h2>
+    <p>droast is a Dockerfile checker that runs entirely in your browser via WebAssembly — no server, no sign-up, no upload. Paste any Dockerfile and get instant lint results.</p>
+    <p>68 rules cover security misconfigurations, hardcoded secrets, outdated base images, layer bloat, missing health checks, and common anti-patterns. Each finding comes with a plain-English explanation and a snarky roast for good measure.</p>
+  </div>
+
+  <div class="about-card">
+    <h2>What it checks</h2>
+    <p>The linter catches things like <code style="font-size:0.78rem;color:var(--text)">FROM :latest</code> pins, exposed passwords in <code style="font-size:0.78rem;color:var(--text)">ENV</code>, running as root, <code style="font-size:0.78rem;color:var(--text)">apt-get</code> without pinned versions, COPY vs ADD misuse, and untrusted registries.</p>
+    <p>It maps rules to hadolint's DL-series IDs where applicable, so results are familiar if you already use hadolint in CI.</p>
+  </div>
+
+  <div class="about-card">
+    <h2>Plug into your CI pipeline</h2>
+    <p>Beyond the browser tool, droast ships as a <a href="https://github.com/immanuwell/dockerfile-roast" target="_blank" rel="noopener">single binary</a> and a ready-made <a href="https://github.com/marketplace/actions/dockerfile-roast" target="_blank" rel="noopener">GitHub Action</a>. Add Dockerfile validation to any pull request in two lines of YAML — no Docker-in-Docker required.</p>
+    <p>Install via Homebrew on macOS and Linux: <code style="font-size:0.78rem;color:var(--text)">brew tap immanuwell/droast &amp;&amp; brew install droast</code></p>
+  </div>
+</section>
 
 <footer>
   <span>Powered by <a href="https://github.com/immanuwell/dockerfile-roast" target="_blank" rel="noopener">dockerfile-roast</a> compiled to WebAssembly</span>
