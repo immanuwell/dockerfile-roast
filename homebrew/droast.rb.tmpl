@@ -1,0 +1,38 @@
+class Droast < Formula
+  desc "Dockerfile linter with personality"
+  homepage "https://github.com/${REPOSITORY}"
+  version "${VERSION}"
+  license "MIT"
+
+  on_macos do
+    on_arm do
+      url "${BASE}/droast-macos-arm64"
+      sha256 "${SHA_MACOS_ARM}"
+    end
+    on_intel do
+      url "${BASE}/droast-macos-x86_64"
+      sha256 "${SHA_MACOS_X86}"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "${BASE}/droast-linux-arm64"
+      sha256 "${SHA_LINUX_ARM}"
+    end
+    on_intel do
+      url "${BASE}/droast-linux-x86_64"
+      sha256 "${SHA_LINUX_X86}"
+    end
+  end
+
+  def install
+    downloaded = Dir["droast-*"].first
+    chmod 0755, downloaded
+    bin.install downloaded => "droast"
+  end
+
+  test do
+    system bin/"droast", "--version"
+  end
+end
