@@ -222,9 +222,16 @@ fn rule_add_instead_of_copy(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
     instrs_of(instrs, "ADD")
         .into_iter()
         .filter(|i| {
-            let args = &i.arguments;
-            !args.contains("http://") && !args.contains("https://")
-                && !args.ends_with(".tar.gz") && !args.ends_with(".tgz")
+            let args: Vec<&str> = i.arguments.split_whitespace().collect();
+            if args.is_empty() { return false; }
+            
+            let source = args[0];
+            let is_url = source.contains("://");
+            let is_archive = source.ends_with(".tar.gz") 
+                || source.ends_with(".tgz") 
+                || source.ends_with(".tar.xz") 
+                || source.ends_with(".tar");
+            !is_url && !is_archive
         })
         .map(|i| Finding {
             rule: "DF006",
