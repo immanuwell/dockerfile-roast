@@ -262,3 +262,29 @@ fn df030_clear_with_no_cache() {
     let df = "FROM python:3.12\nRUN pip install --no-cache-dir flask\nCMD [\"python\", \"app.py\"]\n";
     assert!(no_rule(&lint(df), "DF030"));
 }
+
+// ─── DF062: ENV self-reference ───────────────────────────────────────────────
+
+#[test]
+fn df062_fires_on_direct_self_reference() {
+    let df = "FROM alpine:3.19\nENV MY_VAR=$MY_VAR\n";
+    assert!(has_rule(&lint(df), "DF062"));
+}
+
+#[test]
+fn df062_fires_on_quoted_self_reference() {
+    let df = "FROM alpine:3.19\nENV PATH=\"$PATH\"\n";
+    assert!(has_rule(&lint(df), "DF062"));
+}
+
+#[test]
+fn df062_clear_on_path_append() {
+    let df = "FROM python:3.13-slim\nENV VENV=/opt/venv/bin\nENV PATH=\"$VENV:$PATH\"\n";
+    assert!(no_rule(&lint(df), "DF062"));
+}
+
+#[test]
+fn df062_clear_on_normal_assignment() {
+    let df = "FROM alpine:3.19\nENV FOO=bar\nENV BAZ=$FOO\n";
+    assert!(no_rule(&lint(df), "DF062"));
+}
