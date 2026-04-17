@@ -876,7 +876,7 @@ fn rule_from_platform_flag(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 }
 
 fn rule_env_self_reference(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let re = Regex::new(r"(\w+)=.*\$\{?(\w+)\}?").unwrap();
+    let re = Regex::new(r"(\w+)=\s*[\x22\x27]?\$\{?(\w+)\}?").unwrap();
     let mut findings = Vec::new();
     for i in instrs_of(instrs, "ENV") {
         for cap in re.captures_iter(&i.arguments) {
