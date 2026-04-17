@@ -3,7 +3,33 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>droast — Dockerfile linter with personality</title>
+  <title>droast — Free Online Dockerfile Linter | 68 Rules, Instant Results</title>
+  <meta name="description" content="Paste your Dockerfile and get instant linting results in your browser. 68 rules catch security misconfigurations, exposed secrets, layer bloat, and Dockerfile anti-patterns. Free, no sign-up, 100% client-side.">
+  <meta name="keywords" content="dockerfile linter, dockerfile best practices, docker security, dockerfile checker, container security, droast">
+  <link rel="canonical" href="https://ewry.net/droast-dockerfile-linter/">
+
+  <!-- Open Graph -->
+  <meta property="og:type"        content="website">
+  <meta property="og:url"         content="https://ewry.net/droast-dockerfile-linter/">
+  <meta property="og:title"       content="droast — Free Online Dockerfile Linter">
+  <meta property="og:description" content="68 rules. Instant results. Runs entirely in your browser — your Dockerfile never leaves your machine.">
+
+  <!-- JSON-LD -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "droast",
+    "description": "A Dockerfile linter with 68 rules that catches security misconfigurations, exposed secrets, layer bloat, and anti-patterns. Runs entirely client-side via WebAssembly.",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Web",
+    "url": "https://ewry.net/droast-dockerfile-linter/",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "codeRepository": "https://github.com/immanuwell/dockerfile-roast",
+    "license": "https://opensource.org/licenses/MIT"
+  }
+  </script>
+
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -284,14 +310,47 @@
 
     footer a { color: var(--muted); text-decoration: none; }
     footer a:hover { color: var(--text); }
+
+    /* ── Feature strip ── */
+    .features {
+      display: flex;
+      gap: 0.6rem;
+      padding: 0.75rem 1.25rem;
+      flex-wrap: wrap;
+      border-bottom: 1px solid var(--border);
+      max-width: 1400px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    .feature {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0.28rem 0.75rem;
+    }
+
+    .feature strong { color: var(--text); font-weight: 600; }
   </style>
 </head>
 <body>
 
 <header>
-  <span class="logo">🔥 droast</span>
-  <span class="tagline">Dockerfile linter with personality — 61 rules, zero servers, 100% client-side</span>
+  <h1 class="logo">🔥 droast</h1>
+  <span class="tagline">Dockerfile linter with personality — 68 rules, zero servers, 100% client-side</span>
 </header>
+
+<div class="features" aria-label="Key features">
+  <span class="feature">⚡ <strong>Instant</strong> — runs in WebAssembly, no server round-trip</span>
+  <span class="feature">🔒 <strong>Private</strong> — your Dockerfile never leaves the browser</span>
+  <span class="feature">📋 <strong>68 rules</strong> — secrets, CVEs, bloat, misconfigs &amp; more</span>
+  <span class="feature">🔌 <strong>GitHub Action</strong> — plug-and-play CI integration</span>
+</div>
 
 <main>
   <!-- Editor panel -->
@@ -333,7 +392,7 @@ CMD python3 app.py</textarea>
 <footer>
   <span>Powered by <a href="https://github.com/immanuwell/dockerfile-roast" target="_blank" rel="noopener">dockerfile-roast</a> compiled to WebAssembly</span>
   <span>·</span>
-  <a href="https://github.com/immanuwell/dockerfile-roast/blob/main/src/rules.rs" target="_blank" rel="noopener">Browse all 61 rules</a>
+  <a href="https://github.com/immanuwell/dockerfile-roast/blob/main/src/rules.rs" target="_blank" rel="noopener">Browse all 68 rules</a>
   <span>·</span>
   <a href="https://github.com/immanuwell/dockerfile-roast/issues" target="_blank" rel="noopener">Report an issue</a>
 </footer>
