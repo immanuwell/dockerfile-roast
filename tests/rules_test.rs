@@ -132,6 +132,25 @@ fn df006_clear_on_remote_add() {
     assert!(no_rule(&lint(df), "DF006"));
 }
 
+#[test]
+fn df006_clear_on_local_archive_tar_bz2() {
+    let df = "FROM alpine:3.19\nADD data.tar.bz2 /data/\n";
+    assert!(no_rule(&lint(df), "DF006"));
+}
+
+#[test]
+fn df006_clear_on_chown_with_url() {
+    // --chown flag must not confuse source detection
+    let df = "FROM alpine:3.19\nADD --chown=user:group https://example.com/file /tmp/\n";
+    assert!(no_rule(&lint(df), "DF006"));
+}
+
+#[test]
+fn df006_clear_on_chown_with_archive() {
+    let df = "FROM alpine:3.19\nADD --chown=appuser archive.tar.gz /app/\n";
+    assert!(no_rule(&lint(df), "DF006"));
+}
+
 // ─── DF007: COPY . ───────────────────────────────────────────────────────────
 
 #[test]
