@@ -957,13 +957,42 @@ fn df061_clear_without_platform_flag() {
 
 #[test]
 fn df062_fires_on_env_self_reference() {
+    // VAR=$VAR:suffix — self-reference at the start of the value
     let df = "FROM alpine:3.19\nENV PATH=$PATH:/usr/local/bin\n";
+    assert!(has_rule(&lint(df), "DF062"));
+}
+
+#[test]
+fn df062_fires_on_direct_self_reference() {
+    // VAR=$VAR — bare self-assignment
+    let df = "FROM alpine:3.19\nENV MY_VAR=$MY_VAR\n";
+    assert!(has_rule(&lint(df), "DF062"));
+}
+
+#[test]
+fn df062_fires_on_quoted_self_reference() {
+    // VAR="$VAR" — quoted self-assignment
+    let df = "FROM alpine:3.19\nENV PATH=\"$PATH\"\n";
     assert!(has_rule(&lint(df), "DF062"));
 }
 
 #[test]
 fn df062_clear_on_no_self_reference() {
     let df = "FROM alpine:3.19\nENV MYAPP_PATH=/usr/local/bin\n";
+    assert!(no_rule(&lint(df), "DF062"));
+}
+
+#[test]
+fn df062_clear_on_path_append() {
+    // VAR="prefix:$OTHER_VAR" — extending PATH using a different previously-set variable
+    let df = "FROM python:3.13-slim\nENV VENV=/opt/venv/bin\nENV PATH=\"$VENV:$PATH\"\n";
+    assert!(no_rule(&lint(df), "DF062"));
+}
+
+#[test]
+fn df062_clear_on_normal_assignment() {
+    // BAZ=$FOO — referencing a different variable
+    let df = "FROM alpine:3.19\nENV FOO=bar\nENV BAZ=$FOO\n";
     assert!(no_rule(&lint(df), "DF062"));
 }
 
