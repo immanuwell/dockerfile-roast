@@ -10,12 +10,22 @@ think of it as code review from a senior dev who's seen too many prod incidents 
 
 ## install
 
+**one-liner** (macOS and Linux, detects Homebrew automatically):
+
+```bash
+curl -fsL ewry.net/droast/install.sh | sh
+```
+
+**Homebrew** (macOS and Linux):
+
 ```bash
 brew tap immanuwell/droast git@github.com:immanuwell/homebrew-droast.git
 brew install immanuwell/droast/droast
+```
 
-# or:
+**from source:**
 
+```bash
 cargo install dockerfile-roast
 ```
 
