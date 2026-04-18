@@ -101,10 +101,27 @@ fn df004_clear_when_cleanup_present() {
 }
 
 // ─── DF006: ADD instead of COPY ─────────────────────────────────────────────
-
 #[test]
 fn df006_fires_on_local_add() {
     let df = "FROM alpine:3.19\nADD ./config /app/config\n";
+    assert!(has_rule(&lint(df), "DF006"));
+}
+
+#[test]
+fn df006_clear_on_local_archive_extraction() {
+    let df = "FROM alpine:3.19\nADD ND_rejected_me0102.tgz /\n";
+    assert!(no_rule(&lint(df), "DF006"));
+}
+
+#[test]
+fn df006_clear_on_different_archive_formats() {
+    let df = "FROM alpine:3.19\nADD bundle.tar.gz /app/\nADD data.tar.xz /data/\n";
+    assert!(no_rule(&lint(df), "DF006"));
+}
+
+#[test]
+fn df006_fires_on_local_file_to_root() {
+    let df = "FROM alpine:3.19\nADD id_rsa.pub /\n";
     assert!(has_rule(&lint(df), "DF006"));
 }
 
