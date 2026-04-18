@@ -1080,7 +1080,9 @@ fn rule_untrusted_registry(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         };
         if image.eq_ignore_ascii_case("scratch") { continue; }
         // The registry is the first path component when it contains a dot or colon,
-        // or is the literal "localhost". Plain names like "ubuntu" imply docker.io.
+        // or is the literal "localhost". Plain names like "ubuntu" or "ubuntu:22.04"
+        // with no slash imply docker.io — the colon there is the tag separator, not a port.
+        if !image.contains('/') { continue; }
         let first = image.split('@').next().unwrap_or(image)
             .split('/').next().unwrap_or("");
         if first.contains('.') || first.contains(':') || first == "localhost" {
