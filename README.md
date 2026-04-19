@@ -19,7 +19,7 @@ curl -fsL ewry.net/droast/install.sh | sh
 **Homebrew** (macOS and Linux):
 
 ```bash
-brew tap immanuwell/droast git@github.com:immanuwell/homebrew-droast.git
+brew tap immanuwell/droast https://github.com/immanuwell/homebrew-droast.git
 brew install immanuwell/droast/droast
 ```
 
