@@ -80,6 +80,13 @@ enum Commands {
         #[arg(value_enum)]
         shell: ShellArg,
     },
+
+    /// Create a droast.toml config file in the current directory
+    ///
+    /// Generates a fully-commented template — every setting is present but
+    /// disabled so the file has no effect until you uncomment what you need.
+    /// Aborts if droast.toml already exists.
+    Init,
 }
 
 #[derive(Parser, Debug)]
@@ -131,9 +138,15 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    if let Some(Commands::Completion { shell }) = cli.command {
-        generate(Shell::from(shell), &mut Cli::command(), "droast", &mut io::stdout());
-        return Ok(());
+    match cli.command {
+        Some(Commands::Completion { shell }) => {
+            generate(Shell::from(shell), &mut Cli::command(), "droast", &mut io::stdout());
+            return Ok(());
+        }
+        Some(Commands::Init) => {
+            return cmd_init();
+        }
+        None => {}
     }
 
     if cli.list_rules {
@@ -218,6 +231,70 @@ fn main() -> Result<()> {
     if any_error && !no_fail { process::exit(1); }
     Ok(())
 }
+
+fn cmd_init() -> Result<()> {
+    let path = std::path::Path::new("droast.toml");
+    if path.exists() {
+        eprintln!(
+            "{} droast.toml already exists. Remove it first if you want a fresh template.",
+            "x".red().bold()
+        );
+        process::exit(1);
+    }
+    std::fs::write(path, CONFIG_TEMPLATE)?;
+    println!("{} Created droast.toml", "✓".green().bold());
+    println!("  All settings are commented out — uncomment what you need.");
+    Ok(())
+}
+
+const CONFIG_TEMPLATE: &str = r#"# droast.toml — project-level configuration
+# https://github.com/immanuwell/dockerfile-roast
+#
+# All settings are optional and commented out by default.
+# This file has no effect until you uncomment a line.
+# CLI flags always take precedence over values set here.
+#
+# droast searches for this file starting from the current directory,
+# walking up to the nearest .git root.
+
+# ── rules ────────────────────────────────────────────────────────────────────
+
+# Suppress specific rules project-wide. Useful for rules your team has
+# consciously accepted (e.g. no HEALTHCHECK by design, no EXPOSE needed).
+# Run `droast --list-rules` for the full list of rule IDs.
+#
+# skip = ["DF012", "DF022"]
+
+# ── severity ─────────────────────────────────────────────────────────────────
+
+# Minimum severity level to report.
+# Values: "info" (default) | "warning" | "error"
+# "warning" is a good default for CI — suppresses style hints, keeps real issues.
+#
+# min-severity = "info"
+
+# ── output ───────────────────────────────────────────────────────────────────
+
+# Output format.
+# Values: "terminal" (default) | "github" | "json" | "compact"
+# Use "github" in GitHub Actions to get inline PR annotations.
+# Use "json" to pipe findings into other tools.
+#
+# format = "terminal"
+
+# ── behaviour ────────────────────────────────────────────────────────────────
+
+# Suppress roast messages — print technical descriptions only.
+# Useful if your team finds the humour distracting (they're wrong, but ok).
+#
+# no-roast = false
+
+# Advisory mode: never exit with code 1, even when errors are found.
+# Findings are still printed; the build is never blocked.
+# Handy while rolling droast out across a large codebase.
+#
+# no-fail = false
+"#;
 
 fn parse_format(s: Option<&str>) -> Option<OutputFormat> {
     match s? {
