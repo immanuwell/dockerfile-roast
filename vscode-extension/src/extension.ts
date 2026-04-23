@@ -21,6 +21,7 @@ interface DroastOutput {
 // ── state ─────────────────────────────────────────────────────────────────────
 
 let diagnostics: vscode.DiagnosticCollection;
+let log: vscode.OutputChannel;
 
 // Pending debounce timers per document URI.
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -31,11 +32,14 @@ const procs = new Map<string, cp.ChildProcess>();
 // ── activation ────────────────────────────────────────────────────────────────
 
 export function activate(context: vscode.ExtensionContext): void {
+    log = vscode.window.createOutputChannel('droast');
     diagnostics = vscode.languages.createDiagnosticCollection('droast');
-    context.subscriptions.push(diagnostics);
+    context.subscriptions.push(log, diagnostics);
 
     context.subscriptions.push(
-        vscode.workspace.onDidOpenTextDocument(doc => scheduleLint(doc)),
+        // Use a small delay on open so that if activation already scheduled a
+        // lint for this document, the debounce collapses them into one run.
+        vscode.workspace.onDidOpenTextDocument(doc => scheduleLint(doc, 400)),
         vscode.workspace.onDidChangeTextDocument(e => scheduleLint(e.document)),
         vscode.workspace.onDidCloseTextDocument(doc => {
             const key = doc.uri.toString();
@@ -82,6 +86,7 @@ function runLint(doc: vscode.TextDocument): void {
     const minSev  = config.get<string>('minSeverity', 'info');
     const skip    = config.get<string[]>('skipRules', []);
     const noRoast = config.get<boolean>('noRoast', false);
+
 
     const args: string[] = ['--format', 'json', '--min-severity', minSev];
     if (skip.length > 0) { args.push('--skip', skip.join(',')); }

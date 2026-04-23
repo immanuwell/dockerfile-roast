@@ -21,7 +21,7 @@
   },
   "categories": ["Linters"],
   "keywords": ["dockerfile", "docker", "linter", "lint", "devops"],
-  "activationEvents": [],
+  "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
   "contributes": {
     "configuration": {
