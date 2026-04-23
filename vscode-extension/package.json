@@ -1,0 +1,76 @@
+{
+  "name": "droast",
+  "displayName": "droast — Dockerfile Linter",
+  "description": "Dockerfile linter with personality. Catches bad practices and tells you about them in the least diplomatic way possible.",
+  "version": "1.2.0",
+  "publisher": "immanuwell",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/immanuwell/dockerfile-roast"
+  },
+  "bugs": {
+    "url": "https://github.com/immanuwell/dockerfile-roast/issues"
+  },
+  "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#1a1a2e",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Linters"],
+  "keywords": ["dockerfile", "docker", "linter", "lint", "devops"],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "droast",
+      "properties": {
+        "droast.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable/disable droast linting."
+        },
+        "droast.executablePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the droast executable. Leave empty to use the bundled binary or system PATH."
+        },
+        "droast.minSeverity": {
+          "type": "string",
+          "enum": ["info", "warning", "error"],
+          "enumDescriptions": [
+            "Show all findings including style hints",
+            "Show warnings and errors only",
+            "Show errors only"
+          ],
+          "default": "info",
+          "description": "Minimum severity level to report."
+        },
+        "droast.skipRules": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Rule IDs to suppress (e.g. [\"DF012\", \"DF022\"])."
+        },
+        "droast.noRoast": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show technical descriptions only, without roast messages."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}

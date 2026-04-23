@@ -1,0 +1,7 @@
+src/
+tsconfig.json
+node_modules/
+.eslintrc*
+**/*.map
+**/*.ts
+!out/**
