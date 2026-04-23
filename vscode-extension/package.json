@@ -5,6 +5,7 @@
   "version": "1.2.0",
   "publisher": "immanuwell",
   "license": "MIT",
+  "icon": "icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/immanuwell/dockerfile-roast"
