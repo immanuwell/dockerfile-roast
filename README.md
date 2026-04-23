@@ -8,6 +8,14 @@ a dockerfile linter that actually has opinions. it catches bad practices and tel
 
 think of it as code review from a senior dev who's seen too many prod incidents and has stopped being polite about it.
 
+## vs code extension
+
+install from the marketplace and get inline squiggles as you type:
+
+**[droast — Dockerfile Linter](https://marketplace.visualstudio.com/items?itemName=ImmanuelTikhonov.droast)**
+
+requires the `droast` binary to be installed (see below). findings appear in real time with roast messages on hover.
+
 ## install
 
 **one-liner** (macOS and Linux, detects Homebrew automatically):
