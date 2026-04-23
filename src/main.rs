@@ -1,4 +1,5 @@
 use dockerfile_roast::{config, linter, output, rules};
+use std::io::Read;
 
 use std::io;
 use std::path::PathBuf;
@@ -214,7 +215,7 @@ fn main() -> Result<()> {
         // SARIF is a document format: collect all results, emit once.
         let mut all_results: Vec<linter::LintResult> = Vec::new();
         for file in &files {
-            match linter::lint_file(file, &opts) {
+            match lint_one(file, &opts) {
                 Ok(result) => {
                     if linter::has_errors(&result.findings) { any_error = true; }
                     all_results.push(result);
@@ -232,7 +233,7 @@ fn main() -> Result<()> {
         output::print_sarif(&pairs);
     } else {
         for file in &files {
-            match linter::lint_file(file, &opts) {
+            match lint_one(file, &opts) {
                 Ok(result) => {
                     total_findings += result.findings.len();
                     if linter::has_errors(&result.findings) { any_error = true; }
@@ -343,6 +344,18 @@ fn parse_severity(s: Option<&str>) -> Option<Severity> {
             eprintln!("{} droast.toml: unknown min-severity {:?}, ignoring", "!".yellow(), other);
             None
         }
+    }
+}
+
+/// Lint a single file path or `-` (stdin).
+fn lint_one(path: &std::path::Path, opts: &linter::LintOptions) -> anyhow::Result<linter::LintResult> {
+    if path == std::path::Path::new("-") {
+        let mut content = String::new();
+        std::io::stdin().read_to_string(&mut content)
+            .map_err(|e| anyhow::anyhow!("Failed to read stdin: {e}"))?;
+        Ok(linter::lint_content(&content, "<stdin>", opts))
+    } else {
+        linter::lint_file(path, opts)
     }
 }
 

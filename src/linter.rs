@@ -17,56 +17,54 @@ pub struct LintResult {
     pub findings: Vec<Finding>,
 }
 
-pub fn lint_file(path: &Path, opts: &LintOptions) -> Result<LintResult> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read '{}'", path.display()))?;
-
-    let instructions = parser::parse(&content);
-
+/// Lint Dockerfile content that has already been read into a string.
+///
+/// `filename` is used only for display and for locating `.dockerignore`.
+/// Pass `"<stdin>"` when linting content read from standard input.
+pub fn lint_content(content: &str, filename: &str, opts: &LintOptions) -> LintResult {
+    let instructions = parser::parse(content);
     let mut findings: Vec<Finding> = Vec::new();
 
     for rule in rules::all_rules() {
         if opts.skip_rules.iter().any(|s| s.eq_ignore_ascii_case(rule.id)) {
             continue;
         }
-        let mut rule_findings = (rule.func)(&instructions, &content);
-
-        // Filter by minimum severity
+        let mut rule_findings = (rule.func)(&instructions, content);
         rule_findings.retain(|f| f.severity >= opts.min_severity);
-
         findings.extend(rule_findings);
     }
 
-    // Check for .dockerignore if requested
     if opts.check_dockerignore {
-        let dir = path.parent().unwrap_or(Path::new("."));
-        let di_path = dir.join(".dockerignore");
-        if !di_path.exists() {
-            if Severity::Info >= opts.min_severity {
-                findings.push(Finding {
-                    rule: "DF033",
-                    severity: Severity::Info,
-                    line: 0,
-                    message: "No .dockerignore file found in the same directory".to_string(),
-                    roast: "No .dockerignore? You're COPY-ing your entire build context including \
-                            node_modules, .git, test fixtures, and possibly your diary. \
-                            A .dockerignore takes 5 minutes to write and saves you from \
-                            shipping your secrets to production.".to_string(),
-                });
-            }
+        // For stdin, check cwd; otherwise check the directory of the file.
+        let dir = if filename == "<stdin>" {
+            Path::new(".")
+        } else {
+            Path::new(filename).parent().unwrap_or(Path::new("."))
+        };
+        if !dir.join(".dockerignore").exists() && Severity::Info >= opts.min_severity {
+            findings.push(Finding {
+                rule: "DF033",
+                severity: Severity::Info,
+                line: 0,
+                message: "No .dockerignore file found in the same directory".to_string(),
+                roast: "No .dockerignore? You're COPY-ing your entire build context including \
+                        node_modules, .git, test fixtures, and possibly your diary. \
+                        A .dockerignore takes 5 minutes to write and saves you from \
+                        shipping your secrets to production.".to_string(),
+            });
         }
     }
 
-    // Sort by line number, then severity
-    findings.sort_by(|a, b| {
-        a.line.cmp(&b.line)
-            .then(b.severity.cmp(&a.severity))
-    });
+    findings.sort_by(|a, b| a.line.cmp(&b.line).then(b.severity.cmp(&a.severity)));
 
-    Ok(LintResult {
-        file: path.display().to_string(),
-        findings,
-    })
+    LintResult { file: filename.to_string(), findings }
+}
+
+/// Read `path` from disk and lint it. Thin wrapper around `lint_content`.
+pub fn lint_file(path: &Path, opts: &LintOptions) -> Result<LintResult> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read '{}'", path.display()))?;
+    Ok(lint_content(&content, &path.display().to_string(), opts))
 }
 
 pub fn has_errors(findings: &[Finding]) -> bool {
