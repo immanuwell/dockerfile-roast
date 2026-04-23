@@ -53,6 +53,7 @@ droast --skip DF001,DF012 Dockerfile
 droast --format github Dockerfile    # github actions annotations
 droast --format json Dockerfile      # machine-readable
 droast --format compact Dockerfile   # one line per finding
+droast --format sarif Dockerfile     # SARIF 2.1.0 for GitHub Advanced Security / IDEs
 ```
 
 ## configuration

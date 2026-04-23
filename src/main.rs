@@ -37,6 +37,7 @@ enum FormatArg {
     Json,
     Github,
     Compact,
+    Sarif,
 }
 
 impl From<FormatArg> for OutputFormat {
@@ -46,6 +47,7 @@ impl From<FormatArg> for OutputFormat {
             FormatArg::Json => OutputFormat::Json,
             FormatArg::Github => OutputFormat::Github,
             FormatArg::Compact => OutputFormat::Compact,
+            FormatArg::Sarif => OutputFormat::Sarif,
         }
     }
 }
@@ -185,6 +187,7 @@ fn main() -> Result<()> {
         }
     }
 
+    // SARIF suppresses the ASCII banner — it writes pure JSON to stdout.
     if format == OutputFormat::Terminal {
         print_summary_header();
     }
@@ -207,25 +210,46 @@ fn main() -> Result<()> {
     let mut any_error = false;
     let mut total_findings = 0usize;
 
-    for file in &files {
-        match linter::lint_file(file, &opts) {
-            Ok(result) => {
-                total_findings += result.findings.len();
-                if linter::has_errors(&result.findings) { any_error = true; }
-                print_findings(&result.file, &result.findings, format, no_roast);
-            }
-            Err(e) => {
-                eprintln!("{} {}", "x".red().bold(), e);
-                any_error = true;
+    if format == OutputFormat::Sarif {
+        // SARIF is a document format: collect all results, emit once.
+        let mut all_results: Vec<linter::LintResult> = Vec::new();
+        for file in &files {
+            match linter::lint_file(file, &opts) {
+                Ok(result) => {
+                    if linter::has_errors(&result.findings) { any_error = true; }
+                    all_results.push(result);
+                }
+                Err(e) => {
+                    eprintln!("{} {}", "x".red().bold(), e);
+                    any_error = true;
+                }
             }
         }
-    }
-
-    if files.len() > 1 && format == OutputFormat::Terminal {
-        println!(
-            "  {} Linted {} file(s), {} total finding(s)\n",
-            "-".dimmed(), files.len(), total_findings
-        );
+        let pairs: Vec<(&str, &[rules::Finding])> = all_results
+            .iter()
+            .map(|r| (r.file.as_str(), r.findings.as_slice()))
+            .collect();
+        output::print_sarif(&pairs);
+    } else {
+        for file in &files {
+            match linter::lint_file(file, &opts) {
+                Ok(result) => {
+                    total_findings += result.findings.len();
+                    if linter::has_errors(&result.findings) { any_error = true; }
+                    print_findings(&result.file, &result.findings, format, no_roast);
+                }
+                Err(e) => {
+                    eprintln!("{} {}", "x".red().bold(), e);
+                    any_error = true;
+                }
+            }
+        }
+        if files.len() > 1 && format == OutputFormat::Terminal {
+            println!(
+                "  {} Linted {} file(s), {} total finding(s)\n",
+                "-".dimmed(), files.len(), total_findings
+            );
+        }
     }
 
     if any_error && !no_fail { process::exit(1); }
@@ -302,6 +326,7 @@ fn parse_format(s: Option<&str>) -> Option<OutputFormat> {
         "json"     => Some(OutputFormat::Json),
         "github"   => Some(OutputFormat::Github),
         "compact"  => Some(OutputFormat::Compact),
+        "sarif"    => Some(OutputFormat::Sarif),
         other => {
             eprintln!("{} droast.toml: unknown format {:?}, ignoring", "!".yellow(), other);
             None
