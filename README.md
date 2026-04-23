@@ -55,6 +55,23 @@ droast --format json Dockerfile      # machine-readable
 droast --format compact Dockerfile   # one line per finding
 ```
 
+## configuration
+
+droast works out of the box with zero configuration. for teams that want to commit project-level defaults, drop a `droast.toml` in the repo root:
+
+```toml
+# droast.toml — all fields optional
+skip        = ["DF012", "DF022"]  # rules to suppress project-wide
+min-severity = "warning"          # hide info-level findings
+no-roast    = false               # true = technical output only
+no-fail     = false               # true = never block CI
+format      = "terminal"          # terminal | json | github | compact
+```
+
+droast searches for `droast.toml` starting from the current directory, walking up to the nearest `.git` root. CLI flags always take precedence over the file — the file just sets the defaults so you don't repeat yourself.
+
+`skip` is the most useful field for CI pipelines: add rules your team has consciously accepted (e.g. you ship without HEALTHCHECK by design) so developers don't drown in noise they can't act on.
+
 ## github action
 
 add droast to any repo in 5 lines:

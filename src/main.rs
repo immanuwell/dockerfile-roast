@@ -1,4 +1,4 @@
-use dockerfile_roast::{linter, output, rules};
+use dockerfile_roast::{config, linter, output, rules};
 
 use std::io;
 use std::path::PathBuf;
@@ -9,6 +9,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Shell};
 use colored::*;
 
+use config::DroastConfig;
 use linter::LintOptions;
 use output::{print_findings, print_summary_header, OutputFormat};
 use rules::Severity;
@@ -86,7 +87,13 @@ enum Commands {
     name = "droast",
     about = "Dockerfile linter with personality",
     long_about = "A Dockerfile linter that catches bad practices and roasts you about them.\n\
-                  Think of it as a very opinionated senior engineer doing a code review.",
+                  Think of it as a very opinionated senior engineer doing a code review.\n\n\
+                  Project-level defaults can be set in droast.toml (all fields optional):\n\n  \
+                  skip = [\"DF012\", \"DF022\"]\n  \
+                  min-severity = \"warning\"\n  \
+                  no-roast = false\n  \
+                  no-fail  = false\n  \
+                  format   = \"terminal\"",
     version,
     author
 )]
@@ -94,11 +101,13 @@ struct Cli {
     #[arg(value_name = "FILE")]
     files: Vec<PathBuf>,
 
-    #[arg(short, long, value_enum, default_value = "terminal")]
-    format: FormatArg,
+    /// Output format [default: terminal] [possible values: terminal, json, github, compact]
+    #[arg(short, long, value_enum)]
+    format: Option<FormatArg>,
 
-    #[arg(short = 's', long, value_enum, default_value = "info")]
-    min_severity: SeverityArg,
+    /// Minimum severity to report [default: info] [possible values: info, warning, error]
+    #[arg(short = 's', long, value_enum)]
+    min_severity: Option<SeverityArg>,
 
     #[arg(long, value_delimiter = ',', value_name = "RULE")]
     skip: Vec<String>,
@@ -132,7 +141,36 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let format: OutputFormat = cli.format.into();
+    // Load project config (droast.toml), then merge CLI on top.
+    // Priority: CLI flag > droast.toml > built-in default.
+    let cfg = DroastConfig::load();
+
+    let format: OutputFormat = cli.format
+        .map(Into::into)
+        .or_else(|| parse_format(cfg.format.as_deref()))
+        .unwrap_or(OutputFormat::Terminal);
+
+    let min_severity: Severity = cli.min_severity
+        .map(Into::into)
+        .or_else(|| parse_severity(cfg.min_severity.as_deref()))
+        .unwrap_or(Severity::Info);
+
+    // --no-roast on CLI always wins; config can also enable it.
+    let no_roast = cli.no_roast || cfg.no_roast.unwrap_or(false);
+
+    // --no-fail on CLI always wins; config can also enable it.
+    let no_fail = cli.no_fail || cfg.no_fail.unwrap_or(false);
+
+    // skip: union of CLI and config (config = baseline, CLI = additions).
+    let mut skip = cli.skip.clone();
+    if let Some(config_skip) = &cfg.skip {
+        for rule in config_skip {
+            let normalized = rule.to_uppercase();
+            if !skip.iter().any(|s| s.eq_ignore_ascii_case(&normalized)) {
+                skip.push(normalized);
+            }
+        }
+    }
 
     if format == OutputFormat::Terminal {
         print_summary_header();
@@ -148,8 +186,8 @@ fn main() -> Result<()> {
     }
 
     let opts = LintOptions {
-        skip_rules: cli.skip.clone(),
-        min_severity: cli.min_severity.into(),
+        skip_rules: skip,
+        min_severity,
         check_dockerignore: cli.check_dockerignore,
     };
 
@@ -161,7 +199,7 @@ fn main() -> Result<()> {
             Ok(result) => {
                 total_findings += result.findings.len();
                 if linter::has_errors(&result.findings) { any_error = true; }
-                print_findings(&result.file, &result.findings, format, cli.no_roast);
+                print_findings(&result.file, &result.findings, format, no_roast);
             }
             Err(e) => {
                 eprintln!("{} {}", "x".red().bold(), e);
@@ -177,8 +215,33 @@ fn main() -> Result<()> {
         );
     }
 
-    if any_error && !cli.no_fail { process::exit(1); }
+    if any_error && !no_fail { process::exit(1); }
     Ok(())
+}
+
+fn parse_format(s: Option<&str>) -> Option<OutputFormat> {
+    match s? {
+        "terminal" => Some(OutputFormat::Terminal),
+        "json"     => Some(OutputFormat::Json),
+        "github"   => Some(OutputFormat::Github),
+        "compact"  => Some(OutputFormat::Compact),
+        other => {
+            eprintln!("{} droast.toml: unknown format {:?}, ignoring", "!".yellow(), other);
+            None
+        }
+    }
+}
+
+fn parse_severity(s: Option<&str>) -> Option<Severity> {
+    match s? {
+        "info"    => Some(Severity::Info),
+        "warning" => Some(Severity::Warning),
+        "error"   => Some(Severity::Error),
+        other => {
+            eprintln!("{} droast.toml: unknown min-severity {:?}, ignoring", "!".yellow(), other);
+            None
+        }
+    }
 }
 
 fn print_rule_list() {
