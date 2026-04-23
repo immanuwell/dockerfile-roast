@@ -3,7 +3,7 @@
   "displayName": "droast — Dockerfile Linter",
   "description": "Dockerfile linter with personality. Catches bad practices and tells you about them in the least diplomatic way possible.",
   "version": "1.2.0",
-  "publisher": "immanuwell",
+  "publisher": "ImmanuelTikhonov",
   "license": "MIT",
   "icon": "icon.png",
   "repository": {
