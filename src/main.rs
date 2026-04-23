@@ -1,7 +1,5 @@
 use dockerfile_roast::{config, linter, output, rules};
-use std::io::Read;
-
-use std::io;
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process;
 
@@ -199,7 +197,7 @@ fn main() -> Result<()> {
             "{} No Dockerfile(s) found. Pass a path or run in a directory that contains a Dockerfile.",
             "x".red().bold()
         );
-        process::exit(1);
+        exit(1);
     }
 
     let opts = LintOptions {
@@ -253,7 +251,7 @@ fn main() -> Result<()> {
         }
     }
 
-    if any_error && !no_fail { process::exit(1); }
+    if any_error && !no_fail { exit(1); }
     Ok(())
 }
 
@@ -264,7 +262,7 @@ fn cmd_init() -> Result<()> {
             "{} droast.toml already exists. Remove it first if you want a fresh template.",
             "x".red().bold()
         );
-        process::exit(1);
+        exit(1);
     }
     std::fs::write(path, CONFIG_TEMPLATE)?;
     println!("{} Created droast.toml", "✓".green().bold());
@@ -345,6 +343,16 @@ fn parse_severity(s: Option<&str>) -> Option<Severity> {
             None
         }
     }
+}
+
+/// Flush stdout+stderr then exit.
+/// `process::exit()` is a hard exit that skips destructors — including the
+/// `BufWriter` that wraps stdout — so any buffered output (e.g. JSON) would
+/// be silently discarded without this flush.
+fn exit(code: i32) -> ! {
+    let _ = io::stdout().flush();
+    let _ = io::stderr().flush();
+    process::exit(code);
 }
 
 /// Lint a single file path or `-` (stdin).
