@@ -12,9 +12,15 @@ think of it as code review from a senior dev who's seen too many prod incidents 
 
 install from the marketplace and get inline squiggles as you type:
 
+![VS Code](https://img.shields.io/badge/VSCode-007ACC?logo=visualstudiocode&logoColor=white&style=flat)
+
 **[droast — Dockerfile Linter](https://marketplace.visualstudio.com/items?itemName=ImmanuelTikhonov.droast)**
 
-requires the `droast` binary to be installed (see below). findings appear in real time with roast messages on hover.
+```bash
+code --install-extension ImmanuelTikhonov.droast
+```
+
+the binary is bundled — no separate install needed. findings appear in real time with roast messages on hover.
 
 ## install
 
