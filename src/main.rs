@@ -102,7 +102,7 @@ enum Commands {
                   no-roast = false\n  \
                   no-fail  = false\n  \
                   format   = \"terminal\"",
-    version,
+    version = env!("DROAST_VERSION"),
     author
 )]
 struct Cli {

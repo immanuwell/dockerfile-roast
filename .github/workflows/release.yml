@@ -50,6 +50,8 @@ jobs:
           restore-keys: release-${{ matrix.target }}-
 
       - name: Build
+        env:
+          DROAST_VERSION: ${{ github.ref_name }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Stage binary
