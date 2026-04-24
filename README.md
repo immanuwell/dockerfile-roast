@@ -4,6 +4,8 @@
 
 ![](media/screenshot-2.png)
 
+![](media/screenshot-3.png)
+
 # droast
 
 a dockerfile linter that actually has opinions. it catches bad practices and tells you about them in the least diplomatic way possible.
