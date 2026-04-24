@@ -96,7 +96,7 @@ droast searches for `droast.toml` starting from the current directory, walking u
 add droast to any repo in 5 lines:
 
 ```yaml
-- uses: immanuwell/dockerfile-roast@1.0.0
+- uses: immanuwell/dockerfile-roast@1.3.0
 ```
 
 full example (`.github/workflows/lint.yml`):
@@ -111,7 +111,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: immanuwell/dockerfile-roast@1.0.0
+      - uses: immanuwell/dockerfile-roast@1.3.0
 ```
 
 findings show up as inline annotations on the PR diff. no configuration required.
@@ -125,12 +125,12 @@ available inputs (all optional):
 | `skip` | — | comma-separated rule IDs to ignore |
 | `no-roast` | `false` | technical output only, no jokes |
 | `no-fail` | `false` | advisory mode — never blocks the build |
-| `image-tag` | `latest` | pin to a specific droast release, e.g. `1.0.0` |
+| `image-tag` | `latest` | pin to a specific droast release, e.g. `1.3.0` |
 
 example with options:
 
 ```yaml
-- uses: immanuwell/dockerfile-roast@1.0.0
+- uses: immanuwell/dockerfile-roast@1.3.0
   with:
     files: '**/Dockerfile'
     min-severity: warning
