@@ -2,6 +2,9 @@ src/
 tsconfig.json
 node_modules/
 .eslintrc*
+.gitignore
+bun.lock
 **/*.map
 **/*.ts
 !out/**
+!bin/**

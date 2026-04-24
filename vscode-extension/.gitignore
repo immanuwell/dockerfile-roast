@@ -2,3 +2,5 @@ out/
 node_modules/
 *.vsix
 bun.lockb
+bin/*
+!bin/.gitkeep
