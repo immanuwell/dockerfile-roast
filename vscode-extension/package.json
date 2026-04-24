@@ -2,7 +2,7 @@
   "name": "droast",
   "displayName": "droast — Dockerfile Linter",
   "description": "Dockerfile linter with personality. Catches bad practices and tells you about them in the least diplomatic way possible.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "publisher": "ImmanuelTikhonov",
   "license": "MIT",
   "icon": "icon.png",
@@ -20,9 +20,19 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Linters"],
-  "keywords": ["dockerfile", "docker", "linter", "lint", "devops"],
-  "activationEvents": ["onStartupFinished"],
+  "categories": [
+    "Linters"
+  ],
+  "keywords": [
+    "dockerfile",
+    "docker",
+    "linter",
+    "lint",
+    "devops"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "configuration": {
@@ -40,7 +50,11 @@
         },
         "droast.minSeverity": {
           "type": "string",
-          "enum": ["info", "warning", "error"],
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
           "enumDescriptions": [
             "Show all findings including style hints",
             "Show warnings and errors only",
@@ -51,7 +65,9 @@
         },
         "droast.skipRules": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Rule IDs to suppress (e.g. [\"DF012\", \"DF022\"])."
         },
