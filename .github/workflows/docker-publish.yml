@@ -55,5 +55,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            DROAST_VERSION=${{ inputs.tag || github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

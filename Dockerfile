@@ -7,6 +7,8 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 
+ARG DROAST_VERSION
+ENV DROAST_VERSION=${DROAST_VERSION}
 RUN cargo build --release --bin droast
 
 # ─────────────────────────────────────────────────────────────────────────────
