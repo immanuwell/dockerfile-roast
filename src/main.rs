@@ -374,13 +374,19 @@ fn lint_one(path: &std::path::Path, opts: &linter::LintOptions) -> anyhow::Resul
 
 fn print_rule_list() {
     println!("\n  {}\n", "Available Rules".bold().underline());
-    println!("  {:<8} {}", "ID".bold(), "DESCRIPTION".bold());
-    println!("  {}", "─".repeat(70));
+    println!("  {:<8} {:<8} {}", "ID".bold(), "SEVERITY".bold(), "DESCRIPTION".bold());
+    println!("  {}", "─".repeat(80));
     for rule in rules::all_rules() {
-        println!("  {:<8} {}", rule.id.cyan(), rule.description);
+        let sev = match rule.severity {
+            rules::Severity::Error   => "ERROR".red().bold(),
+            rules::Severity::Warning => "WARN ".yellow().bold(),
+            rules::Severity::Info    => "INFO ".cyan(),
+        };
+        println!("  {:<8} {} {}", rule.id.cyan(), sev, rule.description);
     }
     println!();
     println!("  Use --skip DF001,DF002 to suppress specific rules.");
+    println!("  Use --only DF001,DF002 to run only specific rules.");
     println!("  Use --min-severity warning to hide INFO findings.\n");
 }
 
