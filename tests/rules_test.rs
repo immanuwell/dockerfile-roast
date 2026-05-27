@@ -1163,3 +1163,55 @@ fn df068_clear_on_allowed_onbuild_trigger() {
     let df = "FROM alpine:3.19\nONBUILD RUN echo hello\n";
     assert!(no_rule(&lint(df), "DF068"));
 }
+
+// ─── DF069: apt-get upgrade ───────────────────────────────────────────────────
+
+#[test]
+fn df069_fires_on_apt_get_upgrade() {
+    let df = "FROM ubuntu:22.04\nRUN apt-get update && apt-get upgrade -y\n";
+    assert!(has_rule(&lint(df), "DF069"));
+}
+
+#[test]
+fn df069_fires_on_apt_get_dist_upgrade() {
+    let df = "FROM ubuntu:22.04\nRUN apt-get dist-upgrade -y\n";
+    assert!(has_rule(&lint(df), "DF069"));
+}
+
+#[test]
+fn df069_fires_on_apt_upgrade() {
+    let df = "FROM ubuntu:22.04\nRUN apt upgrade -y\n";
+    assert!(has_rule(&lint(df), "DF069"));
+}
+
+#[test]
+fn df069_clear_on_apt_get_install_only() {
+    let df = "FROM ubuntu:22.04\nRUN apt-get update && apt-get install -y curl\n";
+    assert!(no_rule(&lint(df), "DF069"));
+}
+
+// ─── DF070: COPY . before package install ────────────────────────────────────
+
+#[test]
+fn df070_fires_on_copy_dot_before_npm_install() {
+    let df = "FROM node:20\nWORKDIR /app\nCOPY . .\nRUN npm install\n";
+    assert!(has_rule(&lint(df), "DF070"));
+}
+
+#[test]
+fn df070_fires_on_copy_dot_before_pip_install() {
+    let df = "FROM python:3.12\nWORKDIR /app\nCOPY . /app\nRUN pip install -r requirements.txt\n";
+    assert!(has_rule(&lint(df), "DF070"));
+}
+
+#[test]
+fn df070_clear_on_copy_dot_after_install() {
+    let df = "FROM node:20\nWORKDIR /app\nCOPY package.json ./\nRUN npm install\nCOPY . .\n";
+    assert!(no_rule(&lint(df), "DF070"));
+}
+
+#[test]
+fn df070_clear_on_specific_copy_before_install() {
+    let df = "FROM node:20\nWORKDIR /app\nCOPY package.json package-lock.json ./\nRUN npm ci\nCOPY src ./src\n";
+    assert!(no_rule(&lint(df), "DF070"));
+}

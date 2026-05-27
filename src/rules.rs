@@ -105,6 +105,8 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF066", description: "Bash-specific syntax used without a SHELL instruction", func: rule_bash_syntax_no_shell },
         Rule { id: "DF067", description: "COPY of a local archive — ADD auto-extracts tarballs", func: rule_copy_archive_use_add },
         Rule { id: "DF068", description: "FROM, ONBUILD, and MAINTAINER are forbidden as ONBUILD triggers", func: rule_onbuild_forbidden },
+        Rule { id: "DF069", description: "Avoid apt-get upgrade / dist-upgrade — makes builds non-reproducible", func: rule_apt_upgrade },
+        Rule { id: "DF070", description: "Avoid broad COPY before package install — invalidates Docker layer cache", func: rule_copy_before_install },
     ]
 }
 
@@ -1606,4 +1608,67 @@ fn rule_no_user_instruction(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
         roast: "No USER set? Bold strategy. Running everything as root in prod is a great way \
                 to ensure job security — for your incident response team.".to_string(),
     }]
+}
+
+fn rule_apt_upgrade(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let re = Regex::new(r"\bapt(-get)?\s+(dist-upgrade|upgrade)\b").unwrap();
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| re.is_match(&i.arguments))
+        .map(|i| Finding {
+            rule: "DF069",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "apt-get upgrade/dist-upgrade makes builds non-reproducible".to_string(),
+            roast: "apt-get upgrade: 'let's upgrade everything and see what breaks in six months'. \
+                    Your image will be different every time you build it. \
+                    Pin the packages you actually need instead of upgrading everything blindly.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_copy_before_install(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    const PKG_CMDS: &[&str] = &[
+        "npm install", "npm ci", "pip install", "pip3 install",
+        "yarn install", "yarn add", "bundle install", "composer install",
+        "pnpm install", "bun install",
+    ];
+    let mut findings = Vec::new();
+    let mut broad_copy_line: Option<usize> = None;
+
+    for i in instrs {
+        match i.instruction.as_str() {
+            "FROM" => {
+                broad_copy_line = None;
+            }
+            "COPY" => {
+                let tokens: Vec<&str> = i.arguments
+                    .split_whitespace()
+                    .filter(|t| !t.starts_with("--"))
+                    .collect();
+                if tokens.len() >= 2 && (tokens[0] == "." || tokens[0].ends_with("/.")) {
+                    broad_copy_line = Some(i.line);
+                }
+            }
+            "RUN" => {
+                if let Some(copy_line) = broad_copy_line {
+                    if PKG_CMDS.iter().any(|cmd| i.arguments.contains(cmd)) {
+                        findings.push(Finding {
+                            rule: "DF070",
+                            severity: Severity::Warning,
+                            line: copy_line,
+                            message: "COPY . before package install — invalidates Docker layer cache on every source change".to_string(),
+                            roast: "COPY . . before npm/pip install means every code change rebuilds \
+                                    dependencies from scratch. Copy just the manifest first \
+                                    (e.g. COPY package.json ./), run the install, then COPY . . — \
+                                    now the install layer is cached between source changes.".to_string(),
+                        });
+                        broad_copy_line = None;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    findings
 }
