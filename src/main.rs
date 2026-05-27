@@ -120,6 +120,10 @@ struct Cli {
     #[arg(long, value_delimiter = ',', value_name = "RULE")]
     skip: Vec<String>,
 
+    /// Run only these rules (comma-separated IDs). Overrides --skip when both are given.
+    #[arg(long, value_delimiter = ',', value_name = "RULE")]
+    only: Vec<String>,
+
     #[arg(long)]
     no_roast: bool,
 
@@ -202,6 +206,7 @@ fn main() -> Result<()> {
 
     let opts = LintOptions {
         skip_rules: skip,
+        only_rules: cli.only.iter().map(|s| s.to_uppercase()).collect(),
         min_severity,
         check_dockerignore: cli.check_dockerignore,
     };

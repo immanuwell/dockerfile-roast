@@ -8,6 +8,8 @@ use crate::rules::{self, Finding, Severity};
 
 pub struct LintOptions {
     pub skip_rules: Vec<String>,
+    /// When non-empty, only rules whose IDs appear in this list are run.
+    pub only_rules: Vec<String>,
     pub min_severity: Severity,
     pub check_dockerignore: bool,
 }
@@ -26,6 +28,9 @@ pub fn lint_content(content: &str, filename: &str, opts: &LintOptions) -> LintRe
     let mut findings: Vec<Finding> = Vec::new();
 
     for rule in rules::all_rules() {
+        if !opts.only_rules.is_empty() && !opts.only_rules.iter().any(|s| s.eq_ignore_ascii_case(rule.id)) {
+            continue;
+        }
         if opts.skip_rules.iter().any(|s| s.eq_ignore_ascii_case(rule.id)) {
             continue;
         }
