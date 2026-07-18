@@ -20,6 +20,12 @@ pub fn parse(content: &str) -> Vec<Instruction> {
 
         // If we're inside a continuation, collect
         if let Some(ref instr) = pending_instr.clone() {
+            // Docker strips comment lines and empty lines inside continuations
+            // (the continuation keeps going), so they must not terminate the
+            // instruction even though they don't end with a backslash.
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
             // Strip trailing backslash
             let continued = if trimmed.ends_with('\\') {
                 &trimmed[..trimmed.len() - 1]
@@ -111,5 +117,21 @@ mod tests {
         let instrs = parse(df);
         assert_eq!(instrs.len(), 1);
         assert_eq!(instrs[0].instruction, "RUN");
+    }
+
+    #[test]
+    fn test_comment_inside_continuation() {
+        let df = "RUN apt-get install \\\n    curl \\\n    # comment line\n    wget && \\\n    apt-get clean\n";
+        let instrs = parse(df);
+        assert_eq!(instrs.len(), 1);
+        assert_eq!(instrs[0].arguments, "apt-get install curl wget && apt-get clean");
+    }
+
+    #[test]
+    fn test_empty_line_inside_continuation() {
+        let df = "RUN apt-get install \\\n\n    curl\n";
+        let instrs = parse(df);
+        assert_eq!(instrs.len(), 1);
+        assert_eq!(instrs[0].arguments, "apt-get install curl");
     }
 }
