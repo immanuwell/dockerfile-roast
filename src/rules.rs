@@ -614,13 +614,16 @@ fn rule_no_cmd_or_entrypoint(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
 }
 
 fn rule_uncleaned_package_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let apt_distclean = Regex::new(r"\bapt-get\s+distclean\b").expect("valid apt distclean regex");
     let mut findings = Vec::new();
     for i in instrs_of(instrs, "RUN") {
         let arg = &i.arguments;
         let has_apt = arg.contains("apt-get install") || arg.contains("apt install");
         let has_yum = arg.contains("yum install") || arg.contains("dnf install");
         let has_apk = arg.contains("apk add") && !arg.contains("--no-cache");
-        if has_apt && !arg.contains("rm -rf /var/lib/apt/lists") {
+        let cleans_apt_lists =
+            arg.contains("rm -rf /var/lib/apt/lists") || apt_distclean.is_match(arg);
+        if has_apt && !cleans_apt_lists {
             findings.push(Finding {
                 rule: "DF004",
                 severity: Severity::Warning,

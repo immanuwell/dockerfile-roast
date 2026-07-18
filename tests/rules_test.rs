@@ -113,6 +113,18 @@ fn df004_clear_when_cleanup_present() {
 }
 
 #[test]
+fn df004_clear_with_apt_get_distclean() {
+    let df = "FROM ubuntu:24.04\nRUN apt-get install -U -y --no-install-recommends bash && apt-get distclean\nCMD [\"/bin/sh\"]\n";
+    assert!(no_rule(&lint(df), "DF004"));
+}
+
+#[test]
+fn df004_fires_on_similarly_named_non_cleanup_command() {
+    let df = "FROM ubuntu:24.04\nRUN apt-get install -y bash && apt-get distcleaner\nCMD [\"/bin/sh\"]\n";
+    assert!(has_rule(&lint(df), "DF004"));
+}
+
+#[test]
 fn df004_clear_with_comment_inside_continuation() {
     // Docker strips comment lines inside continuations, so the trailing
     // cleanup still belongs to the same RUN (issue #11).
