@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="520" viewBox="0 0 1000 520" role="img" aria-labelledby="title desc">
+  <title id="title">Droast and Hadolint full-corpus scan time comparison</title>
+  <desc id="desc">Droast median scan time is 191 milliseconds and Hadolint median scan time is 1178 milliseconds. Droast is 6.16 times faster across 121 Dockerfiles and 28279 lines.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <g id="ticks" stroke="#94a3b8" stroke-width="3" stroke-linecap="round">
+      <line x1="0" y1="-174" x2="0" y2="-161" transform="rotate(-90)"/>
+      <line x1="0" y1="-174" x2="0" y2="-164" transform="rotate(-72)"/>
+      <line x1="0" y1="-174" x2="0" y2="-164" transform="rotate(-54)"/>
+      <line x1="0" y1="-174" x2="0" y2="-164" transform="rotate(-36)"/>
+      <line x1="0" y1="-174" x2="0" y2="-164" transform="rotate(-18)"/>
+      <line x1="0" y1="-174" x2="0" y2="-161"/>
+      <line x1="0" y1="-174" x2="0" y2="-164" transform="rotate(18)"/>
+      <line x1="0" y1="-174" x2="0" y2="-164" transform="rotate(36)"/>
+      <line x1="0" y1="-174" x2="0" y2="-164" transform="rotate(54)"/>
+      <line x1="0" y1="-174" x2="0" y2="-164" transform="rotate(72)"/>
+      <line x1="0" y1="-174" x2="0" y2="-161" transform="rotate(90)"/>
+    </g>
+  </defs>
+
+  <rect width="1000" height="520" rx="28" fill="#f8fafc"/>
+  <text x="500" y="58" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="28" font-weight="800" fill="#0f172a">FULL-CORPUS SCAN TIME</text>
+  <text x="500" y="88" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="600" letter-spacing="1.5" fill="#64748b">LOWER IS BETTER</text>
+
+  <g filter="url(#shadow)">
+    <rect x="55" y="120" width="420" height="310" rx="24" fill="#ffffff"/>
+    <rect x="525" y="120" width="420" height="310" rx="24" fill="#ffffff"/>
+  </g>
+
+  <g transform="translate(265 316)">
+    <path d="M -150 0 A 150 150 0 0 1 150 0" pathLength="100" fill="none" stroke="#dbeafe" stroke-width="28" stroke-linecap="round"/>
+    <path d="M -150 0 A 150 150 0 0 1 150 0" fill="none" stroke="#1685e5" stroke-width="28" stroke-linecap="round" stroke-dasharray="76.48 471.24"/>
+    <use href="#ticks"/>
+    <text x="0" y="-24" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="52" font-weight="850" fill="#0f172a">191</text>
+    <text x="0" y="8" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="700" fill="#1685e5">ms median</text>
+    <g transform="translate(-53 45) scale(.78)" aria-label="fire">
+      <path d="M16 1c1 7-4 9-4 14 0 2 1 4 3 5-1-5 3-7 5-11 4 4 6 8 6 12 0 7-5 12-12 12S2 28 2 21c0-6 4-10 8-14 0 5 1 7 3 8-1-6 2-10 3-14Z" fill="#ff6b35"/>
+      <path d="M14 31c-4 0-7-3-7-7 0-3 2-5 4-7 0 3 1 5 3 6-1-4 1-7 3-9 3 3 5 6 5 9 0 5-3 8-8 8Z" fill="#ffb000"/>
+    </g>
+    <text x="12" y="65" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="23" font-weight="800" fill="#0f172a">droast</text>
+  </g>
+
+  <g transform="translate(735 316)">
+    <path d="M -150 0 A 150 150 0 0 1 150 0" pathLength="100" fill="none" stroke="#fee2e2" stroke-width="28" stroke-linecap="round"/>
+    <path d="M -150 0 A 150 150 0 0 1 150 0" fill="none" stroke="#ef5a5a" stroke-width="28" stroke-linecap="round"/>
+    <use href="#ticks"/>
+    <text x="0" y="-24" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="52" font-weight="850" fill="#0f172a">1,178</text>
+    <text x="0" y="8" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="700" fill="#ef5a5a">ms median</text>
+    <text x="0" y="65" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="23" font-weight="800" fill="#0f172a">Hadolint</text>
+  </g>
+
+  <rect x="337" y="448" width="326" height="44" rx="22" fill="#0f172a"/>
+  <text x="500" y="477" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="21" font-weight="800" fill="#ffffff">droast is 6.16× faster</text>
+  <text x="500" y="512" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" font-weight="600" fill="#64748b">121 Dockerfiles · 28,279 lines · median of 30 warmed, interleaved runs · Ubuntu 24.04 x86_64</text>
+</svg>
