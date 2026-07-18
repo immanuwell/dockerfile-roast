@@ -489,11 +489,12 @@ fn rule_pip_no_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 }
 
 fn rule_npm_install(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let npm_install = Regex::new(r"\bnpm\s+install\b").expect("valid npm install regex");
     instrs_of(instrs, "RUN")
         .into_iter()
         .filter(|i| {
             let a = &i.arguments;
-            a.contains("npm install") && !a.contains("npm ci") && !a.contains("--production") && !a.contains("--omit=dev")
+            npm_install.is_match(a) && !a.contains("--production") && !a.contains("--omit=dev")
         })
         .map(|i| Finding {
             rule: "DF031",

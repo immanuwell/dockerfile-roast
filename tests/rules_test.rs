@@ -563,6 +563,17 @@ fn df031_clear_on_npm_install_production() {
     assert!(no_rule(&lint(df), "DF031"));
 }
 
+#[test]
+fn df031_clear_on_prefixed_package_managers() {
+    for command in ["pnpm install --frozen-lockfile", "cnpm install"] {
+        let df = format!("FROM node:20\nRUN {command}\nCMD [\"node\", \"app.js\"]\n");
+        assert!(
+            no_rule(&lint(&df), "DF031"),
+            "unexpected DF031 for {command}"
+        );
+    }
+}
+
 // ─── DF032: Python env vars missing ──────────────────────────────────────────
 
 #[test]
