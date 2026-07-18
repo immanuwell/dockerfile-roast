@@ -52,6 +52,18 @@ fn df001_clear_on_scratch() {
     assert!(no_rule(&lint(df), "DF001"));
 }
 
+#[test]
+fn df001_clear_on_pinned_image_with_platform_flag() {
+    let df = "FROM --platform=$BUILDPLATFORM node:26.5.0-alpine@sha256:abc123 AS restore\n";
+    assert!(no_rule(&lint(df), "DF001"));
+}
+
+#[test]
+fn df001_clear_when_previous_stage_is_the_base() {
+    let df = "FROM node:26.5.0-alpine@sha256:abc123 AS restore\nFROM restore AS migrate\n";
+    assert!(no_rule(&lint(df), "DF001"));
+}
+
 // ─── DF002: explicit root ────────────────────────────────────────────────────
 
 #[test]
@@ -472,8 +484,20 @@ fn df023_fires_on_from_without_alias() {
 }
 
 #[test]
+fn df023_fires_when_only_later_stage_has_no_alias() {
+    let df = "FROM golang:1.21 AS builder\nRUN go build ./...\nFROM alpine:3.19\nCOPY --from=builder /go/bin/app /app\n";
+    assert!(has_rule(&lint(df), "DF023"));
+}
+
+#[test]
 fn df023_clear_when_all_have_aliases() {
     let df = "FROM golang:1.21 AS builder\nRUN go build ./...\nFROM alpine:3.19 AS final\nCOPY --from=builder /go/bin/app /app\nCMD [\"/app\"]\n";
+    assert!(no_rule(&lint(df), "DF023"));
+}
+
+#[test]
+fn df023_clear_with_platform_flags_and_aliases() {
+    let df = "FROM --platform=$BUILDPLATFORM node:26.5.0-alpine@sha256:abc123 AS restore\nFROM --platform=$BUILDPLATFORM restore AS migrate\n";
     assert!(no_rule(&lint(df), "DF023"));
 }
 
@@ -1057,6 +1081,12 @@ fn df063_clear_on_relative_copy_with_workdir() {
 #[test]
 fn df063_clear_on_absolute_dest_copy() {
     let df = "FROM alpine:3.19\nCOPY app.py /app/app.py\n";
+    assert!(no_rule(&lint(df), "DF063"));
+}
+
+#[test]
+fn df063_clear_when_workdir_is_inherited_from_previous_stage() {
+    let df = "FROM node:26.5.0-alpine@sha256:abc123 AS restore\nWORKDIR /tmp/foo/bar\nCOPY Dockerfile .\nFROM restore AS migrate\nCOPY Dockerfile .\n";
     assert!(no_rule(&lint(df), "DF063"));
 }
 

@@ -119,23 +119,56 @@ fn has_instr(instrs: &[Instruction], name: &str) -> bool {
     instrs.iter().any(|i| i.instruction == name)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FromArguments<'a> {
+    image: &'a str,
+    alias: Option<&'a str>,
+}
+
+/// Parse `FROM [--flag=value ...] image [AS alias]` arguments.
+///
+/// Keeping this in one place prevents rules from mistaking options such as
+/// `--platform=$BUILDPLATFORM` for the image or shifting the `AS` position.
+fn parse_from_arguments(arguments: &str) -> Option<FromArguments<'_>> {
+    let mut tokens = arguments.split_whitespace();
+    let image = tokens.find(|token| !token.starts_with("--"))?;
+    let alias = match (tokens.next(), tokens.next()) {
+        (Some(keyword), Some(alias)) if keyword.eq_ignore_ascii_case("as") => Some(alias),
+        _ => None,
+    };
+    Some(FromArguments { image, alias })
+}
+
 fn rule_latest_tag(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    instrs_of(instrs, "FROM")
-        .into_iter()
-        .filter(|i| {
-            let base = i.arguments.split_whitespace().next().unwrap_or("");
-            if base.eq_ignore_ascii_case("scratch") { return false; }
-            base.ends_with(":latest") || (!base.contains(':') && !base.contains('@'))
-        })
-        .map(|i| Finding {
-            rule: "DF001",
-            severity: Severity::Warning,
-            line: i.line,
-            message: format!("'{}' uses an unpinned image tag", i.arguments.split_whitespace().next().unwrap_or(&i.arguments)),
-            roast: "Pinning to 'latest' is like ordering 'whatever' at a restaurant and then \
-                    complaining when your image breaks in prod. Use a real tag.".to_string(),
-        })
-        .collect()
+    let mut stage_aliases = std::collections::HashSet::new();
+    let mut findings = Vec::new();
+
+    for instruction in instrs_of(instrs, "FROM") {
+        let Some(from) = parse_from_arguments(&instruction.arguments) else {
+            continue;
+        };
+        let base = from.image;
+        let is_previous_stage = stage_aliases.contains(&base.to_lowercase());
+        if !is_previous_stage
+            && !base.eq_ignore_ascii_case("scratch")
+            && (base.ends_with(":latest") || (!base.contains(':') && !base.contains('@')))
+        {
+            findings.push(Finding {
+                rule: "DF001",
+                severity: Severity::Warning,
+                line: instruction.line,
+                message: format!("'{}' uses an unpinned image tag", base),
+                roast: "Pinning to 'latest' is like ordering 'whatever' at a restaurant and then \
+                        complaining when your image breaks in prod. Use a real tag."
+                    .to_string(),
+            });
+        }
+        if let Some(alias) = from.alias {
+            stage_aliases.insert(alias.to_lowercase());
+        }
+    }
+
+    findings
 }
 
 fn rule_running_as_root(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -383,11 +416,8 @@ fn rule_multiple_from_no_alias(instrs: &[Instruction], _raw: &str) -> Vec<Findin
     let froms: Vec<_> = instrs_of(instrs, "FROM");
     if froms.len() <= 1 { return vec![]; }
     froms.into_iter()
-        .filter(|i| {
-            let parts: Vec<&str> = i.arguments.split_whitespace().collect();
-            !(parts.len() >= 3 && parts[1].eq_ignore_ascii_case("as"))
-        })
         .skip(1)
+        .filter(|i| parse_from_arguments(&i.arguments).is_some_and(|from| from.alias.is_none()))
         .map(|i| Finding {
             rule: "DF023",
             severity: Severity::Warning,
@@ -920,13 +950,31 @@ fn rule_env_self_reference(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 }
 
 fn rule_copy_relative_no_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let mut stage_workdirs: std::collections::HashMap<String, bool> =
+        std::collections::HashMap::new();
+    let mut current_alias: Option<String> = None;
     let mut workdir_set = false;
     let mut findings = Vec::new();
     for i in instrs {
         if i.instruction == "FROM" {
-            workdir_set = false;
+            if let Some(from) = parse_from_arguments(&i.arguments) {
+                workdir_set = stage_workdirs
+                    .get(&from.image.to_lowercase())
+                    .copied()
+                    .unwrap_or(false);
+                current_alias = from.alias.map(str::to_lowercase);
+                if let Some(alias) = &current_alias {
+                    stage_workdirs.insert(alias.clone(), workdir_set);
+                }
+            } else {
+                workdir_set = false;
+                current_alias = None;
+            }
         } else if i.instruction == "WORKDIR" {
             workdir_set = true;
+            if let Some(alias) = &current_alias {
+                stage_workdirs.insert(alias.clone(), true);
+            }
         } else if i.instruction == "COPY" {
             let args: Vec<&str> = i.arguments.split_whitespace()
                 .filter(|t| !t.starts_with("--"))
@@ -1324,9 +1372,8 @@ fn rule_copy_from_undefined_stage(instrs: &[Instruction], _raw: &str) -> Vec<Fin
     let re_from = Regex::new(r"(?i)--from=(\S+)").unwrap();
     for i in instrs {
         if i.instruction == "FROM" {
-            let parts: Vec<&str> = i.arguments.split_whitespace().collect();
-            if parts.len() >= 3 && parts[1].eq_ignore_ascii_case("as") {
-                defined_aliases.push(parts[2].to_lowercase());
+            if let Some(alias) = parse_from_arguments(&i.arguments).and_then(|from| from.alias) {
+                defined_aliases.push(alias.to_lowercase());
             }
         } else if i.instruction == "COPY" {
             if let Some(cap) = re_from.captures(&i.arguments) {
@@ -1361,12 +1408,9 @@ fn rule_copy_from_self(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
     for i in instrs {
         if i.instruction == "FROM" {
-            let parts: Vec<&str> = i.arguments.split_whitespace().collect();
-            current_alias = if parts.len() >= 3 && parts[1].eq_ignore_ascii_case("as") {
-                Some(parts[2].to_lowercase())
-            } else {
-                None
-            };
+            current_alias = parse_from_arguments(&i.arguments)
+                .and_then(|from| from.alias)
+                .map(str::to_lowercase);
         } else if i.instruction == "COPY" {
             if let Some(cap) = re_from.captures(&i.arguments) {
                 let from_ref = cap[1].to_lowercase();
@@ -1527,9 +1571,8 @@ fn rule_unique_stage_aliases(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut findings = Vec::new();
     for i in instrs_of(instrs, "FROM") {
-        let parts: Vec<&str> = i.arguments.split_whitespace().collect();
-        if parts.len() >= 3 && parts[1].eq_ignore_ascii_case("as") {
-            let alias = parts[2].to_lowercase();
+        if let Some(original_alias) = parse_from_arguments(&i.arguments).and_then(|from| from.alias) {
+            let alias = original_alias.to_lowercase();
             if let Some(&prev_line) = seen.get(&alias) {
                 findings.push(Finding {
                     rule: "DF042",
@@ -1537,12 +1580,12 @@ fn rule_unique_stage_aliases(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
                     line: i.line,
                     message: format!(
                         "FROM alias '{}' is already defined on line {}",
-                        parts[2], prev_line
+                        original_alias, prev_line
                     ),
                     roast: format!(
                         "Two stages named '{}'. Docker uses the last one; the first is dead code. \
                          Give your stages unique names.",
-                        parts[2]
+                        original_alias
                     ),
                 });
             } else {
