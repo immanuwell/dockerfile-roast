@@ -239,6 +239,23 @@ fn df015_clear_with_y() {
     assert!(no_rule(&lint(df), "DF015"));
 }
 
+#[test]
+fn df015_clear_with_combined_and_quiet_assume_yes_options() {
+    for options in ["-Uy", "-qq", "-q=2", "--quiet=2", "-q 2"] {
+        let df = format!("FROM ubuntu:24.04\nRUN apt-get install {options} bash\n");
+        assert!(
+            no_rule(&lint(&df), "DF015"),
+            "unexpected DF015 for {options}"
+        );
+    }
+}
+
+#[test]
+fn df015_fires_with_single_quiet_option() {
+    let df = "FROM ubuntu:24.04\nRUN apt-get install -q bash\n";
+    assert!(has_rule(&lint(df), "DF015"));
+}
+
 // ─── DF018: shell form ENTRYPOINT ────────────────────────────────────────────
 
 #[test]
@@ -343,6 +360,18 @@ fn df005_fires_on_unpinned_apt() {
 fn df005_clear_on_pinned_apt() {
     let df = "FROM ubuntu:22.04\nRUN apt-get install -y curl=7.68.0-1ubuntu2 && rm -rf /var/lib/apt/lists/*\n";
     assert!(no_rule(&lint(df), "DF005"));
+}
+
+#[test]
+fn df005_ignores_equals_signs_in_apt_options() {
+    let df = "FROM ubuntu:24.04\nRUN apt-get install -q=2 bash\n";
+    assert!(has_rule(&lint(df), "DF005"));
+}
+
+#[test]
+fn df005_fires_when_any_apt_package_is_unpinned() {
+    let df = "FROM ubuntu:24.04\nRUN apt-get install -y curl=8.5.0 bash\n";
+    assert!(has_rule(&lint(df), "DF005"));
 }
 
 #[test]

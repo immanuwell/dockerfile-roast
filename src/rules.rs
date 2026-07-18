@@ -659,23 +659,22 @@ fn rule_uncleaned_package_cache(instrs: &[Instruction], _raw: &str) -> Vec<Findi
 }
 
 fn rule_unpinned_packages(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let re_apt = Regex::new(r"apt-get install[^&|;]*").unwrap();
     let re_yum = Regex::new(r"yum install[^&|;]*").unwrap();
     let mut findings = Vec::new();
     for i in instrs_of(instrs, "RUN") {
-        for cap in re_apt.find_iter(&i.arguments) {
-            if !cap.as_str().contains('=') && !cap.as_str().contains("--only-upgrade") {
-                findings.push(Finding {
-                    rule: "DF005",
-                    severity: Severity::Info,
-                    line: i.line,
-                    message: "apt-get install without pinned package versions".to_string(),
-                    roast: "Unpinned packages: a bold way to ensure your build is different \
-                            every single time. 'It worked on my machine' is a lifestyle choice, \
-                            not a deployment strategy.".to_string(),
-                });
-                break;
-            }
+        if apt_install_commands(&i.arguments)
+            .iter()
+            .any(|(tokens, install_index)| apt_has_unpinned_package(tokens, *install_index))
+        {
+            findings.push(Finding {
+                rule: "DF005",
+                severity: Severity::Info,
+                line: i.line,
+                message: "apt-get install without pinned package versions".to_string(),
+                roast: "Unpinned packages: a bold way to ensure your build is different \
+                        every single time. 'It worked on my machine' is a lifestyle choice, \
+                        not a deployment strategy.".to_string(),
+            });
         }
         for _cap in re_yum.find_iter(&i.arguments) {
             findings.push(Finding {
@@ -692,13 +691,102 @@ fn rule_unpinned_packages(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     findings
 }
 
+fn apt_install_commands(arguments: &str) -> Vec<(Vec<&str>, usize)> {
+    arguments
+        .split(['&', '|', ';'])
+        .filter_map(|segment| {
+            let segment_tokens: Vec<_> = segment.split_whitespace().collect();
+            let apt_index = segment_tokens
+                .iter()
+                .position(|token| matches!(*token, "apt" | "apt-get"))?;
+            let tokens = segment_tokens[apt_index + 1..].to_vec();
+            let install_index = tokens.iter().position(|token| *token == "install")?;
+            Some((tokens, install_index))
+        })
+        .collect()
+}
+
+fn apt_has_unpinned_package(tokens: &[&str], install_index: usize) -> bool {
+    if tokens.contains(&"--only-upgrade") {
+        return false;
+    }
+
+    let options_with_values = [
+        "-a",
+        "--host-architecture",
+        "-c",
+        "--config-file",
+        "-o",
+        "--option",
+        "-q",
+        "--quiet",
+        "-t",
+        "--target-release",
+    ];
+    let mut skip_option_value = false;
+    for token in tokens.iter().skip(install_index + 1) {
+        if skip_option_value {
+            skip_option_value = false;
+            continue;
+        }
+        if options_with_values.contains(token) {
+            skip_option_value = true;
+            continue;
+        }
+        if token.starts_with('-') {
+            continue;
+        }
+        if !token.contains('=') {
+            return true;
+        }
+    }
+    false
+}
+
+fn apt_assumes_yes(tokens: &[&str]) -> bool {
+    for (index, token) in tokens.iter().enumerate() {
+        if matches!(*token, "--yes" | "--assume-yes") {
+            return true;
+        }
+        if let Some(short_options) = token.strip_prefix('-').filter(|_| !token.starts_with("--")) {
+            if short_options.contains('y') || short_options.chars().filter(|c| *c == 'q').count() >= 2 {
+                return true;
+            }
+            if short_options
+                .strip_prefix("q=")
+                .and_then(|level| level.parse::<u8>().ok())
+                .is_some_and(|level| level >= 2)
+            {
+                return true;
+            }
+        }
+        if token
+            .strip_prefix("--quiet=")
+            .and_then(|level| level.parse::<u8>().ok())
+            .is_some_and(|level| level >= 2)
+        {
+            return true;
+        }
+        if matches!(*token, "-q" | "--quiet")
+            && tokens
+                .get(index + 1)
+                .and_then(|level| level.parse::<u8>().ok())
+                .is_some_and(|level| level >= 2)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn rule_apt_no_y(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     instrs_of(instrs, "RUN")
         .into_iter()
         .filter(|i| {
             let a = &i.arguments;
-            (a.contains("apt-get install") || a.contains("apt install"))
-                && !a.contains("-y") && !a.contains("--yes") && !a.contains("--assume-yes")
+            apt_install_commands(a)
+                .iter()
+                .any(|(tokens, _)| !apt_assumes_yes(tokens))
                 && !a.contains("DEBIAN_FRONTEND=noninteractive")
         })
         .map(|i| Finding {
