@@ -1,4 +1,4 @@
-use crate::parser::Instruction;
+use crate::parser::{parse_document, DiagnosticSeverity, Instruction};
 use regex::Regex;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -108,7 +108,25 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF068", severity: Severity::Error,   description: "FROM, ONBUILD, and MAINTAINER are forbidden as ONBUILD triggers", func: rule_onbuild_forbidden },
         Rule { id: "DF069", severity: Severity::Warning, description: "Avoid apt-get upgrade / dist-upgrade — makes builds non-reproducible", func: rule_apt_upgrade },
         Rule { id: "DF070", severity: Severity::Warning, description: "Avoid broad COPY before package install — invalidates Docker layer cache", func: rule_copy_before_install },
+        Rule { id: "DF071", severity: Severity::Error,   description: "Dockerfile syntax must be valid", func: rule_parser_syntax },
     ]
+}
+
+fn rule_parser_syntax(_instrs: &[Instruction], raw: &str) -> Vec<Finding> {
+    parse_document(raw)
+        .diagnostics
+        .into_iter()
+        .map(|diagnostic| Finding {
+            rule: "DF071",
+            severity: match diagnostic.severity {
+                DiagnosticSeverity::Warning => Severity::Warning,
+                DiagnosticSeverity::Error => Severity::Error,
+            },
+            line: diagnostic.span.start.line,
+            message: diagnostic.message,
+            roast: "The Dockerfile parser could not interpret this reliably; fix the syntax before trusting downstream lint results.".to_string(),
+        })
+        .collect()
 }
 
 fn instrs_of<'a>(instrs: &'a [Instruction], name: &str) -> Vec<&'a Instruction> {

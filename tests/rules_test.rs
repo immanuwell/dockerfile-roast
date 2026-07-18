@@ -1305,3 +1305,58 @@ fn df070_clear_on_specific_copy_before_install() {
     let df = "FROM node:20\nWORKDIR /app\nCOPY package.json package-lock.json ./\nRUN npm ci\nCOPY src ./src\n";
     assert!(no_rule(&lint(df), "DF070"));
 }
+
+// ─── DF071: parser syntax diagnostics ────────────────────────────────────────
+
+#[test]
+fn df071_fires_on_unknown_instruction() {
+    let findings = lint("FROM alpine:3.20\nRNU echo typo\n");
+    let finding = findings
+        .iter()
+        .find(|finding| finding.rule == "DF071")
+        .expect("syntax finding");
+
+    assert_eq!(finding.line, 2);
+    assert!(finding
+        .message
+        .contains("unknown Dockerfile instruction RNU"));
+}
+
+#[test]
+fn df071_fires_on_unterminated_heredoc() {
+    let findings = lint("FROM alpine:3.20\nRUN <<EOF\necho incomplete\n");
+    assert!(findings.iter().any(|finding| {
+        finding.rule == "DF071" && finding.message.contains("unterminated heredoc")
+    }));
+}
+
+#[test]
+fn df071_keeps_recoverable_parser_warnings_as_warnings() {
+    let dockerfile = concat!("FROM alpine:3.20 \\", "\n", "\n", "RUN echo ok\n");
+    let findings = lint(dockerfile);
+    let finding = findings
+        .iter()
+        .find(|finding| finding.rule == "DF071")
+        .expect("continuation warning");
+
+    assert_eq!(finding.severity, dockerfile_roast::rules::Severity::Warning);
+}
+
+#[test]
+fn df071_does_not_treat_heredoc_script_as_dockerfile_syntax() {
+    let findings = lint(
+        "FROM alpine:3.20\nRUN <<EOF\nFROM this is shell text\nRUN echo shell text\nEOF\nCMD [\"sh\"]\n",
+    );
+    assert!(no_rule(&findings, "DF071"));
+}
+
+#[test]
+fn shell_rules_inspect_run_heredoc_contents() {
+    let findings = lint(
+        "FROM ubuntu:24.04\nRUN <<SCRIPT\napt-get update\napt-get install curl\nSCRIPT\n",
+    );
+
+    assert!(has_rule(&findings, "DF015"));
+    assert!(has_rule(&findings, "DF016"));
+    assert!(no_rule(&findings, "DF071"));
+}
