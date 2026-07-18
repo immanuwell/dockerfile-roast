@@ -1,9 +1,9 @@
 <p align="center">
   <a href="https://crates.io/crates/dockerfile-roast"><img src="https://img.shields.io/crates/v/dockerfile-roast.svg" alt="crates.io"></a>
   ・
-  <a href="https://ewry.net/droast-dockerfile-linter/">site</a>
-  ・
   <a href="https://marketplace.visualstudio.com/items?itemName=ImmanuelTikhonov.droast"><img src="https://img.shields.io/badge/VSCode-007ACC?logo=visualstudiocode&amp;logoColor=white&amp;style=flat" alt="VS Code"></a>
+  <br>
+  <a href="https://ewry.net/droast-dockerfile-linter/">site</a>
   ・
   <a href="https://github.com/marketplace/actions/droast-dockerfile-linter">GH action</a>
 </p>
