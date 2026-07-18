@@ -159,7 +159,11 @@ fn main() -> Result<()> {
     }
 
     if cli.list_rules {
-        print_rule_list();
+        if matches!(cli.format, Some(FormatArg::Json)) {
+            print_rule_list_json();
+        } else {
+            print_rule_list();
+        }
         return Ok(());
     }
 
@@ -395,6 +399,24 @@ fn print_rule_list() {
     println!("  Use --skip DF001,DF002 to suppress specific rules.");
     println!("  Use --only DF001,DF002 to run only specific rules.");
     println!("  Use --min-severity warning to hide INFO findings.\n");
+}
+
+fn print_rule_list_json() {
+    let rules: Vec<_> = rules::all_rules()
+        .into_iter()
+        .map(|rule| {
+            serde_json::json!({
+                "id": rule.id,
+                "severity": rule.severity.to_string(),
+                "description": rule.description,
+            })
+        })
+        .collect();
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&rules).expect("rule metadata is serializable")
+    );
 }
 
 fn resolve_files(input: &[PathBuf]) -> Vec<PathBuf> {

@@ -3,10 +3,18 @@ name: Build and deploy
 on:
   push:
     branches: [main]
+  workflow_run:
+    workflows: ["Sync public metadata"]
+    types: [completed]
   workflow_dispatch:
+
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: true
 
 jobs:
   build-and-deploy:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -17,6 +25,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+
+      - name: Verify public metadata
+        run: ./scripts/update-public-metadata.sh --check
 
       - name: Cache Rust artifacts
         uses: actions/cache@v4

@@ -1,5 +1,5 @@
 name: 'droast — Dockerfile linter'
-description: 'Lint Dockerfiles with droast. Reports findings as GitHub annotations.'
+description: 'Lint Dockerfiles with all 70 rules and report findings as GitHub annotations.' # droast:rule-count
 author: 'immanuwell'
 
 branding:
@@ -30,7 +30,7 @@ inputs:
     required: false
     default: 'false'
   image-tag:
-    description: 'droast image tag to pull (e.g. latest, 1.0.0)'
+    description: 'droast image tag to pull (e.g. latest, 1.4.2)' # droast:release-version
     required: false
     default: 'latest'
 

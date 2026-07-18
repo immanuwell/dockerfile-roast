@@ -1,0 +1,52 @@
+name: Sync public metadata
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/rules.rs'
+      - 'src/main.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'README.md'
+      - 'docs/index.html'
+      - 'action.yml'
+      - 'scripts/update-public-metadata.sh'
+      - 'scripts/update-rules-readme.sh'
+      - '.github/workflows/sync-public-metadata.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-public-metadata
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate public metadata
+        run: ./scripts/update-public-metadata.sh
+
+      - name: Validate generated changes
+        run: git diff --check
+
+      - name: Commit synchronized metadata
+        shell: bash
+        run: |
+          git add README.md docs/index.html action.yml
+          if git diff --staged --quiet; then
+            echo "Public metadata is already synchronized."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs: sync public metadata"
+          git push
