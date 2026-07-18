@@ -26,6 +26,8 @@ a dockerfile linter that actually has opinions. it catches bad practices and tel
 
 think of it as code review from a senior dev who's seen too many prod incidents and has stopped being polite about it.
 
+the span-aware parser understands heredocs, parser and escape directives, shell and JSON forms, BuildKit flags such as `RUN --mount`, Windows paths, and PowerShell — and reports malformed Dockerfile syntax as `DF071`.
+
 ## vs code extension
 
 install from the marketplace and get inline squiggles as you type:
@@ -204,11 +206,11 @@ droast completion fish | source
 
 ## what it catches
 
-<p data-droast-rule-count>70 rules, ngl thats a lot. run <code>droast --list-rules</code> for the full breakdown.</p>
+<p data-droast-rule-count>71 rules, ngl thats a lot. run <code>droast --list-rules</code> for the full breakdown.</p>
 
 <!-- BEGIN RULES -->
 <details>
-<summary data-droast-rule-count>all 70 rules</summary>
+<summary data-droast-rule-count>all 71 rules</summary>
 
 ```
 
@@ -286,6 +288,7 @@ droast completion fish | source
   DF068    ERROR    FROM, ONBUILD, and MAINTAINER are forbidden as ONBUILD triggers
   DF069    WARN     Avoid apt-get upgrade / dist-upgrade — makes builds non-reproducible
   DF070    WARN     Avoid broad COPY before package install — invalidates Docker layer cache
+  DF071    ERROR    Dockerfile syntax must be valid
 
   Use --skip DF001,DF002 to suppress specific rules.
   Use --min-severity warning to hide INFO findings.
