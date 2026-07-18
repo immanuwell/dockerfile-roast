@@ -67,6 +67,53 @@ jobs:
           path: ${{ matrix.asset_name }}
           if-no-files-found: error
 
+  publish-crate:
+    name: crates.io
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate crate version
+        id: crate
+        shell: bash
+        run: |
+          crate_version=$(cargo metadata --no-deps --format-version 1 | jq -r \
+            '.packages[] | select(.name == "dockerfile-roast") | .version')
+
+          if [[ "$crate_version" != "$GITHUB_REF_NAME" ]]; then
+            echo "Cargo.toml version $crate_version does not match tag $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+          echo "version=$crate_version" >> "$GITHUB_OUTPUT"
+
+          if (cd /tmp && cargo info "dockerfile-roast@$crate_version" --registry crates-io >/dev/null 2>&1); then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "dockerfile-roast $crate_version is already published; skipping"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Test crate
+        if: steps.crate.outputs.publish == 'true'
+        run: cargo test --locked
+
+      - name: Verify package
+        if: steps.crate.outputs.publish == 'true'
+        run: cargo publish --dry-run --locked
+
+      - name: Publish crate
+        if: steps.crate.outputs.publish == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
+        run: cargo publish --locked
+
   release:
     needs: build
     runs-on: ubuntu-latest

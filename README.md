@@ -8,6 +8,8 @@
 
 # droast
 
+[![crates.io](https://img.shields.io/crates/v/dockerfile-roast.svg)](https://crates.io/crates/dockerfile-roast)
+
 a dockerfile linter that actually has opinions. it catches bad practices and tells you about them in the least diplomatic way possible.
 
 think of it as code review from a senior dev who's seen too many prod incidents and has stopped being polite about it.
@@ -41,7 +43,7 @@ brew tap immanuwell/droast https://github.com/immanuwell/homebrew-droast.git
 brew install immanuwell/droast/droast
 ```
 
-**from source:**
+**Cargo** ([crates.io](https://crates.io/crates/dockerfile-roast), builds from source):
 
 ```bash
 cargo install dockerfile-roast
