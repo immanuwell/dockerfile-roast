@@ -13,6 +13,7 @@
 /// config can establish a project baseline without preventing developers from
 /// suppressing additional rules on the command line.
 
+use anyhow::Context;
 use serde::Deserialize;
 use std::path::Path;
 
@@ -67,10 +68,46 @@ impl DroastConfig {
         None
     }
 
-    fn load_from(path: &Path) -> anyhow::Result<Self> {
-        let content = std::fs::read_to_string(path)?;
+    /// Load configuration from an explicit path.
+    pub fn load_from(path: &Path) -> anyhow::Result<Self> {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config file '{}'", path.display()))?;
         let cfg: DroastConfig = toml::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("Invalid droast.toml: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("Invalid config file '{}': {e}", path.display()))?;
         Ok(cfg)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DroastConfig;
+
+    #[test]
+    fn loads_config_from_explicit_path() {
+        let path = std::env::temp_dir().join(format!(
+            "droast-explicit-config-{}.toml",
+            std::process::id()
+        ));
+        std::fs::write(&path, "skip = [\"DF001\"]\nno-roast = true\n").unwrap();
+
+        let config = DroastConfig::load_from(&path).unwrap();
+
+        assert_eq!(config.skip.unwrap(), ["DF001"]);
+        assert_eq!(config.no_roast, Some(true));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn explicit_config_reports_invalid_toml() {
+        let path = std::env::temp_dir().join(format!(
+            "droast-invalid-config-{}.toml",
+            std::process::id()
+        ));
+        std::fs::write(&path, "skip = [\n").unwrap();
+
+        let error = DroastConfig::load_from(&path).unwrap_err().to_string();
+
+        assert!(error.contains("Invalid config file"));
+        std::fs::remove_file(path).unwrap();
     }
 }

@@ -109,6 +109,10 @@ struct Cli {
     #[arg(value_name = "FILE")]
     files: Vec<PathBuf>,
 
+    /// Load project configuration from this path instead of discovering droast.toml
+    #[arg(long, value_name = "PATH")]
+    config: Option<PathBuf>,
+
     /// Output format [default: terminal] [possible values: terminal, json, github, compact]
     #[arg(short, long, value_enum)]
     format: Option<FormatArg>,
@@ -161,7 +165,10 @@ fn main() -> Result<()> {
 
     // Load project config (droast.toml), then merge CLI on top.
     // Priority: CLI flag > droast.toml > built-in default.
-    let cfg = DroastConfig::load();
+    let cfg = match &cli.config {
+        Some(path) => DroastConfig::load_from(path)?,
+        None => DroastConfig::load(),
+    };
 
     let format: OutputFormat = cli.format
         .map(Into::into)

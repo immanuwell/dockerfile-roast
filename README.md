@@ -89,6 +89,12 @@ format      = "terminal"          # terminal | json | github | compact
 
 droast searches for `droast.toml` starting from the current directory, walking up to the nearest `.git` root. CLI flags always take precedence over the file — the file just sets the defaults so you don't repeat yourself.
 
+To keep lint configuration elsewhere, pass its path explicitly:
+
+```bash
+droast --config .lint/droast.toml Dockerfile
+```
+
 `skip` is the most useful field for CI pipelines: add rules your team has consciously accepted (e.g. you ship without HEALTHCHECK by design) so developers don't drown in noise they can't act on.
 
 ## github action
