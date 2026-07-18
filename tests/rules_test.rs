@@ -100,6 +100,14 @@ fn df004_clear_when_cleanup_present() {
     assert!(no_rule(&lint(df), "DF004"));
 }
 
+#[test]
+fn df004_clear_with_comment_inside_continuation() {
+    // Docker strips comment lines inside continuations, so the trailing
+    // cleanup still belongs to the same RUN (issue #11).
+    let df = "FROM debian:bookworm-slim\nRUN apt-get update && \\\n    apt-get install -y --no-install-recommends \\\n        curl \\\n        # embedded comment\n        ca-certificates && \\\n    apt-get clean && \\\n    rm -rf /var/lib/apt/lists/*\nCMD [\"true\"]\n";
+    assert!(no_rule(&lint(df), "DF004"));
+}
+
 // ─── DF006: ADD instead of COPY ─────────────────────────────────────────────
 #[test]
 fn df006_fires_on_local_add() {
