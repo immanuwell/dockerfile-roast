@@ -3,11 +3,11 @@
   ・
   <a href="https://marketplace.visualstudio.com/items?itemName=ImmanuelTikhonov.droast"><img src="https://img.shields.io/badge/VSCode-007ACC?logo=visualstudiocode&amp;logoColor=white&amp;style=flat" alt="VS Code"></a>
   <br>
+  <strong><a href="DOCS.md">docs</a></strong>
+  ・
   <a href="https://ewry.net/droast-dockerfile-linter/">site</a>
   ・
   <a href="https://github.com/marketplace/actions/droast-dockerfile-linter">GH action</a>
-  ・
-  <strong><a href="DOCS.md">docs</a></strong>
   ・
   <a href="#comparison-with-other-tools">comparison</a>
 </p>
