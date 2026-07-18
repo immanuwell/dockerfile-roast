@@ -7,6 +7,8 @@
   ・
   <a href="https://github.com/marketplace/actions/droast-dockerfile-linter">GH action</a>
   ・
+  <strong><a href="DOCS.md">docs</a></strong>
+  ・
   <a href="#comparison-with-other-tools">comparison</a>
 </p>
 
