@@ -32,6 +32,6 @@ fn main() {
     panic!(
         "\n\nERROR: could not determine droast version.\n\
          Either push a git tag, or set DROAST_VERSION before building:\n\
-         \n    DROAST_VERSION=1.3.0 cargo build --release\n\n"
+         \n    DROAST_VERSION=1.4.1 cargo build --release\n\n"
     );
 }
