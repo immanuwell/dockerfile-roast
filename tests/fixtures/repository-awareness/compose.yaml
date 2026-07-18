@@ -1,0 +1,15 @@
+services:
+  api:
+    build:
+      context: ${API_CONTEXT}
+      dockerfile: ../../docker/api.build
+  worker:
+    build: contexts/worker
+  specific:
+    build:
+      context: contexts/specific
+      dockerfile: ../../docker/specific.build
+  override:
+    build:
+      context: contexts/override
+      dockerfile: ../../docker/override.build

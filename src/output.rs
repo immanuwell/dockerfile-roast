@@ -124,10 +124,14 @@ fn print_terminal(file: &str, findings: &[Finding], no_roast: bool) {
 }
 
 fn print_json(file: &str, findings: &[Finding]) {
+    println!("{}", serde_json::to_string_pretty(&json_output(file, findings)).unwrap());
+}
+
+fn json_output(file: &str, findings: &[Finding]) -> JsonOutput {
     let errors = findings.iter().filter(|f| f.severity == Severity::Error).count();
     let warnings = findings.iter().filter(|f| f.severity == Severity::Warning).count();
     let infos = findings.iter().filter(|f| f.severity == Severity::Info).count();
-    let out = JsonOutput {
+    JsonOutput {
         file: file.to_string(),
         total: findings.len(),
         errors,
@@ -140,8 +144,21 @@ fn print_json(file: &str, findings: &[Finding]) {
             message: f.message.clone(),
             roast: f.roast.clone(),
         }).collect(),
-    };
-    println!("{}", serde_json::to_string_pretty(&out).unwrap());
+    }
+}
+
+/// Emit one valid JSON document for a repository scan while preserving the
+/// historical object shape for a single Dockerfile.
+pub fn print_json_results(results: &[(&str, &[Finding])]) {
+    if let [(file, findings)] = results {
+        print_json(file, findings);
+        return;
+    }
+    let output = results
+        .iter()
+        .map(|(file, findings)| json_output(file, findings))
+        .collect::<Vec<_>>();
+    println!("{}", serde_json::to_string_pretty(&output).unwrap());
 }
 
 fn print_github(file: &str, findings: &[Finding]) {

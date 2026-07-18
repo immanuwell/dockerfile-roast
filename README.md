@@ -71,8 +71,8 @@ or grab a prebuilt binary from the releases page if you'd rather not wait for th
 # the basics
 droast Dockerfile
 
-# lint an entire project
-droast **/Dockerfile
+# recursively discover and lint an entire repository
+droast .
 
 # boring mode (no roasts, just facts)
 droast --no-roast Dockerfile
@@ -89,6 +89,10 @@ droast --format json Dockerfile      # machine-readable
 droast --format compact Dockerfile   # one line per finding
 droast --format sarif Dockerfile     # SARIF 2.1.0 for GitHub Advanced Security / IDEs
 ```
+
+When given a directory—or no path at all—droast recursively discovers `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `Containerfile`, and `Containerfile.*`. It also reads Compose YAML and Docker Bake HCL/JSON files to find non-standard Dockerfile paths and their declared build contexts. Repository ignore rules are respected, while hidden project directories such as `.devcontainer` remain discoverable.
+
+For `DF033`, droast uses the effective ignore file Docker would use: `<Dockerfile>.dockerignore` beside the Dockerfile takes precedence over `.dockerignore` at the build-context root. Missing, empty, comment-only, and negation-only ignore files are reported; use `--check-dockerignore=false` to disable this context check.
 
 ## configuration
 
@@ -244,7 +248,7 @@ droast completion fish | source
   DF030    INFO     Avoid using pip without --no-cache-dir
   DF031    INFO     Avoid npm install without ci/--production for prod images
   DF032    INFO     Set PYTHONDONTWRITEBYTECODE and PYTHONUNBUFFERED for Python images
-  DF033    INFO     Use .dockerignore to exclude unnecessary files
+  DF033    INFO     Use an effective .dockerignore for each build context
   DF034    ERROR    Avoid chmod 777 — overly permissive
   DF035    INFO     Avoid using curl without --fail flags
   DF036    WARN     Avoid Dockerfile with no CMD or ENTRYPOINT

@@ -29,5 +29,11 @@ anyhow = "1"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 clap_complete = "4"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dotenvy = "0.15.7"
+hcl-rs = "0.19.7"
+ignore = "0.4"
+serde_yaml = "0.9.34"
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

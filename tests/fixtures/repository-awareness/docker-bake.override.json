@@ -1,0 +1,8 @@
+{
+  "target": {
+    "json": {
+      "context": "contexts/json",
+      "dockerfile": "../../docker/json.build"
+    }
+  }
+}

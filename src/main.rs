@@ -1,4 +1,4 @@
-use dockerfile_roast::{config, linter, output, rules};
+use dockerfile_roast::{config, linter, output, repository, rules};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process;
@@ -206,7 +206,11 @@ fn main() -> Result<()> {
         print_summary_header();
     }
 
-    let files = resolve_files(&cli.files);
+    let discovery = repository::discover(&cli.files);
+    for warning in &discovery.warnings {
+        eprintln!("{} {}", "!".yellow(), warning);
+    }
+    let files = discovery.inputs;
     if files.is_empty() {
         eprintln!(
             "{} No Dockerfile(s) found. Pass a path or run in a directory that contains a Dockerfile.",
@@ -225,8 +229,8 @@ fn main() -> Result<()> {
     let mut any_error = false;
     let mut total_findings = 0usize;
 
-    if format == OutputFormat::Sarif {
-        // SARIF is a document format: collect all results, emit once.
+    if matches!(format, OutputFormat::Sarif | OutputFormat::Json) {
+        // Document formats collect all results and emit exactly one valid document.
         let mut all_results: Vec<linter::LintResult> = Vec::new();
         for file in &files {
             match lint_one(file, &opts) {
@@ -244,7 +248,11 @@ fn main() -> Result<()> {
             .iter()
             .map(|r| (r.file.as_str(), r.findings.as_slice()))
             .collect();
-        output::print_sarif(&pairs);
+        if format == OutputFormat::Sarif {
+            output::print_sarif(&pairs);
+        } else {
+            output::print_json_results(&pairs);
+        }
     } else {
         for file in &files {
             match lint_one(file, &opts) {
@@ -372,14 +380,14 @@ fn exit(code: i32) -> ! {
 }
 
 /// Lint a single file path or `-` (stdin).
-fn lint_one(path: &std::path::Path, opts: &linter::LintOptions) -> anyhow::Result<linter::LintResult> {
-    if path == std::path::Path::new("-") {
+fn lint_one(input: &repository::BuildInput, opts: &linter::LintOptions) -> anyhow::Result<linter::LintResult> {
+    if input.dockerfile == std::path::Path::new("-") {
         let mut content = String::new();
         std::io::stdin().read_to_string(&mut content)
             .map_err(|e| anyhow::anyhow!("Failed to read stdin: {e}"))?;
         Ok(linter::lint_content(&content, "<stdin>", opts))
     } else {
-        linter::lint_file(path, opts)
+        linter::lint_file_with_context(&input.dockerfile, &input.context, opts)
     }
 }
 
@@ -417,32 +425,4 @@ fn print_rule_list_json() {
         "{}",
         serde_json::to_string_pretty(&rules).expect("rule metadata is serializable")
     );
-}
-
-fn resolve_files(input: &[PathBuf]) -> Vec<PathBuf> {
-    if input.is_empty() {
-        let default = PathBuf::from("Dockerfile");
-        if default.exists() { return vec![default]; }
-        return vec![];
-    }
-    let mut result = Vec::new();
-    for p in input {
-        let s = p.to_string_lossy();
-        if s.contains('*') || s.contains('?') || s.contains('[') {
-            if let Ok(paths) = glob::glob(&s) {
-                for entry in paths.flatten() {
-                    if entry.is_file() { result.push(entry); }
-                }
-            }
-        } else if p.is_dir() {
-            let candidate = p.join("Dockerfile");
-            if candidate.exists() { result.push(candidate); }
-            else {
-                eprintln!("{} No Dockerfile found in directory '{}'", "!".yellow(), p.display());
-            }
-        } else {
-            result.push(p.clone());
-        }
-    }
-    result
 }

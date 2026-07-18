@@ -1,0 +1,1 @@
+Keeps the context directory in the fixture without a root .dockerignore.

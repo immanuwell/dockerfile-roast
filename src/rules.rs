@@ -64,7 +64,7 @@ pub fn all_rules() -> Vec<Rule> {
         Rule { id: "DF030", severity: Severity::Info,    description: "Avoid using pip without --no-cache-dir", func: rule_pip_no_cache },
         Rule { id: "DF031", severity: Severity::Info,    description: "Avoid npm install without ci/--production for prod images", func: rule_npm_install },
         Rule { id: "DF032", severity: Severity::Info,    description: "Set PYTHONDONTWRITEBYTECODE and PYTHONUNBUFFERED for Python images", func: rule_python_env_vars },
-        Rule { id: "DF033", severity: Severity::Info,    description: "Use .dockerignore to exclude unnecessary files", func: rule_no_dockerignore },
+        Rule { id: "DF033", severity: Severity::Info,    description: "Use an effective .dockerignore for each build context", func: rule_no_dockerignore },
         Rule { id: "DF034", severity: Severity::Error,   description: "Avoid chmod 777 — overly permissive", func: rule_chmod_777 },
         Rule { id: "DF035", severity: Severity::Info,    description: "Avoid using curl without --fail flags", func: rule_curl_no_fail },
         Rule { id: "DF036", severity: Severity::Warning, description: "Avoid Dockerfile with no CMD or ENTRYPOINT", func: rule_no_cmd_or_entrypoint },
