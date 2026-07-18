@@ -1,9 +1,15 @@
 [package]
 name = "dockerfile-roast"
-version = "0.1.0"
+version = "1.4.1"
 edition = "2021"
 description = "A Dockerfile linter with personality — catches bad practices with snarky, funny error messages"
 license = "MIT"
+repository = "https://github.com/immanuwell/dockerfile-roast"
+homepage = "https://github.com/immanuwell/dockerfile-roast"
+readme = "README.md"
+keywords = ["dockerfile", "linter", "docker", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+include = ["/src/**", "/tests/**", "/Cargo.toml", "/Cargo.lock", "/build.rs", "/README.md", "/LICENSE"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

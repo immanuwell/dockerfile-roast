@@ -29,9 +29,9 @@ fn main() {
         }
     }
 
-    panic!(
-        "\n\nERROR: could not determine droast version.\n\
-         Either push a git tag, or set DROAST_VERSION before building:\n\
-         \n    DROAST_VERSION=1.4.1 cargo build --release\n\n"
-    );
+    // 3. Cargo package version — used by registry and Git installs where the
+    // source checkout does not contain Git metadata.
+    let package_version = std::env::var("CARGO_PKG_VERSION")
+        .expect("Cargo must provide CARGO_PKG_VERSION to build scripts");
+    println!("cargo:rustc-env=DROAST_VERSION={package_version}");
 }
