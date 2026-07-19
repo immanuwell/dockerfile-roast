@@ -1,5 +1,5 @@
 name: 'droast — Dockerfile linter'
-description: 'Lint Dockerfiles with all 71 rules and report findings as GitHub annotations.' # droast:rule-count
+description: 'Lint Dockerfiles with all 74 rules and report findings as GitHub annotations.' # droast:rule-count
 author: 'immanuwell'
 
 branding:
@@ -14,9 +14,21 @@ inputs:
     required: false
     default: 'Dockerfile'
   min-severity:
-    description: 'Minimum severity to report: info, warning, or error'
+    description: 'Minimum severity to report: info, warning, or error (empty uses droast.toml or the built-in default)'
     required: false
-    default: 'info'
+    default: ''
+  preset:
+    description: 'Built-in preset: minimal, security, performance, production, or strict'
+    required: false
+    default: ''
+  category:
+    description: 'Comma-separated rule categories to run'
+    required: false
+    default: ''
+  skip-category:
+    description: 'Comma-separated rule categories to skip'
+    required: false
+    default: ''
   skip:
     description: 'Comma-separated rule IDs to skip, e.g. DF001,DF012'
     required: false
@@ -43,7 +55,22 @@ runs:
         ARGS=()
 
         ARGS+=(--format github)
-        ARGS+=(--min-severity "${{ inputs.min-severity }}")
+
+        if [[ -n "${{ inputs.min-severity }}" ]]; then
+          ARGS+=(--min-severity "${{ inputs.min-severity }}")
+        fi
+
+        if [[ -n "${{ inputs.preset }}" ]]; then
+          ARGS+=(--preset "${{ inputs.preset }}")
+        fi
+
+        if [[ -n "${{ inputs.category }}" ]]; then
+          ARGS+=(--category "${{ inputs.category }}")
+        fi
+
+        if [[ -n "${{ inputs.skip-category }}" ]]; then
+          ARGS+=(--skip-category "${{ inputs.skip-category }}")
+        fi
 
         if [[ -n "${{ inputs.skip }}" ]]; then
           ARGS+=(--skip "${{ inputs.skip }}")

@@ -38,6 +38,7 @@ jq -e '
     all(.[];
         (.id | type == "string" and test("^DF[0-9]{3}$")) and
         (.severity | type == "string" and test("^(ERROR|WARN|INFO)$")) and
+        (.categories | type == "array" and length > 0 and all(.[]; type == "string")) and
         (.description | type == "string" and length > 0)
     )
 ' >/dev/null <<<"$RULES_JSON" || {
@@ -61,11 +62,11 @@ VERSION="$(cargo metadata --no-deps --format-version 1 --manifest-path "$REPO_RO
 
 RULE_LIST="$({
     printf '\n  Available Rules\n\n'
-    printf '  %-8s %-8s %s\n' 'ID' 'SEVERITY' 'DESCRIPTION'
-    printf '  %s\n' '────────────────────────────────────────────────────────────────────────────────'
-    while IFS=$'\t' read -r id severity description; do
-        printf '  %-8s %-8s %s\n' "$id" "$severity" "$description"
-    done < <(jq -r '.[] | [.id, .severity, .description] | @tsv' <<<"$RULES_JSON")
+    printf '  %-8s %-8s %-34s %s\n' 'ID' 'SEVERITY' 'CATEGORIES' 'DESCRIPTION'
+    printf '  %s\n' '──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────'
+    while IFS=$'\t' read -r id severity categories description; do
+        printf '  %-8s %-8s %-34s %s\n' "$id" "$severity" "$categories" "$description"
+    done < <(jq -r '.[] | [.id, .severity, (.categories | join(",")), .description] | @tsv' <<<"$RULES_JSON")
     printf '\n  Use --skip DF001,DF002 to suppress specific rules.\n'
     printf '  Use --min-severity warning to hide INFO findings.\n'
 })"
