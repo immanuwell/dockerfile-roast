@@ -761,6 +761,22 @@ require-suppression-expiration = true
     }
 
     #[test]
+    fn workflow_engine_is_inherited_and_validated() {
+        let root = fixture("workflow-engine");
+        let parent = root.join("organization.toml");
+        let child = root.join("droast.toml");
+        std::fs::write(&parent, "[workflow]\nengine = \"podman\"\n").unwrap();
+        std::fs::write(&child, "extends = \"organization.toml\"\n").unwrap();
+
+        let config = DroastConfig::load_from(&child).unwrap();
+        assert_eq!(config.workflow.engine.as_deref(), Some("podman"));
+
+        std::fs::write(&child, "[workflow]\nengine = \"unsupported\"\n").unwrap();
+        assert!(DroastConfig::load_from(&child).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn inheritance_cycles_are_rejected() {
         let root = fixture("cycle");
         let first = root.join("first.toml");

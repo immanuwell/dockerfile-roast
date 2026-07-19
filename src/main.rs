@@ -517,6 +517,11 @@ const CONFIG_TEMPLATE: &str = r#"# droast.toml - optional project and organizati
 # mode = "auto" # off | auto | required
 # exclude = ["SC2086"]
 
+# Build-context conventions. Podman mode prefers .containerignore over
+# .dockerignore and enables Quadlet and kube-play Containerfile discovery.
+# [workflow]
+# engine = "podman" # docker (default) | podman
+
 # Governed inline suppressions
 # Syntax:
 #   # droast ignore=DF001 reason="migration" expires=2026-09-30
