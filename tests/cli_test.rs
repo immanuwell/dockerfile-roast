@@ -22,6 +22,13 @@ fn run_sarif(args: &[&str]) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("output should be valid SARIF")
 }
 
+fn policy_fixture(name: &str) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!("droast-cli-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    root
+}
+
 #[test]
 fn list_rules_json_matches_registered_rules() {
     let output = Command::new(env!("CARGO_BIN_EXE_droast"))
@@ -45,7 +52,178 @@ fn list_rules_json_matches_registered_rules() {
         assert_eq!(actual["id"], expected.id);
         assert_eq!(actual["severity"], expected.severity.to_string());
         assert_eq!(actual["description"], expected.description);
+        assert_eq!(
+            actual["categories"],
+            serde_json::json!(expected.categories())
+        );
     }
+}
+
+#[test]
+fn cli_applies_severity_overrides_from_config() {
+    let root = policy_fixture("severity");
+    let dockerfile = root.join("Dockerfile");
+    let config = root.join("droast.toml");
+    std::fs::write(&dockerfile, "FROM alpine:3.20\nUSER root\n").unwrap();
+    std::fs::write(
+        &config,
+        "[severity-overrides]\nDF002 = \"info\"\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--format",
+            "json",
+            "--only",
+            "DF002",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["findings"][0]["severity"], "INFO");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_applies_path_specific_configuration() {
+    let root = policy_fixture("path-override");
+    let service = root.join("services/api");
+    std::fs::create_dir_all(&service).unwrap();
+    let dockerfile = service.join("Dockerfile");
+    let config = root.join("droast.toml");
+    std::fs::write(&dockerfile, "FROM alpine:latest\n").unwrap();
+    std::fs::write(
+        &config,
+        r#"
+[[overrides]]
+paths = ["services/**/Dockerfile"]
+skip = ["DF001"]
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--format",
+            "json",
+            "--only",
+            "DF001",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["total"], 0);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_rejects_invalid_team_policy_instead_of_ignoring_it() {
+    let root = policy_fixture("invalid-policy");
+    let dockerfile = root.join("Dockerfile");
+    let config = root.join("droast.toml");
+    std::fs::write(&dockerfile, "FROM alpine:3.20\n").unwrap();
+    std::fs::write(&config, "skip = [\"DF999\"]\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Unknown rule ID"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn init_generates_a_valid_complete_policy_template() {
+    let root = policy_fixture("init");
+    let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .current_dir(&root)
+        .arg("init")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+    let config = std::fs::read_to_string(root.join("droast.toml")).unwrap();
+    for setting in [
+        "extends",
+        "preset",
+        "severity-overrides",
+        "require-suppression-reason",
+        "approved-registries",
+        "approved-base-images",
+        "required-labels",
+        "overrides",
+    ] {
+        assert!(config.contains(setting), "template is missing {setting}");
+    }
+    dockerfile_roast::config::DroastConfig::load_from(&root.join("droast.toml")).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_presets_select_their_rule_categories() {
+    let root = policy_fixture("presets");
+    let dockerfile = root.join("Dockerfile");
+    std::fs::write(
+        &dockerfile,
+        "FROM alpine:3.20\nUSER root\nRUN echo 1\nRUN echo 2\nRUN echo 3\nRUN echo 4\n",
+    )
+    .unwrap();
+
+    let run = |preset: &str| {
+        let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+            .args([
+                dockerfile.to_str().unwrap(),
+                "--preset",
+                preset,
+                "--format",
+                "json",
+                "--no-fail",
+                "--check-dockerignore=false",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+
+    let security = run("security");
+    let security_rules = security["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|finding| finding["rule"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(security_rules.contains(&"DF002"));
+    assert!(!security_rules.contains(&"DF003"));
+
+    let performance = run("performance");
+    let performance_rules = performance["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|finding| finding["rule"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(performance_rules.contains(&"DF003"));
+    assert!(!performance_rules.contains(&"DF002"));
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

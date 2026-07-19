@@ -1,7 +1,7 @@
 use crate::parser::{parse_document, DiagnosticSeverity, Instruction};
 use regex::Regex;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
     Info,
     Warning,
@@ -36,80 +36,502 @@ pub struct Rule {
     pub func: RuleFn,
 }
 
+impl Rule {
+    pub fn categories(&self) -> &'static [&'static str] {
+        categories_for(self.id)
+    }
+}
+
+pub const ALL_CATEGORIES: &[&str] = &[
+    "correctness",
+    "maintainability",
+    "performance",
+    "reliability",
+    "reproducibility",
+    "security",
+    "supply-chain",
+];
+
+pub fn categories_for(id: &str) -> &'static [&'static str] {
+    match id {
+        "DF002" | "DF010" | "DF013" | "DF014" | "DF020" | "DF034" => &["security"],
+        "DF021" => &["security", "supply-chain"],
+        "DF057" | "DF066" => &["reliability", "security"],
+        "DF001" | "DF005" | "DF024" | "DF042" | "DF062" | "DF069" => {
+            &["correctness", "reproducibility"]
+        }
+        "DF003" | "DF004" | "DF007" | "DF011" | "DF016" | "DF028" | "DF029" | "DF030" | "DF031"
+        | "DF045" | "DF046" | "DF047" | "DF055" | "DF064" | "DF070" => &["performance"],
+        "DF006" | "DF008" | "DF026" | "DF056" | "DF058" | "DF067" => {
+            &["maintainability", "performance"]
+        }
+        "DF033" => &["performance", "security"],
+        "DF009" | "DF019" | "DF023" | "DF037" | "DF038" | "DF043" | "DF044" | "DF059" | "DF061"
+        | "DF063" => &["correctness", "maintainability"],
+        "DF012" | "DF017" | "DF022" | "DF032" | "DF035" | "DF036" | "DF060" => {
+            &["maintainability", "reliability"]
+        }
+        "DF015" | "DF018" | "DF025" | "DF027" | "DF039" | "DF040" | "DF041" | "DF048" | "DF049"
+        | "DF050" | "DF068" | "DF071" => &["correctness", "reliability"],
+        "DF051" | "DF052" | "DF053" | "DF054" | "DF065" | "DF073" => {
+            &["reproducibility", "supply-chain"]
+        }
+        "DF072" | "DF074" => &["correctness", "security"],
+        _ => &[],
+    }
+}
+
 pub fn all_rules() -> Vec<Rule> {
     vec![
-        Rule { id: "DF001", severity: Severity::Warning, description: "Use specific base image tags instead of 'latest'", func: rule_latest_tag },
-        Rule { id: "DF002", severity: Severity::Error,   description: "Do not run as root", func: rule_running_as_root },
-        Rule { id: "DF011", severity: Severity::Warning, description: "Use multi-stage builds to reduce image size", func: rule_no_multistage },
-        Rule { id: "DF013", severity: Severity::Error,   description: "Avoid storing secrets in ENV variables", func: rule_secrets_in_env },
-        Rule { id: "DF014", severity: Severity::Error,   description: "Avoid hardcoding passwords or tokens in ARG/ENV", func: rule_hardcoded_secrets },
-        Rule { id: "DF020", severity: Severity::Warning, description: "Set explicit non-root USER", func: rule_no_user_instruction },
-        Rule { id: "DF003", severity: Severity::Warning, description: "Combine RUN commands to reduce layers", func: rule_many_run_layers },
-        Rule { id: "DF004", severity: Severity::Warning, description: "Clean apt/yum/apk cache in the same RUN layer", func: rule_uncleaned_package_cache },
-        Rule { id: "DF005", severity: Severity::Info,    description: "Pin package versions for reproducibility", func: rule_unpinned_packages },
-        Rule { id: "DF006", severity: Severity::Warning, description: "Avoid ADD for local files; prefer COPY", func: rule_add_instead_of_copy },
-        Rule { id: "DF007", severity: Severity::Warning, description: "Do not copy the entire build context (COPY . .)", func: rule_copy_all },
-        Rule { id: "DF008", severity: Severity::Info,    description: "Use WORKDIR instead of inline cd commands", func: rule_cd_instead_of_workdir },
-        Rule { id: "DF009", severity: Severity::Warning, description: "Use absolute paths in WORKDIR", func: rule_relative_workdir },
-        Rule { id: "DF010", severity: Severity::Warning, description: "Avoid using sudo inside containers", func: rule_sudo_usage },
-        Rule { id: "DF012", severity: Severity::Info,    description: "Set HEALTHCHECK for long-running services", func: rule_no_healthcheck },
-        Rule { id: "DF017", severity: Severity::Warning, description: "Use ENTRYPOINT with CMD for flexible images", func: rule_cmd_without_entrypoint },
-        Rule { id: "DF018", severity: Severity::Warning, description: "Avoid using shell form for ENTRYPOINT", func: rule_shell_form_entrypoint },
-        Rule { id: "DF019", severity: Severity::Warning, description: "Do not use deprecated MAINTAINER; use LABEL instead", func: rule_deprecated_maintainer },
-        Rule { id: "DF022", severity: Severity::Info,    description: "Specify EXPOSE for documented ports", func: rule_no_expose },
-        Rule { id: "DF023", severity: Severity::Warning, description: "Avoid multiple FROM without aliases (unintended multistage)", func: rule_multiple_from_no_alias },
-        Rule { id: "DF024", severity: Severity::Warning, description: "Avoid using :latest in FROM even with aliases", func: rule_from_latest_alias },
-        Rule { id: "DF025", severity: Severity::Warning, description: "Use JSON array syntax for CMD/ENTRYPOINT", func: rule_shell_form_cmd },
-        Rule { id: "DF026", severity: Severity::Warning, description: "Avoid recursive COPY from root", func: rule_copy_root },
-        Rule { id: "DF030", severity: Severity::Info,    description: "Avoid using pip without --no-cache-dir", func: rule_pip_no_cache },
-        Rule { id: "DF031", severity: Severity::Info,    description: "Avoid npm install without ci/--production for prod images", func: rule_npm_install },
-        Rule { id: "DF032", severity: Severity::Info,    description: "Set PYTHONDONTWRITEBYTECODE and PYTHONUNBUFFERED for Python images", func: rule_python_env_vars },
-        Rule { id: "DF033", severity: Severity::Info,    description: "Use an effective .dockerignore for each build context", func: rule_no_dockerignore },
-        Rule { id: "DF034", severity: Severity::Error,   description: "Avoid chmod 777 — overly permissive", func: rule_chmod_777 },
-        Rule { id: "DF035", severity: Severity::Info,    description: "Avoid using curl without --fail flags", func: rule_curl_no_fail },
-        Rule { id: "DF036", severity: Severity::Warning, description: "Avoid Dockerfile with no CMD or ENTRYPOINT", func: rule_no_cmd_or_entrypoint },
-        Rule { id: "DF015", severity: Severity::Error,   description: "Avoid using apt-get without -y flag", func: rule_apt_no_y },
-        Rule { id: "DF016", severity: Severity::Info,    description: "Use --no-install-recommends with apt-get", func: rule_apt_recommends },
-        Rule { id: "DF021", severity: Severity::Error,   description: "Avoid wget|sh pipe patterns (execute remote code)", func: rule_curl_pipe_sh },
-        Rule { id: "DF027", severity: Severity::Error,   description: "Do not use yum without -y flag", func: rule_yum_no_y },
-        Rule { id: "DF028", severity: Severity::Warning, description: "Cache-bust apt-get update", func: rule_apt_get_update_alone },
-        Rule { id: "DF029", severity: Severity::Warning, description: "Avoid apk add without --no-cache", func: rule_apk_no_cache },
-        Rule { id: "DF037", severity: Severity::Error,   description: "Dockerfile must begin with FROM, ARG, or a comment", func: rule_invalid_instruction_order },
-        Rule { id: "DF038", severity: Severity::Warning, description: "Multiple CMD instructions — only the last one takes effect", func: rule_multiple_cmd },
-        Rule { id: "DF039", severity: Severity::Error,   description: "Multiple ENTRYPOINT instructions — only the last one takes effect", func: rule_multiple_entrypoint },
-        Rule { id: "DF040", severity: Severity::Error,   description: "EXPOSE port must be in valid range 0-65535", func: rule_expose_port_range },
-        Rule { id: "DF041", severity: Severity::Error,   description: "Multiple HEALTHCHECK instructions — only the last one applies", func: rule_multiple_healthcheck },
-        Rule { id: "DF042", severity: Severity::Error,   description: "FROM stage aliases must be unique", func: rule_unique_stage_aliases },
-        Rule { id: "DF043", severity: Severity::Warning, description: "zypper install without non-interactive flag", func: rule_zypper_no_y },
-        Rule { id: "DF044", severity: Severity::Warning, description: "Avoid zypper dist-upgrade in Dockerfiles", func: rule_zypper_dist_upgrade },
-        Rule { id: "DF045", severity: Severity::Info,    description: "Run zypper clean after zypper install", func: rule_zypper_clean },
-        Rule { id: "DF046", severity: Severity::Warning, description: "Run dnf clean all after dnf install", func: rule_dnf_clean },
-        Rule { id: "DF047", severity: Severity::Warning, description: "Run yum clean all after yum install", func: rule_yum_clean },
-        Rule { id: "DF048", severity: Severity::Error,   description: "COPY with multiple sources requires destination to end with /", func: rule_copy_multi_arg_slash },
-        Rule { id: "DF049", severity: Severity::Warning, description: "COPY --from must reference a previously defined stage", func: rule_copy_from_undefined_stage },
-        Rule { id: "DF050", severity: Severity::Error,   description: "COPY --from cannot reference the current stage", func: rule_copy_from_self },
-        Rule { id: "DF051", severity: Severity::Warning, description: "Pin versions in pip install", func: rule_pip_version_pinning },
-        Rule { id: "DF052", severity: Severity::Warning, description: "Pin versions in apk add", func: rule_apk_version_pinning },
-        Rule { id: "DF053", severity: Severity::Warning, description: "Pin versions in gem install", func: rule_gem_version_pinning },
-        Rule { id: "DF054", severity: Severity::Warning, description: "Pin versions in go install with @version", func: rule_go_install_version },
-        Rule { id: "DF055", severity: Severity::Info,    description: "Run yarn cache clean after yarn install", func: rule_yarn_cache_clean },
-        Rule { id: "DF056", severity: Severity::Info,    description: "Use wget --progress=dot:giga to avoid bloated build logs", func: rule_wget_no_progress },
-        Rule { id: "DF057", severity: Severity::Warning, description: "Set -o pipefail before RUN commands that use pipes", func: rule_pipefail_missing },
-        Rule { id: "DF058", severity: Severity::Warning, description: "Use either wget or curl consistently, not both", func: rule_wget_and_curl },
-        Rule { id: "DF059", severity: Severity::Warning, description: "Use apt-get or apt-cache instead of apt in scripts", func: rule_apt_instead_of_apt_get },
-        Rule { id: "DF060", severity: Severity::Info,    description: "Avoid running pointless interactive commands inside containers", func: rule_useless_commands },
-        Rule { id: "DF061", severity: Severity::Warning, description: "Do not use --platform in FROM unless required", func: rule_from_platform_flag },
-        Rule { id: "DF062", severity: Severity::Error,   description: "ENV variable must not reference itself in the same statement", func: rule_env_self_reference },
-        Rule { id: "DF063", severity: Severity::Warning, description: "COPY to relative destination requires WORKDIR to be set first", func: rule_copy_relative_no_workdir },
-        Rule { id: "DF064", severity: Severity::Warning, description: "useradd without -l flag may create excessively large images", func: rule_useradd_no_l },
-        Rule { id: "DF065", severity: Severity::Warning, description: "FROM uses an unrecognised image registry", func: rule_untrusted_registry },
-        Rule { id: "DF066", severity: Severity::Warning, description: "Bash-specific syntax used without a SHELL instruction", func: rule_bash_syntax_no_shell },
-        Rule { id: "DF067", severity: Severity::Info,    description: "COPY of a local archive — ADD auto-extracts tarballs", func: rule_copy_archive_use_add },
-        Rule { id: "DF068", severity: Severity::Error,   description: "FROM, ONBUILD, and MAINTAINER are forbidden as ONBUILD triggers", func: rule_onbuild_forbidden },
-        Rule { id: "DF069", severity: Severity::Warning, description: "Avoid apt-get upgrade / dist-upgrade — makes builds non-reproducible", func: rule_apt_upgrade },
-        Rule { id: "DF070", severity: Severity::Warning, description: "Avoid broad COPY before package install — invalidates Docker layer cache", func: rule_copy_before_install },
-        Rule { id: "DF071", severity: Severity::Error,   description: "Dockerfile syntax must be valid", func: rule_parser_syntax },
+        Rule {
+            id: "DF001",
+            severity: Severity::Warning,
+            description: "Use specific base image tags instead of 'latest'",
+            func: rule_latest_tag,
+        },
+        Rule {
+            id: "DF002",
+            severity: Severity::Error,
+            description: "Do not run as root",
+            func: rule_running_as_root,
+        },
+        Rule {
+            id: "DF011",
+            severity: Severity::Warning,
+            description: "Use multi-stage builds to reduce image size",
+            func: rule_no_multistage,
+        },
+        Rule {
+            id: "DF013",
+            severity: Severity::Error,
+            description: "Avoid storing secrets in ENV variables",
+            func: rule_secrets_in_env,
+        },
+        Rule {
+            id: "DF014",
+            severity: Severity::Error,
+            description: "Avoid hardcoding passwords or tokens in ARG/ENV",
+            func: rule_hardcoded_secrets,
+        },
+        Rule {
+            id: "DF020",
+            severity: Severity::Warning,
+            description: "Set explicit non-root USER",
+            func: rule_no_user_instruction,
+        },
+        Rule {
+            id: "DF003",
+            severity: Severity::Warning,
+            description: "Combine RUN commands to reduce layers",
+            func: rule_many_run_layers,
+        },
+        Rule {
+            id: "DF004",
+            severity: Severity::Warning,
+            description: "Clean apt/yum/apk cache in the same RUN layer",
+            func: rule_uncleaned_package_cache,
+        },
+        Rule {
+            id: "DF005",
+            severity: Severity::Info,
+            description: "Pin package versions for reproducibility",
+            func: rule_unpinned_packages,
+        },
+        Rule {
+            id: "DF006",
+            severity: Severity::Warning,
+            description: "Avoid ADD for local files; prefer COPY",
+            func: rule_add_instead_of_copy,
+        },
+        Rule {
+            id: "DF007",
+            severity: Severity::Warning,
+            description: "Do not copy the entire build context (COPY . .)",
+            func: rule_copy_all,
+        },
+        Rule {
+            id: "DF008",
+            severity: Severity::Info,
+            description: "Use WORKDIR instead of inline cd commands",
+            func: rule_cd_instead_of_workdir,
+        },
+        Rule {
+            id: "DF009",
+            severity: Severity::Warning,
+            description: "Use absolute paths in WORKDIR",
+            func: rule_relative_workdir,
+        },
+        Rule {
+            id: "DF010",
+            severity: Severity::Warning,
+            description: "Avoid using sudo inside containers",
+            func: rule_sudo_usage,
+        },
+        Rule {
+            id: "DF012",
+            severity: Severity::Info,
+            description: "Set HEALTHCHECK for long-running services",
+            func: rule_no_healthcheck,
+        },
+        Rule {
+            id: "DF017",
+            severity: Severity::Warning,
+            description: "Use ENTRYPOINT with CMD for flexible images",
+            func: rule_cmd_without_entrypoint,
+        },
+        Rule {
+            id: "DF018",
+            severity: Severity::Warning,
+            description: "Avoid using shell form for ENTRYPOINT",
+            func: rule_shell_form_entrypoint,
+        },
+        Rule {
+            id: "DF019",
+            severity: Severity::Warning,
+            description: "Do not use deprecated MAINTAINER; use LABEL instead",
+            func: rule_deprecated_maintainer,
+        },
+        Rule {
+            id: "DF022",
+            severity: Severity::Info,
+            description: "Specify EXPOSE for documented ports",
+            func: rule_no_expose,
+        },
+        Rule {
+            id: "DF023",
+            severity: Severity::Warning,
+            description: "Avoid multiple FROM without aliases (unintended multistage)",
+            func: rule_multiple_from_no_alias,
+        },
+        Rule {
+            id: "DF024",
+            severity: Severity::Warning,
+            description: "Avoid using :latest in FROM even with aliases",
+            func: rule_from_latest_alias,
+        },
+        Rule {
+            id: "DF025",
+            severity: Severity::Warning,
+            description: "Use JSON array syntax for CMD/ENTRYPOINT",
+            func: rule_shell_form_cmd,
+        },
+        Rule {
+            id: "DF026",
+            severity: Severity::Warning,
+            description: "Avoid recursive COPY from root",
+            func: rule_copy_root,
+        },
+        Rule {
+            id: "DF030",
+            severity: Severity::Info,
+            description: "Avoid using pip without --no-cache-dir",
+            func: rule_pip_no_cache,
+        },
+        Rule {
+            id: "DF031",
+            severity: Severity::Info,
+            description: "Avoid npm install without ci/--production for prod images",
+            func: rule_npm_install,
+        },
+        Rule {
+            id: "DF032",
+            severity: Severity::Info,
+            description: "Set PYTHONDONTWRITEBYTECODE and PYTHONUNBUFFERED for Python images",
+            func: rule_python_env_vars,
+        },
+        Rule {
+            id: "DF033",
+            severity: Severity::Info,
+            description: "Use an effective .dockerignore for each build context",
+            func: rule_no_dockerignore,
+        },
+        Rule {
+            id: "DF034",
+            severity: Severity::Error,
+            description: "Avoid chmod 777 — overly permissive",
+            func: rule_chmod_777,
+        },
+        Rule {
+            id: "DF035",
+            severity: Severity::Info,
+            description: "Avoid using curl without --fail flags",
+            func: rule_curl_no_fail,
+        },
+        Rule {
+            id: "DF036",
+            severity: Severity::Warning,
+            description: "Avoid Dockerfile with no CMD or ENTRYPOINT",
+            func: rule_no_cmd_or_entrypoint,
+        },
+        Rule {
+            id: "DF015",
+            severity: Severity::Error,
+            description: "Avoid using apt-get without -y flag",
+            func: rule_apt_no_y,
+        },
+        Rule {
+            id: "DF016",
+            severity: Severity::Info,
+            description: "Use --no-install-recommends with apt-get",
+            func: rule_apt_recommends,
+        },
+        Rule {
+            id: "DF021",
+            severity: Severity::Error,
+            description: "Avoid wget|sh pipe patterns (execute remote code)",
+            func: rule_curl_pipe_sh,
+        },
+        Rule {
+            id: "DF027",
+            severity: Severity::Error,
+            description: "Do not use yum without -y flag",
+            func: rule_yum_no_y,
+        },
+        Rule {
+            id: "DF028",
+            severity: Severity::Warning,
+            description: "Cache-bust apt-get update",
+            func: rule_apt_get_update_alone,
+        },
+        Rule {
+            id: "DF029",
+            severity: Severity::Warning,
+            description: "Avoid apk add without --no-cache",
+            func: rule_apk_no_cache,
+        },
+        Rule {
+            id: "DF037",
+            severity: Severity::Error,
+            description: "Dockerfile must begin with FROM, ARG, or a comment",
+            func: rule_invalid_instruction_order,
+        },
+        Rule {
+            id: "DF038",
+            severity: Severity::Warning,
+            description: "Multiple CMD instructions — only the last one takes effect",
+            func: rule_multiple_cmd,
+        },
+        Rule {
+            id: "DF039",
+            severity: Severity::Error,
+            description: "Multiple ENTRYPOINT instructions — only the last one takes effect",
+            func: rule_multiple_entrypoint,
+        },
+        Rule {
+            id: "DF040",
+            severity: Severity::Error,
+            description: "EXPOSE port must be in valid range 0-65535",
+            func: rule_expose_port_range,
+        },
+        Rule {
+            id: "DF041",
+            severity: Severity::Error,
+            description: "Multiple HEALTHCHECK instructions — only the last one applies",
+            func: rule_multiple_healthcheck,
+        },
+        Rule {
+            id: "DF042",
+            severity: Severity::Error,
+            description: "FROM stage aliases must be unique",
+            func: rule_unique_stage_aliases,
+        },
+        Rule {
+            id: "DF043",
+            severity: Severity::Warning,
+            description: "zypper install without non-interactive flag",
+            func: rule_zypper_no_y,
+        },
+        Rule {
+            id: "DF044",
+            severity: Severity::Warning,
+            description: "Avoid zypper dist-upgrade in Dockerfiles",
+            func: rule_zypper_dist_upgrade,
+        },
+        Rule {
+            id: "DF045",
+            severity: Severity::Info,
+            description: "Run zypper clean after zypper install",
+            func: rule_zypper_clean,
+        },
+        Rule {
+            id: "DF046",
+            severity: Severity::Warning,
+            description: "Run dnf clean all after dnf install",
+            func: rule_dnf_clean,
+        },
+        Rule {
+            id: "DF047",
+            severity: Severity::Warning,
+            description: "Run yum clean all after yum install",
+            func: rule_yum_clean,
+        },
+        Rule {
+            id: "DF048",
+            severity: Severity::Error,
+            description: "COPY with multiple sources requires destination to end with /",
+            func: rule_copy_multi_arg_slash,
+        },
+        Rule {
+            id: "DF049",
+            severity: Severity::Warning,
+            description: "COPY --from must reference a previously defined stage",
+            func: rule_copy_from_undefined_stage,
+        },
+        Rule {
+            id: "DF050",
+            severity: Severity::Error,
+            description: "COPY --from cannot reference the current stage",
+            func: rule_copy_from_self,
+        },
+        Rule {
+            id: "DF051",
+            severity: Severity::Warning,
+            description: "Pin versions in pip install",
+            func: rule_pip_version_pinning,
+        },
+        Rule {
+            id: "DF052",
+            severity: Severity::Warning,
+            description: "Pin versions in apk add",
+            func: rule_apk_version_pinning,
+        },
+        Rule {
+            id: "DF053",
+            severity: Severity::Warning,
+            description: "Pin versions in gem install",
+            func: rule_gem_version_pinning,
+        },
+        Rule {
+            id: "DF054",
+            severity: Severity::Warning,
+            description: "Pin versions in go install with @version",
+            func: rule_go_install_version,
+        },
+        Rule {
+            id: "DF055",
+            severity: Severity::Info,
+            description: "Run yarn cache clean after yarn install",
+            func: rule_yarn_cache_clean,
+        },
+        Rule {
+            id: "DF056",
+            severity: Severity::Info,
+            description: "Use wget --progress=dot:giga to avoid bloated build logs",
+            func: rule_wget_no_progress,
+        },
+        Rule {
+            id: "DF057",
+            severity: Severity::Warning,
+            description: "Set -o pipefail before RUN commands that use pipes",
+            func: rule_pipefail_missing,
+        },
+        Rule {
+            id: "DF058",
+            severity: Severity::Warning,
+            description: "Use either wget or curl consistently, not both",
+            func: rule_wget_and_curl,
+        },
+        Rule {
+            id: "DF059",
+            severity: Severity::Warning,
+            description: "Use apt-get or apt-cache instead of apt in scripts",
+            func: rule_apt_instead_of_apt_get,
+        },
+        Rule {
+            id: "DF060",
+            severity: Severity::Info,
+            description: "Avoid running pointless interactive commands inside containers",
+            func: rule_useless_commands,
+        },
+        Rule {
+            id: "DF061",
+            severity: Severity::Warning,
+            description: "Do not use --platform in FROM unless required",
+            func: rule_from_platform_flag,
+        },
+        Rule {
+            id: "DF062",
+            severity: Severity::Error,
+            description: "ENV variable must not reference itself in the same statement",
+            func: rule_env_self_reference,
+        },
+        Rule {
+            id: "DF063",
+            severity: Severity::Warning,
+            description: "COPY to relative destination requires WORKDIR to be set first",
+            func: rule_copy_relative_no_workdir,
+        },
+        Rule {
+            id: "DF064",
+            severity: Severity::Warning,
+            description: "useradd without -l flag may create excessively large images",
+            func: rule_useradd_no_l,
+        },
+        Rule {
+            id: "DF065",
+            severity: Severity::Warning,
+            description: "FROM uses an unrecognised image registry",
+            func: rule_untrusted_registry,
+        },
+        Rule {
+            id: "DF066",
+            severity: Severity::Warning,
+            description: "Bash-specific syntax used without a SHELL instruction",
+            func: rule_bash_syntax_no_shell,
+        },
+        Rule {
+            id: "DF067",
+            severity: Severity::Info,
+            description: "COPY of a local archive — ADD auto-extracts tarballs",
+            func: rule_copy_archive_use_add,
+        },
+        Rule {
+            id: "DF068",
+            severity: Severity::Error,
+            description: "FROM, ONBUILD, and MAINTAINER are forbidden as ONBUILD triggers",
+            func: rule_onbuild_forbidden,
+        },
+        Rule {
+            id: "DF069",
+            severity: Severity::Warning,
+            description: "Avoid apt-get upgrade / dist-upgrade — makes builds non-reproducible",
+            func: rule_apt_upgrade,
+        },
+        Rule {
+            id: "DF070",
+            severity: Severity::Warning,
+            description: "Avoid broad COPY before package install — invalidates Docker layer cache",
+            func: rule_copy_before_install,
+        },
+        Rule {
+            id: "DF071",
+            severity: Severity::Error,
+            description: "Dockerfile syntax must be valid",
+            func: rule_parser_syntax,
+        },
+        Rule {
+            id: "DF072",
+            severity: Severity::Error,
+            description: "Suppression directives must satisfy policy",
+            func: rule_configured_policy,
+        },
+        Rule {
+            id: "DF073",
+            severity: Severity::Error,
+            description: "Base images must satisfy the approved image policy",
+            func: rule_configured_policy,
+        },
+        Rule {
+            id: "DF074",
+            severity: Severity::Error,
+            description: "Image labels must satisfy the configured schema",
+            func: rule_configured_policy,
+        },
     ]
+}
+
+fn rule_configured_policy(_instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    Vec::new()
 }
 
 fn rule_parser_syntax(_instrs: &[Instruction], raw: &str) -> Vec<Finding> {
@@ -201,7 +623,8 @@ fn rule_running_as_root(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                 message: "Container is explicitly set to run as root".to_string(),
                 roast: "Congratulations, you're running as root. Your security team is crying, \
                         your CISO is drafting a strongly-worded email, and a hacker somewhere \
-                        just smiled.".to_string(),
+                        just smiled."
+                    .to_string(),
             });
         }
     }
@@ -210,22 +633,28 @@ fn rule_running_as_root(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 
 fn rule_no_multistage(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let from_count = instrs_of(instrs, "FROM").len();
-    if from_count > 1 { return vec![]; }
+    if from_count > 1 {
+        return vec![];
+    }
     let first_from = match instrs_of(instrs, "FROM").into_iter().next() {
         Some(f) => f,
         None => return vec![],
     };
-    let build_images = ["golang", "node", "rust", "maven", "gradle", "openjdk", "python", "dotnet", "gcc"];
+    let build_images = [
+        "golang", "node", "rust", "maven", "gradle", "openjdk", "python", "dotnet", "gcc",
+    ];
     let img = first_from.arguments.to_lowercase();
     if build_images.iter().any(|b| img.contains(b)) {
         return vec![Finding {
             rule: "DF011",
             severity: Severity::Warning,
             line: first_from.line,
-            message: "Single-stage build with a heavy build image — consider multi-stage builds".to_string(),
+            message: "Single-stage build with a heavy build image — consider multi-stage builds"
+                .to_string(),
             roast: "Shipping your entire build toolchain to production? Your 2GB Go image is \
                     basically a free gift to anyone who gets shell access. Multi-stage builds \
-                    exist. They're fantastic. Use them.".to_string(),
+                    exist. They're fantastic. Use them."
+                .to_string(),
         }];
     }
     vec![]
@@ -237,7 +666,9 @@ fn rule_many_run_layers(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let mut start_line = 0usize;
     for i in instrs {
         if i.instruction == "RUN" {
-            if consecutive == 0 { start_line = i.line; }
+            if consecutive == 0 {
+                start_line = i.line;
+            }
             consecutive += 1;
         } else if i.instruction == "FROM" {
             consecutive = 0;
@@ -247,10 +678,14 @@ fn rule_many_run_layers(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     rule: "DF003",
                     severity: Severity::Warning,
                     line: start_line,
-                    message: format!("{} consecutive RUN instructions could be merged into one", consecutive),
+                    message: format!(
+                        "{} consecutive RUN instructions could be merged into one",
+                        consecutive
+                    ),
                     roast: format!(
                         "{} separate RUN layers? Your image has more layers than a mid-2000s emo \
-                         band. Combine them with && and save everyone's bandwidth.", consecutive
+                         band. Combine them with && and save everyone's bandwidth.",
+                        consecutive
                     ),
                 });
             }
@@ -277,7 +712,9 @@ fn rule_add_instead_of_copy(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
         .into_iter()
         .filter(|i| {
             // Skip --chown, --checksum and other flags to find the real source argument
-            let source = match i.arguments.split_whitespace()
+            let source = match i
+                .arguments
+                .split_whitespace()
                 .find(|t| !t.starts_with("--"))
             {
                 Some(s) => s,
@@ -298,7 +735,8 @@ fn rule_add_instead_of_copy(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
             message: "ADD used for local file — prefer COPY".to_string(),
             roast: "Using ADD to copy local files is like taking a helicopter to cross the \
                     street. COPY exists, it's right there, it's boring and correct — which is \
-                    everything you want in infrastructure.".to_string(),
+                    everything you want in infrastructure."
+                .to_string(),
         })
         .collect()
 }
@@ -306,15 +744,20 @@ fn rule_add_instead_of_copy(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
 fn rule_copy_all(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     instrs_of(instrs, "COPY")
         .into_iter()
-        .filter(|i| { let a = i.arguments.trim(); a.starts_with(". ") || a == "." })
+        .filter(|i| {
+            let a = i.arguments.trim();
+            a.starts_with(". ") || a == "."
+        })
         .map(|i| Finding {
             rule: "DF007",
             severity: Severity::Warning,
             line: i.line,
-            message: "COPY . copies the entire build context — consider a .dockerignore file".to_string(),
+            message: "COPY . copies the entire build context — consider a .dockerignore file"
+                .to_string(),
             roast: "COPY . — dumping your entire project including node_modules, .git history, \
                     and that .env file with the production database password into the image. \
-                    Bold. Reckless. Very DevOps of you.".to_string(),
+                    Bold. Reckless. Very DevOps of you."
+                .to_string(),
         })
         .collect()
 }
@@ -344,9 +787,13 @@ fn rule_relative_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             rule: "DF009",
             severity: Severity::Warning,
             line: i.line,
-            message: format!("WORKDIR '{}' is relative — use an absolute path", i.arguments.trim()),
+            message: format!(
+                "WORKDIR '{}' is relative — use an absolute path",
+                i.arguments.trim()
+            ),
             roast: "A relative WORKDIR? You're setting your working directory relative to... \
-                    what, exactly? Hope? Dreams? Use an absolute path like a grown-up.".to_string(),
+                    what, exactly? Hope? Dreams? Use an absolute path like a grown-up."
+                .to_string(),
         })
         .collect()
 }
@@ -362,14 +809,19 @@ fn rule_sudo_usage(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             line: i.line,
             message: "sudo used inside a container — likely unnecessary".to_string(),
             roast: "sudo inside a Docker container? You're already root (probably). sudo is \
-                    just a formality at this point, like putting a 'Wet Floor' sign in the ocean.".to_string(),
+                    just a formality at this point, like putting a 'Wet Floor' sign in the ocean."
+                .to_string(),
         })
         .collect()
 }
 
 fn rule_no_healthcheck(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    if has_instr(instrs, "HEALTHCHECK") { return vec![]; }
-    if !has_instr(instrs, "EXPOSE") && !has_instr(instrs, "CMD") { return vec![]; }
+    if has_instr(instrs, "HEALTHCHECK") {
+        return vec![];
+    }
+    if !has_instr(instrs, "EXPOSE") && !has_instr(instrs, "CMD") {
+        return vec![];
+    }
     vec![Finding {
         rule: "DF012",
         severity: Severity::Info,
@@ -377,7 +829,8 @@ fn rule_no_healthcheck(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         message: "No HEALTHCHECK defined".to_string(),
         roast: "No HEALTHCHECK? Your container is basically on the honor system. 'It's fine, \
                 I'm sure it's fine.' Meanwhile Kubernetes is just restarting it every 30 seconds \
-                wondering what went wrong.".to_string(),
+                wondering what went wrong."
+            .to_string(),
     }]
 }
 
@@ -396,7 +849,8 @@ fn rule_shell_form_entrypoint(instrs: &[Instruction], _raw: &str) -> Vec<Finding
             message: "ENTRYPOINT in shell form prevents signal propagation".to_string(),
             roast: "Shell-form ENTRYPOINT means your app runs as a child of /bin/sh. When \
                     Kubernetes sends SIGTERM, your app doesn't get it — /bin/sh does, and \
-                    /bin/sh doesn't care. Use exec form: ENTRYPOINT [\"cmd\", \"arg\"].".to_string(),
+                    /bin/sh doesn't care. Use exec form: ENTRYPOINT [\"cmd\", \"arg\"]."
+                .to_string(),
         })
         .collect()
 }
@@ -411,29 +865,39 @@ fn rule_deprecated_maintainer(instrs: &[Instruction], _raw: &str) -> Vec<Finding
             message: "MAINTAINER is deprecated".to_string(),
             roast: "MAINTAINER has been deprecated since Docker 1.13. That was 2017. \
                     Your Dockerfile is old enough to be in middle school. \
-                    Use LABEL maintainer=\"...\" like the rest of us.".to_string(),
+                    Use LABEL maintainer=\"...\" like the rest of us."
+                .to_string(),
         })
         .collect()
 }
 
 fn rule_no_expose(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    if has_instr(instrs, "EXPOSE") { return vec![]; }
-    if !has_instr(instrs, "CMD") && !has_instr(instrs, "ENTRYPOINT") { return vec![]; }
+    if has_instr(instrs, "EXPOSE") {
+        return vec![];
+    }
+    if !has_instr(instrs, "CMD") && !has_instr(instrs, "ENTRYPOINT") {
+        return vec![];
+    }
     vec![Finding {
         rule: "DF022",
         severity: Severity::Info,
         line: 0,
-        message: "No EXPOSE instruction — consider documenting which ports this service uses".to_string(),
+        message: "No EXPOSE instruction — consider documenting which ports this service uses"
+            .to_string(),
         roast: "No EXPOSE? Your container is a mystery box. Is it a web server? A database? \
                 A very slow random number generator? EXPOSE is documentation — it tells the \
-                next developer which port to knock on.".to_string(),
+                next developer which port to knock on."
+            .to_string(),
     }]
 }
 
 fn rule_multiple_from_no_alias(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let froms: Vec<_> = instrs_of(instrs, "FROM");
-    if froms.len() <= 1 { return vec![]; }
-    froms.into_iter()
+    if froms.len() <= 1 {
+        return vec![];
+    }
+    froms
+        .into_iter()
         .skip(1)
         .filter(|i| parse_from_arguments(&i.arguments).is_some_and(|from| from.alias.is_none()))
         .map(|i| Finding {
@@ -443,7 +907,8 @@ fn rule_multiple_from_no_alias(instrs: &[Instruction], _raw: &str) -> Vec<Findin
             message: "Multi-stage FROM without AS alias — hard to reference later".to_string(),
             roast: "Multi-stage FROM without an alias. How will you COPY --from=... this? \
                     By index? \"--from=2\"? That's fragile. Give your stages names like \
-                    a civilized person. FROM golang:1.21 AS builder.".to_string(),
+                    a civilized person. FROM golang:1.21 AS builder."
+                .to_string(),
         })
         .collect()
 }
@@ -463,7 +928,8 @@ fn rule_shell_form_cmd(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             message: "CMD in shell form — prefer exec form [\"executable\", \"arg\"]".to_string(),
             roast: "Shell-form CMD wraps your process in /bin/sh -c, which means PID 1 is the \
                     shell, not your app. Signal handling breaks, graceful shutdown breaks, and \
-                    your ops team breaks (emotionally). Use exec form.".to_string(),
+                    your ops team breaks (emotionally). Use exec form."
+                .to_string(),
         })
         .collect()
 }
@@ -482,7 +948,8 @@ fn rule_copy_root(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             message: "COPY to filesystem root — this may overwrite system files".to_string(),
             roast: "Copying files directly to /? Brave. Reckless. Chaotic. You're one typo away \
                     from overwriting /bin/sh and creating a container that doesn't even boot. \
-                    Use a dedicated app directory.".to_string(),
+                    Use a dedicated app directory."
+                .to_string(),
         })
         .collect()
 }
@@ -492,16 +959,19 @@ fn rule_pip_no_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .into_iter()
         .filter(|i| {
             let a = &i.arguments;
-            (a.contains("pip install") || a.contains("pip3 install")) && !a.contains("--no-cache-dir")
+            (a.contains("pip install") || a.contains("pip3 install"))
+                && !a.contains("--no-cache-dir")
         })
         .map(|i| Finding {
             rule: "DF030",
             severity: Severity::Info,
             line: i.line,
-            message: "pip install without --no-cache-dir wastes space in the image layer".to_string(),
+            message: "pip install without --no-cache-dir wastes space in the image layer"
+                .to_string(),
             roast: "pip install without --no-cache-dir? You're carrying around a pip cache in \
                     your production image like a tourist with a suitcase full of hotel shampoos. \
-                    You don't need those. Add --no-cache-dir.".to_string(),
+                    You don't need those. Add --no-cache-dir."
+                .to_string(),
         })
         .collect()
 }
@@ -521,7 +991,8 @@ fn rule_npm_install(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             message: "npm install used — consider npm ci for reproducible builds".to_string(),
             roast: "`npm install` in a Dockerfile: non-deterministic, slower than `npm ci`, \
                     and potentially installs different versions than your lockfile specifies. \
-                    `npm ci` exists specifically for CI/CD and containers. Use it.".to_string(),
+                    `npm ci` exists specifically for CI/CD and containers. Use it."
+                .to_string(),
         })
         .collect()
 }
@@ -531,18 +1002,26 @@ fn rule_python_env_vars(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         Some(f) => f,
         None => return vec![],
     };
-    if !first_from.arguments.to_lowercase().contains("python") { return vec![]; }
-    let env_args: String = instrs_of(instrs, "ENV").iter().map(|i| i.arguments.as_str()).collect::<Vec<_>>().join(" ");
+    if !first_from.arguments.to_lowercase().contains("python") {
+        return vec![];
+    }
+    let env_args: String = instrs_of(instrs, "ENV")
+        .iter()
+        .map(|i| i.arguments.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
     let mut findings = Vec::new();
     if !env_args.contains("PYTHONDONTWRITEBYTECODE") {
         findings.push(Finding {
             rule: "DF032",
             severity: Severity::Info,
             line: 0,
-            message: "PYTHONDONTWRITEBYTECODE not set — Python will write .pyc files to the image".to_string(),
+            message: "PYTHONDONTWRITEBYTECODE not set — Python will write .pyc files to the image"
+                .to_string(),
             roast: "Python is quietly writing .pyc bytecode files all over your image. \
                     Set PYTHONDONTWRITEBYTECODE=1 and stop Python from hoarding compiled cache \
-                    files in your container like a digital hoarder.".to_string(),
+                    files in your container like a digital hoarder."
+                .to_string(),
         });
     }
     if !env_args.contains("PYTHONUNBUFFERED") {
@@ -575,7 +1054,8 @@ fn rule_chmod_777(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             message: "chmod 777 grants world-writable permissions — overly permissive".to_string(),
             roast: "chmod 777? Giving everyone read, write, and execute access is the filesystem \
                     equivalent of leaving your front door open with a sign that says \
-                    'free stuff inside'. Minimum permissions, please.".to_string(),
+                    'free stuff inside'. Minimum permissions, please."
+                .to_string(),
         })
         .collect()
 }
@@ -609,17 +1089,23 @@ fn rule_curl_no_fail(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             rule: "DF035",
             severity: Severity::Info,
             line: i.line,
-            message: "curl without --fail — HTTP errors won't cause the RUN step to fail".to_string(),
+            message: "curl without --fail — HTTP errors won't cause the RUN step to fail"
+                .to_string(),
             roast: "curl without --fail means a 404 or 500 response silently succeeds. \
                     Your build will happily continue after downloading an error page and \
-                    treating it as a binary. Add --fail and save yourself a 2am debugging session.".to_string(),
+                    treating it as a binary. Add --fail and save yourself a 2am debugging session."
+                .to_string(),
         })
         .collect()
 }
 
 fn rule_no_cmd_or_entrypoint(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    if has_instr(instrs, "CMD") || has_instr(instrs, "ENTRYPOINT") { return vec![]; }
-    if instrs.len() < 3 { return vec![]; }
+    if has_instr(instrs, "CMD") || has_instr(instrs, "ENTRYPOINT") {
+        return vec![];
+    }
+    if instrs.len() < 3 {
+        return vec![];
+    }
     vec![Finding {
         rule: "DF036",
         severity: Severity::Warning,
@@ -627,7 +1113,8 @@ fn rule_no_cmd_or_entrypoint(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
         message: "No CMD or ENTRYPOINT defined — the container has no default command".to_string(),
         roast: "No CMD or ENTRYPOINT? This container starts, does nothing, and immediately exits \
                 like an intern on their first day who didn't read the onboarding docs. \
-                Tell it what to run.".to_string(),
+                Tell it what to run."
+            .to_string(),
     }]
 }
 
@@ -646,10 +1133,12 @@ fn rule_uncleaned_package_cache(instrs: &[Instruction], _raw: &str) -> Vec<Findi
                 rule: "DF004",
                 severity: Severity::Warning,
                 line: i.line,
-                message: "apt cache not cleaned after install — adds unnecessary layer size".to_string(),
+                message: "apt cache not cleaned after install — adds unnecessary layer size"
+                    .to_string(),
                 roast: "Not cleaning the apt cache is like finishing a meal and leaving all the \
                         wrappers in the container. Your image is now a trash can. A very expensive \
-                        trash can stored in ECR.".to_string(),
+                        trash can stored in ECR."
+                    .to_string(),
             });
         }
         if has_yum && !arg.contains("yum clean all") && !arg.contains("dnf clean all") {
@@ -659,7 +1148,8 @@ fn rule_uncleaned_package_cache(instrs: &[Instruction], _raw: &str) -> Vec<Findi
                 line: i.line,
                 message: "yum/dnf cache not cleaned after install".to_string(),
                 roast: "You installed packages with yum but didn't clean up. Every megabyte of \
-                        cache you leave is a megabyte of shame floating in your registry.".to_string(),
+                        cache you leave is a megabyte of shame floating in your registry."
+                    .to_string(),
             });
         }
         if has_apk {
@@ -669,7 +1159,8 @@ fn rule_uncleaned_package_cache(instrs: &[Instruction], _raw: &str) -> Vec<Findi
                 line: i.line,
                 message: "apk add without --no-cache flag".to_string(),
                 roast: "Using `apk add` without `--no-cache`? You chose Alpine to save space and \
-                        then immediately gained it all back. That's impressive, in a bad way.".to_string(),
+                        then immediately gained it all back. That's impressive, in a bad way."
+                    .to_string(),
             });
         }
     }
@@ -691,19 +1182,20 @@ fn rule_unpinned_packages(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                 message: "apt-get install without pinned package versions".to_string(),
                 roast: "Unpinned packages: a bold way to ensure your build is different \
                         every single time. 'It worked on my machine' is a lifestyle choice, \
-                        not a deployment strategy.".to_string(),
+                        not a deployment strategy."
+                    .to_string(),
             });
         }
-        for _cap in re_yum.find_iter(&i.arguments) {
+        if re_yum.find(&i.arguments).is_some() {
             findings.push(Finding {
                 rule: "DF005",
                 severity: Severity::Info,
                 line: i.line,
                 message: "yum install without pinned package versions".to_string(),
                 roast: "Your yum packages are pinned to 'whatever yum feels like today'. \
-                        Reproducibility called — it's going to voicemail.".to_string(),
+                        Reproducibility called — it's going to voicemail."
+                    .to_string(),
             });
-            break;
         }
     }
     findings
@@ -767,7 +1259,9 @@ fn apt_assumes_yes(tokens: &[&str]) -> bool {
             return true;
         }
         if let Some(short_options) = token.strip_prefix('-').filter(|_| !token.starts_with("--")) {
-            if short_options.contains('y') || short_options.chars().filter(|c| *c == 'q').count() >= 2 {
+            if short_options.contains('y')
+                || short_options.chars().filter(|c| *c == 'q').count() >= 2
+            {
                 return true;
             }
             if short_options
@@ -814,7 +1308,8 @@ fn rule_apt_no_y(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             message: "apt-get install without -y flag will hang waiting for user input".to_string(),
             roast: "apt-get install without -y? Your build is going to sit there, patiently \
                     waiting for a 'yes' that will never come, like a golden retriever waiting \
-                    for an owner who's on a cruise ship.".to_string(),
+                    for an owner who's on a cruise ship."
+                .to_string(),
         })
         .collect()
 }
@@ -831,10 +1326,12 @@ fn rule_apt_recommends(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             rule: "DF016",
             severity: Severity::Info,
             line: i.line,
-            message: "apt-get install without --no-install-recommends installs extra packages".to_string(),
+            message: "apt-get install without --no-install-recommends installs extra packages"
+                .to_string(),
             roast: "Installing without --no-install-recommends? apt is now installing packages \
                     you didn't ask for, like a waiter who brings you a full bread basket when \
-                    you said you're gluten-free. `--no-install-recommends` is right there.".to_string(),
+                    you said you're gluten-free. `--no-install-recommends` is right there."
+                .to_string(),
         })
         .collect()
 }
@@ -845,7 +1342,8 @@ fn rule_yum_no_y(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .filter(|i| {
             let a = &i.arguments;
             (a.contains("yum install") || a.contains("dnf install"))
-                && !a.contains("-y") && !a.contains("--assumeyes")
+                && !a.contains("-y")
+                && !a.contains("--assumeyes")
         })
         .map(|i| Finding {
             rule: "DF027",
@@ -854,7 +1352,8 @@ fn rule_yum_no_y(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             message: "yum/dnf install without -y flag will hang waiting for user input".to_string(),
             roast: "yum install without -y. Your build will hang indefinitely, \
                     waiting for input in a non-interactive environment. \
-                    It's not coming. Add -y and move on.".to_string(),
+                    It's not coming. Add -y and move on."
+                .to_string(),
         })
         .collect()
 }
@@ -897,9 +1396,20 @@ fn rule_apk_no_cache(_instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 }
 
 fn rule_secrets_in_env(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let secret_patterns = ["password", "passwd", "secret", "token", "api_key", "apikey",
-                           "private_key", "auth_token", "access_key", "secret_key",
-                           "db_pass", "database_password"];
+    let secret_patterns = [
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "api_key",
+        "apikey",
+        "private_key",
+        "auth_token",
+        "access_key",
+        "secret_key",
+        "db_pass",
+        "database_password",
+    ];
     let mut findings = Vec::new();
     for i in instrs_of(instrs, "ENV") {
         let lower = i.arguments.to_lowercase();
@@ -927,7 +1437,10 @@ fn rule_secrets_in_env(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 fn rule_hardcoded_secrets(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let re = Regex::new(r"(?i)(password|secret|token|key|passwd)\s*=\s*\S+").unwrap();
     let mut findings = Vec::new();
-    for i in instrs.iter().filter(|i| i.instruction == "ARG" || i.instruction == "ENV") {
+    for i in instrs
+        .iter()
+        .filter(|i| i.instruction == "ARG" || i.instruction == "ENV")
+    {
         if let Some(cap) = re.find(&i.arguments) {
             let parts: Vec<&str> = cap.as_str().splitn(2, '=').collect();
             if parts.len() == 2 {
@@ -940,7 +1453,8 @@ fn rule_hardcoded_secrets(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                         message: "Hardcoded secret value detected in ARG/ENV".to_string(),
                         roast: "A hardcoded secret! How delightfully naive. It's in your git \
                                 history forever now. Have fun rotating that. Maybe consider \
-                                build secrets or runtime injection next time?".to_string(),
+                                build secrets or runtime injection next time?"
+                            .to_string(),
                     });
                 }
             }
@@ -961,13 +1475,15 @@ fn rule_curl_pipe_sh(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             message: "Piping remote script directly to shell (curl/wget | sh)".to_string(),
             roast: "curl | sh: the technical equivalent of 'hold my beer'. You're downloading \
                     code from the internet and executing it blind, inside your container, \
-                    and shipping it to prod. Your threat model is vibes.".to_string(),
+                    and shipping it to prod. Your threat model is vibes."
+                .to_string(),
         })
         .collect()
 }
 
 fn rule_apt_instead_of_apt_get(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let re = Regex::new(r"\bapt\s+(install|remove|update|upgrade|list|search|show|purge)\b").unwrap();
+    let re =
+        Regex::new(r"\bapt\s+(install|remove|update|upgrade|list|search|show|purge)\b").unwrap();
     instrs_of(instrs, "RUN")
         .into_iter()
         .filter(|i| re.is_match(&i.arguments))
@@ -975,18 +1491,35 @@ fn rule_apt_instead_of_apt_get(instrs: &[Instruction], _raw: &str) -> Vec<Findin
             rule: "DF059",
             severity: Severity::Warning,
             line: i.line,
-            message: "apt used instead of apt-get — apt is an end-user tool, not suited for scripts".to_string(),
+            message:
+                "apt used instead of apt-get — apt is an end-user tool, not suited for scripts"
+                    .to_string(),
             roast: "`apt` is designed for humans: it has progress bars, color output, and a \
                     warning that says 'do not use in scripts'. You are in a script. \
-                    Use apt-get or apt-cache instead.".to_string(),
+                    Use apt-get or apt-cache instead."
+                .to_string(),
         })
         .collect()
 }
 
 fn rule_useless_commands(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let useless = ["ssh ", "vim ", "nano ", "emacs ", "shutdown", "reboot",
-                   "service ", "systemctl ", "ifconfig ", "iwconfig",
-                   "free ", "top ", "htop ", "mount ", "umount "];
+    let useless = [
+        "ssh ",
+        "vim ",
+        "nano ",
+        "emacs ",
+        "shutdown",
+        "reboot",
+        "service ",
+        "systemctl ",
+        "ifconfig ",
+        "iwconfig",
+        "free ",
+        "top ",
+        "htop ",
+        "mount ",
+        "umount ",
+    ];
     let mut findings = Vec::new();
     for i in instrs_of(instrs, "RUN") {
         for cmd in &useless {
@@ -1086,7 +1619,9 @@ fn rule_copy_relative_no_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Find
                 stage_workdirs.insert(alias.clone(), true);
             }
         } else if i.instruction == "COPY" {
-            let args: Vec<&str> = i.arguments.split_whitespace()
+            let args: Vec<&str> = i
+                .arguments
+                .split_whitespace()
                 .filter(|t| !t.starts_with("--"))
                 .collect();
             if let Some(dest) = args.last() {
@@ -1117,23 +1652,28 @@ fn rule_useradd_no_l(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let re = Regex::new(r"\buseradd\b").unwrap();
     instrs_of(instrs, "RUN")
         .into_iter()
-        .filter(|i| re.is_match(&i.arguments) && !i.arguments.contains(" -l") && !i.arguments.contains("--no-log-init"))
+        .filter(|i| {
+            re.is_match(&i.arguments)
+                && !i.arguments.contains(" -l")
+                && !i.arguments.contains("--no-log-init")
+        })
         .map(|i| Finding {
             rule: "DF064",
             severity: Severity::Warning,
             line: i.line,
-            message: "useradd without -l flag — high UIDs create oversized /var/log/lastlog entries".to_string(),
+            message:
+                "useradd without -l flag — high UIDs create oversized /var/log/lastlog entries"
+                    .to_string(),
             roast: "useradd without -l (--no-log-init): with a high UID, this creates a sparse \
                     file in /var/log/lastlog that can balloon your image size by gigabytes. \
-                    Add -l or use --no-log-init.".to_string(),
+                    Add -l or use --no-log-init."
+                .to_string(),
         })
         .collect()
 }
 
 fn rule_copy_archive_use_add(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    const ARCHIVE_EXTS: &[&str] = &[
-        ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar.zst", ".tar",
-    ];
+    const ARCHIVE_EXTS: &[&str] = &[".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar.zst", ".tar"];
     instrs_of(instrs, "COPY")
         .into_iter()
         .filter(|i| {
@@ -1141,12 +1681,15 @@ fn rule_copy_archive_use_add(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
             if i.arguments.contains("--from=") || i.arguments.contains("--from =") {
                 return false;
             }
-            let sources: Vec<&str> = i.arguments
+            let sources: Vec<&str> = i
+                .arguments
                 .split_whitespace()
                 .filter(|t| !t.starts_with("--"))
                 .collect();
             // Need at least one source and one destination
-            if sources.len() < 2 { return false; }
+            if sources.len() < 2 {
+                return false;
+            }
             // Check if any source (all but last) is an archive
             sources[..sources.len() - 1]
                 .iter()
@@ -1156,11 +1699,13 @@ fn rule_copy_archive_use_add(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
             rule: "DF067",
             severity: Severity::Info,
             line: i.line,
-            message: "COPY of archive file — consider ADD which auto-extracts local tarballs".to_string(),
+            message: "COPY of archive file — consider ADD which auto-extracts local tarballs"
+                .to_string(),
             roast: "COPY drops the compressed archive as-is; you'll need a separate \
                     RUN tar -xzf layer to unpack it. ADD auto-extracts local tarballs into \
                     the destination directory and saves you the extra layer. \
-                    Yes, this is the one situation where ADD is actually the right choice.".to_string(),
+                    Yes, this is the one situation where ADD is actually the right choice."
+                .to_string(),
         })
         .collect()
 }
@@ -1169,7 +1714,8 @@ fn rule_onbuild_forbidden(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     const FORBIDDEN: &[&str] = &["FROM", "ONBUILD", "MAINTAINER"];
     let mut findings = Vec::new();
     for i in instrs_of(instrs, "ONBUILD") {
-        let triggered = i.arguments
+        let triggered = i
+            .arguments
             .split_whitespace()
             .next()
             .unwrap_or("")
@@ -1199,10 +1745,12 @@ fn rule_onbuild_forbidden(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 
 fn rule_bash_syntax_no_shell(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     // If an explicit SHELL instruction is present, the developer knows what they're doing
-    if has_instr(instrs, "SHELL") { return vec![]; }
+    if has_instr(instrs, "SHELL") {
+        return vec![];
+    }
     // Patterns that are valid bash but not POSIX sh — meaningless or broken on /bin/sh
     const BASH_ONLY: &[(&str, &str)] = &[
-        ("[[ ",   "double-bracket conditional"),
+        ("[[ ", "double-bracket conditional"),
         ("source ", "source builtin (use '.' in POSIX sh)"),
         ("declare ", "declare builtin"),
         ("mapfile ", "mapfile builtin"),
@@ -1238,40 +1786,59 @@ fn rule_bash_syntax_no_shell(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
 
 fn rule_untrusted_registry(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     const TRUSTED: &[&str] = &[
-        "docker.io", "registry-1.docker.io",
-        "ghcr.io", "gcr.io", "quay.io",
-        "mcr.microsoft.com", "registry.access.redhat.com",
-        "public.ecr.aws", "registry.k8s.io", "k8s.gcr.io",
+        "docker.io",
+        "registry-1.docker.io",
+        "ghcr.io",
+        "gcr.io",
+        "quay.io",
+        "mcr.microsoft.com",
+        "registry.access.redhat.com",
+        "public.ecr.aws",
+        "registry.k8s.io",
+        "k8s.gcr.io",
     ];
     let mut findings = Vec::new();
     for i in instrs_of(instrs, "FROM") {
         // Skip --platform=... flags to find the actual image reference
-        let image = match i.arguments.split_whitespace().find(|t| !t.starts_with("--")) {
+        let image = match i
+            .arguments
+            .split_whitespace()
+            .find(|t| !t.starts_with("--"))
+        {
             Some(img) => img,
             None => continue,
         };
-        if image.eq_ignore_ascii_case("scratch") { continue; }
+        if image.eq_ignore_ascii_case("scratch") {
+            continue;
+        }
         // The registry is the first path component when it contains a dot or colon,
         // or is the literal "localhost". Plain names like "ubuntu" or "ubuntu:22.04"
         // with no slash imply docker.io — the colon there is the tag separator, not a port.
-        if !image.contains('/') { continue; }
-        let first = image.split('@').next().unwrap_or(image)
-            .split('/').next().unwrap_or("");
-        if first.contains('.') || first.contains(':') || first == "localhost" {
-            if !TRUSTED.iter().any(|t| first.eq_ignore_ascii_case(t)) {
-                findings.push(Finding {
-                    rule: "DF065",
-                    severity: Severity::Warning,
-                    line: i.line,
-                    message: format!("FROM pulls from unrecognised registry '{}'", first),
-                    roast: format!(
-                        "Pulling base images from '{}' — a registry you don't hear about at \
-                         KubeCon. Supply-chain attacks love Dockerfiles that blindly trust \
-                         random registries. Verify this is intentional and pin to a digest.",
-                        first
-                    ),
-                });
-            }
+        if !image.contains('/') {
+            continue;
+        }
+        let first = image
+            .split('@')
+            .next()
+            .unwrap_or(image)
+            .split('/')
+            .next()
+            .unwrap_or("");
+        if (first.contains('.') || first.contains(':') || first == "localhost")
+            && !TRUSTED.iter().any(|t| first.eq_ignore_ascii_case(t))
+        {
+            findings.push(Finding {
+                rule: "DF065",
+                severity: Severity::Warning,
+                line: i.line,
+                message: format!("FROM pulls from unrecognised registry '{}'", first),
+                roast: format!(
+                    "Pulling base images from '{}' — a registry you don't hear about at \
+                     KubeCon. Supply-chain attacks love Dockerfiles that blindly trust \
+                     random registries. Verify this is intentional and pin to a digest.",
+                    first
+                ),
+            });
         }
     }
     findings
@@ -1295,17 +1862,24 @@ fn rule_pipefail_missing(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             rule: "DF057",
             severity: Severity::Warning,
             line: i.line,
-            message: "RUN with pipe but no pipefail — failed commands in the pipe are silently ignored".to_string(),
+            message:
+                "RUN with pipe but no pipefail — failed commands in the pipe are silently ignored"
+                    .to_string(),
             roast: "A pipe in RUN without `set -o pipefail`. If the left side of that pipe fails, \
                     bash shrugs and moves on. The exit code is whatever the last command returns. \
-                    Add `set -o pipefail` at the start of the RUN.".to_string(),
+                    Add `set -o pipefail` at the start of the RUN."
+                .to_string(),
         })
         .collect()
 }
 
 fn rule_wget_and_curl(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let uses_wget = instrs_of(instrs, "RUN").iter().any(|i| i.arguments.contains("wget "));
-    let uses_curl = instrs_of(instrs, "RUN").iter().any(|i| i.arguments.contains("curl "));
+    let uses_wget = instrs_of(instrs, "RUN")
+        .iter()
+        .any(|i| i.arguments.contains("wget "));
+    let uses_curl = instrs_of(instrs, "RUN")
+        .iter()
+        .any(|i| i.arguments.contains("curl "));
     if uses_wget && uses_curl {
         return vec![Finding {
             rule: "DF058",
@@ -1314,7 +1888,8 @@ fn rule_wget_and_curl(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             message: "Both wget and curl are used — pick one and use it consistently".to_string(),
             roast: "You're using both wget and curl in the same Dockerfile. They do the same \
                     thing. Pick one. Commit to it. Your image doesn't need two download tools \
-                    any more than it needs two fire extinguishers.".to_string(),
+                    any more than it needs two fire extinguishers."
+                .to_string(),
         }];
     }
     vec![]
@@ -1332,10 +1907,12 @@ fn rule_yarn_cache_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             rule: "DF055",
             severity: Severity::Info,
             line: i.line,
-            message: "yarn install without yarn cache clean — yarn cache is left in the image".to_string(),
+            message: "yarn install without yarn cache clean — yarn cache is left in the image"
+                .to_string(),
             roast: "yarn install without cleaning the cache. Yarn dutifully stores downloaded \
                     packages in a cache that you are now shipping to production. \
-                    Add `&& yarn cache clean` after install.".to_string(),
+                    Add `&& yarn cache clean` after install."
+                .to_string(),
         })
         .collect()
 }
@@ -1345,7 +1922,9 @@ fn rule_wget_no_progress(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .into_iter()
         .filter(|i| {
             let a = &i.arguments;
-            a.contains("wget ") && !a.contains("--progress") && !a.contains("-q")
+            a.contains("wget ")
+                && !a.contains("--progress")
+                && !a.contains("-q")
                 && !a.contains("--quiet")
                 && (a.contains("http://") || a.contains("https://") || a.contains("ftp://"))
         })
@@ -1353,10 +1932,12 @@ fn rule_wget_no_progress(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             rule: "DF056",
             severity: Severity::Info,
             line: i.line,
-            message: "wget without --progress flag produces verbose progress output in build logs".to_string(),
+            message: "wget without --progress flag produces verbose progress output in build logs"
+                .to_string(),
             roast: "wget without --progress=dot:giga will spam your build logs with a progress \
                     bar that looks great locally and fills 50MB of CI log storage. \
-                    Use --progress=dot:giga or -q to stay quiet.".to_string(),
+                    Use --progress=dot:giga or -q to stay quiet."
+                .to_string(),
         })
         .collect()
 }
@@ -1367,18 +1948,25 @@ fn rule_pip_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
         .filter(|i| {
             let a = &i.arguments;
             (a.contains("pip install") || a.contains("pip3 install"))
-                && !a.contains("-r ") && !a.contains("--requirement")
-                && !a.contains("==") && !a.contains(">=") && !a.contains("<=")
-                && !a.contains("~=") && !a.contains(".txt")
+                && !a.contains("-r ")
+                && !a.contains("--requirement")
+                && !a.contains("==")
+                && !a.contains(">=")
+                && !a.contains("<=")
+                && !a.contains("~=")
+                && !a.contains(".txt")
         })
         .map(|i| Finding {
             rule: "DF051",
             severity: Severity::Warning,
             line: i.line,
-            message: "pip install without version pinning — use package==version for reproducibility".to_string(),
+            message:
+                "pip install without version pinning — use package==version for reproducibility"
+                    .to_string(),
             roast: "pip install with no version pins. Every build pulls 'latest' and \
                     one day something breaks and you spend three hours bisecting which \
-                    transitive dependency changed. Use package==version.".to_string(),
+                    transitive dependency changed. Use package==version."
+                .to_string(),
         })
         .collect()
 }
@@ -1388,13 +1976,16 @@ fn rule_apk_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
         .into_iter()
         .filter(|i| {
             let a = &i.arguments;
-            if !a.contains("apk add") { return false; }
+            if !a.contains("apk add") {
+                return false;
+            }
             // check if any non-flag arg after "add" has no = for version pinning
             let after_add = match a.find("apk add") {
                 Some(pos) => &a[pos + 7..],
                 None => return false,
             };
-            after_add.split_whitespace()
+            after_add
+                .split_whitespace()
                 .filter(|t| !t.starts_with('-') && !t.is_empty())
                 .any(|t| !t.contains('=') && !t.contains('>') && !t.contains('<'))
         })
@@ -1402,10 +1993,12 @@ fn rule_apk_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
             rule: "DF052",
             severity: Severity::Warning,
             line: i.line,
-            message: "apk add without version pinning — use package=version for reproducibility".to_string(),
+            message: "apk add without version pinning — use package=version for reproducibility"
+                .to_string(),
             roast: "apk add with no version? You chose Alpine to be minimal and fast, then \
                     immediately added unpinned packages. Your builds are non-deterministic \
-                    by design now. Use package=version.".to_string(),
+                    by design now. Use package=version."
+                .to_string(),
         })
         .collect()
 }
@@ -1416,17 +2009,20 @@ fn rule_gem_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
         .filter(|i| {
             let a = &i.arguments;
             a.contains("gem install")
-                && !a.contains(" -v ") && !a.contains("--version")
+                && !a.contains(" -v ")
+                && !a.contains("--version")
                 && !a.contains(':')
         })
         .map(|i| Finding {
             rule: "DF053",
             severity: Severity::Warning,
             line: i.line,
-            message: "gem install without version pinning — use gem install <gem>:<version>".to_string(),
+            message: "gem install without version pinning — use gem install <gem>:<version>"
+                .to_string(),
             roast: "gem install with no version. RubyGems will grab whatever's latest today. \
                     Next week it grabs something else. Your builds are a dice roll. \
-                    Use gem install name:version.".to_string(),
+                    Use gem install name:version."
+                .to_string(),
         })
         .collect()
 }
@@ -1445,7 +2041,8 @@ fn rule_go_install_version(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             message: "go install without @version — use go install package@version".to_string(),
             roast: "go install without @version. The Go toolchain requires a version suffix \
                     in module-aware mode. Use `go install pkg@v1.2.3` or at minimum `@latest` \
-                    if you enjoy living dangerously.".to_string(),
+                    if you enjoy living dangerously."
+                .to_string(),
         })
         .collect()
 }
@@ -1454,7 +2051,9 @@ fn rule_copy_multi_arg_slash(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
     instrs_of(instrs, "COPY")
         .into_iter()
         .filter(|i| {
-            let args: Vec<&str> = i.arguments.split_whitespace()
+            let args: Vec<&str> = i
+                .arguments
+                .split_whitespace()
                 .filter(|t| !t.starts_with("--"))
                 .collect();
             if args.len() > 2 {
@@ -1468,10 +2067,12 @@ fn rule_copy_multi_arg_slash(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
             rule: "DF048",
             severity: Severity::Error,
             line: i.line,
-            message: "COPY with multiple sources requires the destination to end with /".to_string(),
+            message: "COPY with multiple sources requires the destination to end with /"
+                .to_string(),
             roast: "COPY with multiple sources and a destination that doesn't end with /? \
                     Docker will complain. Or worse, silently do something weird. \
-                    Add a trailing slash to the destination.".to_string(),
+                    Add a trailing slash to the destination."
+                .to_string(),
         })
         .collect()
 }
@@ -1489,7 +2090,9 @@ fn rule_copy_from_undefined_stage(instrs: &[Instruction], _raw: &str) -> Vec<Fin
             if let Some(cap) = re_from.captures(&i.arguments) {
                 let from_ref = cap[1].to_lowercase();
                 // skip numeric references like --from=0
-                if from_ref.parse::<usize>().is_ok() { continue; }
+                if from_ref.parse::<usize>().is_ok() {
+                    continue;
+                }
                 if !defined_aliases.contains(&from_ref) {
                     findings.push(Finding {
                         rule: "DF049",
@@ -1560,9 +2163,11 @@ fn rule_dnf_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             rule: "DF046",
             severity: Severity::Warning,
             line: i.line,
-            message: "dnf clean all missing after dnf install — RPM cache bloats the image".to_string(),
+            message: "dnf clean all missing after dnf install — RPM cache bloats the image"
+                .to_string(),
             roast: "dnf install without `dnf clean all` afterwards? You're shipping RPM cache \
-                    metadata to production. That's not a feature. Add `&& dnf clean all`.".to_string(),
+                    metadata to production. That's not a feature. Add `&& dnf clean all`."
+                .to_string(),
         })
         .collect()
 }
@@ -1578,9 +2183,11 @@ fn rule_yum_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             rule: "DF047",
             severity: Severity::Warning,
             line: i.line,
-            message: "yum clean all missing after yum install — cache stays in the image".to_string(),
+            message: "yum clean all missing after yum install — cache stays in the image"
+                .to_string(),
             roast: "yum install without cleanup is just permanently housing the package cache in \
-                    your image. Every MB of yum cache is a MB of shame in your registry.".to_string(),
+                    your image. Every MB of yum cache is a MB of shame in your registry."
+                .to_string(),
         })
         .collect()
 }
@@ -1591,16 +2198,21 @@ fn rule_zypper_no_y(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .filter(|i| {
             let a = &i.arguments;
             (a.contains("zypper install") || a.contains("zypper in "))
-                && !a.contains("-y") && !a.contains("--non-interactive") && !a.contains(" -n ")
-                && !a.contains(" -n\n") && !a.starts_with("-n ")
+                && !a.contains("-y")
+                && !a.contains("--non-interactive")
+                && !a.contains(" -n ")
+                && !a.contains(" -n\n")
+                && !a.starts_with("-n ")
         })
         .map(|i| Finding {
             rule: "DF043",
             severity: Severity::Warning,
             line: i.line,
-            message: "zypper install without non-interactive flag (-y) will hang in a build".to_string(),
+            message: "zypper install without non-interactive flag (-y) will hang in a build"
+                .to_string(),
             roast: "zypper install without -y in a container build? It'll wait for input that \
-                    will never arrive, like a chatbot asking for emotional validation.".to_string(),
+                    will never arrive, like a chatbot asking for emotional validation."
+                .to_string(),
         })
         .collect()
 }
@@ -1608,14 +2220,19 @@ fn rule_zypper_no_y(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 fn rule_zypper_dist_upgrade(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     instrs_of(instrs, "RUN")
         .into_iter()
-        .filter(|i| i.arguments.contains("zypper dist-upgrade") || i.arguments.contains("zypper dup"))
+        .filter(|i| {
+            i.arguments.contains("zypper dist-upgrade") || i.arguments.contains("zypper dup")
+        })
         .map(|i| Finding {
             rule: "DF044",
             severity: Severity::Warning,
             line: i.line,
-            message: "zypper dist-upgrade upgrades all packages unpredictably — avoid in Dockerfiles".to_string(),
+            message:
+                "zypper dist-upgrade upgrades all packages unpredictably — avoid in Dockerfiles"
+                    .to_string(),
             roast: "zypper dist-upgrade: the 'nuke everything and hope for the best' approach to \
-                    package management. Your image will be different every single build. Congrats.".to_string(),
+                    package management. Your image will be different every single build. Congrats."
+                .to_string(),
         })
         .collect()
 }
@@ -1626,15 +2243,19 @@ fn rule_zypper_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .filter(|i| {
             let a = &i.arguments;
             (a.contains("zypper install") || a.contains("zypper in "))
-                && !a.contains("zypper clean") && !a.contains("zypper cc")
+                && !a.contains("zypper clean")
+                && !a.contains("zypper cc")
         })
         .map(|i| Finding {
             rule: "DF045",
             severity: Severity::Info,
             line: i.line,
-            message: "zypper cache not cleaned after install — adds unnecessary image bloat".to_string(),
-            roast: "zypper install without `zypper clean --all` afterwards. You're hoarding package \
-                    metadata in your image. Clean it up.".to_string(),
+            message: "zypper cache not cleaned after install — adds unnecessary image bloat"
+                .to_string(),
+            roast:
+                "zypper install without `zypper clean --all` afterwards. You're hoarding package \
+                    metadata in your image. Clean it up."
+                    .to_string(),
         })
         .collect()
 }
@@ -1666,22 +2287,29 @@ fn rule_expose_port_range(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 
 fn rule_multiple_healthcheck(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let checks: Vec<_> = instrs_of(instrs, "HEALTHCHECK");
-    if checks.len() <= 1 { return vec![]; }
-    checks[1..].iter().map(|i| Finding {
-        rule: "DF041",
-        severity: Severity::Error,
-        line: i.line,
-        message: "Multiple HEALTHCHECK instructions — only the last one applies".to_string(),
-        roast: "Multiple HEALTHCHECKs but only the last one counts. The earlier ones are \
-                haunting your image for no reason. One health check, one truth.".to_string(),
-    }).collect()
+    if checks.len() <= 1 {
+        return vec![];
+    }
+    checks[1..]
+        .iter()
+        .map(|i| Finding {
+            rule: "DF041",
+            severity: Severity::Error,
+            line: i.line,
+            message: "Multiple HEALTHCHECK instructions — only the last one applies".to_string(),
+            roast: "Multiple HEALTHCHECKs but only the last one counts. The earlier ones are \
+                haunting your image for no reason. One health check, one truth."
+                .to_string(),
+        })
+        .collect()
 }
 
 fn rule_unique_stage_aliases(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut findings = Vec::new();
     for i in instrs_of(instrs, "FROM") {
-        if let Some(original_alias) = parse_from_arguments(&i.arguments).and_then(|from| from.alias) {
+        if let Some(original_alias) = parse_from_arguments(&i.arguments).and_then(|from| from.alias)
+        {
             let alias = original_alias.to_lowercase();
             if let Some(&prev_line) = seen.get(&alias) {
                 findings.push(Finding {
@@ -1707,7 +2335,9 @@ fn rule_unique_stage_aliases(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
 }
 
 fn rule_invalid_instruction_order(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    if instrs.is_empty() { return vec![]; }
+    if instrs.is_empty() {
+        return vec![];
+    }
     let first = &instrs[0];
     if first.instruction != "FROM" && first.instruction != "ARG" {
         return vec![Finding {
@@ -1719,7 +2349,8 @@ fn rule_invalid_instruction_order(instrs: &[Instruction], _raw: &str) -> Vec<Fin
                 first.instruction
             ),
             roast: "Your Dockerfile doesn't start with FROM. That's like starting a recipe with \
-                    'season to taste' before listing any ingredients. Docker is confused. So am I.".to_string(),
+                    'season to taste' before listing any ingredients. Docker is confused. So am I."
+                .to_string(),
         }];
     }
     vec![]
@@ -1727,40 +2358,59 @@ fn rule_invalid_instruction_order(instrs: &[Instruction], _raw: &str) -> Vec<Fin
 
 fn rule_multiple_cmd(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let cmds: Vec<_> = instrs_of(instrs, "CMD");
-    if cmds.len() <= 1 { return vec![]; }
-    cmds[1..].iter().map(|i| Finding {
-        rule: "DF038",
-        severity: Severity::Warning,
-        line: i.line,
-        message: "Multiple CMD instructions — only the last one takes effect".to_string(),
-        roast: "Multiple CMDs and only the last one counts. The others are ghosts haunting your \
-                Dockerfile, contributing nothing except confusion. Pick one.".to_string(),
-    }).collect()
+    if cmds.len() <= 1 {
+        return vec![];
+    }
+    cmds[1..]
+        .iter()
+        .map(|i| Finding {
+            rule: "DF038",
+            severity: Severity::Warning,
+            line: i.line,
+            message: "Multiple CMD instructions — only the last one takes effect".to_string(),
+            roast:
+                "Multiple CMDs and only the last one counts. The others are ghosts haunting your \
+                Dockerfile, contributing nothing except confusion. Pick one."
+                    .to_string(),
+        })
+        .collect()
 }
 
 fn rule_multiple_entrypoint(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let eps: Vec<_> = instrs_of(instrs, "ENTRYPOINT");
-    if eps.len() <= 1 { return vec![]; }
-    eps[1..].iter().map(|i| Finding {
-        rule: "DF039",
-        severity: Severity::Error,
-        line: i.line,
-        message: "Multiple ENTRYPOINT instructions — only the last one takes effect".to_string(),
-        roast: "Two ENTRYPOINTs. Bold. Only the last one runs; the first is just expensive \
-                furniture. Delete it.".to_string(),
-    }).collect()
+    if eps.len() <= 1 {
+        return vec![];
+    }
+    eps[1..]
+        .iter()
+        .map(|i| Finding {
+            rule: "DF039",
+            severity: Severity::Error,
+            line: i.line,
+            message: "Multiple ENTRYPOINT instructions — only the last one takes effect"
+                .to_string(),
+            roast: "Two ENTRYPOINTs. Bold. Only the last one runs; the first is just expensive \
+                furniture. Delete it."
+                .to_string(),
+        })
+        .collect()
 }
 
 fn rule_no_user_instruction(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    if has_instr(instrs, "USER") { return vec![]; }
-    if !has_instr(instrs, "CMD") && !has_instr(instrs, "ENTRYPOINT") { return vec![]; }
+    if has_instr(instrs, "USER") {
+        return vec![];
+    }
+    if !has_instr(instrs, "CMD") && !has_instr(instrs, "ENTRYPOINT") {
+        return vec![];
+    }
     vec![Finding {
         rule: "DF020",
         severity: Severity::Warning,
         line: 0,
         message: "No USER instruction found — container will run as root by default".to_string(),
         roast: "No USER set? Bold strategy. Running everything as root in prod is a great way \
-                to ensure job security — for your incident response team.".to_string(),
+                to ensure job security — for your incident response team."
+            .to_string(),
     }]
 }
 
@@ -1774,18 +2424,27 @@ fn rule_apt_upgrade(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             severity: Severity::Warning,
             line: i.line,
             message: "apt-get upgrade/dist-upgrade makes builds non-reproducible".to_string(),
-            roast: "apt-get upgrade: 'let's upgrade everything and see what breaks in six months'. \
+            roast:
+                "apt-get upgrade: 'let's upgrade everything and see what breaks in six months'. \
                     Your image will be different every time you build it. \
-                    Pin the packages you actually need instead of upgrading everything blindly.".to_string(),
+                    Pin the packages you actually need instead of upgrading everything blindly."
+                    .to_string(),
         })
         .collect()
 }
 
 fn rule_copy_before_install(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     const PKG_CMDS: &[&str] = &[
-        "npm install", "npm ci", "pip install", "pip3 install",
-        "yarn install", "yarn add", "bundle install", "composer install",
-        "pnpm install", "bun install",
+        "npm install",
+        "npm ci",
+        "pip install",
+        "pip3 install",
+        "yarn install",
+        "yarn add",
+        "bundle install",
+        "composer install",
+        "pnpm install",
+        "bun install",
     ];
     let mut findings = Vec::new();
     let mut broad_copy_line: Option<usize> = None;
@@ -1796,7 +2455,8 @@ fn rule_copy_before_install(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
                 broad_copy_line = None;
             }
             "COPY" => {
-                let tokens: Vec<&str> = i.arguments
+                let tokens: Vec<&str> = i
+                    .arguments
                     .split_whitespace()
                     .filter(|t| !t.starts_with("--"))
                     .collect();

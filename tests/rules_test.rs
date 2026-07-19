@@ -1,7 +1,7 @@
-/// Integration tests verifying each lint rule fires (or doesn't) correctly.
+//! Integration tests verifying each lint rule fires (or doesn't) correctly.
 
 use dockerfile_roast::parser;
-use dockerfile_roast::rules::{all_rules, Finding};
+use dockerfile_roast::rules::{all_rules, Finding, ALL_CATEGORIES};
 
 fn lint(dockerfile: &str) -> Vec<Finding> {
     let instrs = parser::parse(dockerfile);
@@ -1359,4 +1359,19 @@ fn shell_rules_inspect_run_heredoc_contents() {
     assert!(has_rule(&findings, "DF015"));
     assert!(has_rule(&findings, "DF016"));
     assert!(no_rule(&findings, "DF071"));
+}
+
+#[test]
+fn every_rule_has_known_categories() {
+    for rule in all_rules() {
+        assert!(!rule.categories().is_empty(), "{} has no categories", rule.id);
+        for category in rule.categories() {
+            assert!(
+                ALL_CATEGORIES.contains(category),
+                "{} has unknown category {}",
+                rule.id,
+                category
+            );
+        }
+    }
 }

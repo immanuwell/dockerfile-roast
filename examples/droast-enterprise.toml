@@ -1,0 +1,55 @@
+#:schema https://raw.githubusercontent.com/immanuwell/dockerfile-roast/main/schemas/droast.schema.json
+# Copy this file to droast.toml and replace example.com values.
+# Every setting is optional. This example is intentionally strict.
+
+preset = "production"
+format = "terminal"
+no-roast = true
+no-fail = false
+
+# Suppressions remain possible, but every exception needs a ticket and expiry.
+inline-suppressions = true
+require-suppression-reason = true
+suppression-reason-pattern = "^(SEC|PLAT)-[0-9]+ .+$"
+require-suppression-expiration = true
+max-suppression-days = 90
+report-unused-suppressions = true
+
+# Supply-chain policy. Glob patterns are supported.
+approved-registries = [
+  "docker.io",
+  "ghcr.io",
+  "registry.example.com",
+]
+approved-base-images = [
+  "alpine:3.*",
+  "debian:12.*",
+  "registry.example.com/platform/*@sha256:*",
+]
+
+# Escalate findings that the platform team treats as release blockers.
+[severity-overrides]
+DF001 = "error"
+DF020 = "error"
+DF033 = "warning"
+DF057 = "error"
+DF065 = "error"
+
+# OCI image metadata used by inventory, incident response, and ownership tools.
+[required-labels]
+"org.opencontainers.image.source" = "url"
+"org.opencontainers.image.version" = "semver"
+"org.opencontainers.image.revision" = "hash"
+"org.opencontainers.image.licenses" = "spdx"
+"com.example.owner" = "email"
+
+# Release images get the full rule set and a narrower image policy.
+[[overrides]]
+paths = ["docker/release.Dockerfile", "services/**/Dockerfile.production"]
+preset = "strict"
+approved-base-images = ["registry.example.com/platform/*@sha256:*"]
+
+# Local development images can omit runtime-only checks.
+[[overrides]]
+paths = ["**/Dockerfile.dev", "**/Dockerfile.test"]
+skip = ["DF012", "DF022"]

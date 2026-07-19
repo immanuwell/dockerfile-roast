@@ -8,6 +8,8 @@ pub mod linter;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod output;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod policy;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod repository;
 
 #[cfg(target_arch = "wasm32")]

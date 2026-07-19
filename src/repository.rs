@@ -663,14 +663,12 @@ fn interpolate_path(value: &str, environment: &HashMap<String, String>) -> Optio
                 current
                     .filter(|value| !value.is_empty())
                     .map(String::as_str)?
-            } else if operator.starts_with('?') {
-                current.map(String::as_str)?
-            } else if operator.is_empty() {
+            } else if operator.starts_with('?') || operator.is_empty() {
                 current.map(String::as_str)?
             } else {
                 return None;
             };
-            result.push_str(&replacement);
+            result.push_str(replacement);
             index = end + 1;
             continue;
         }

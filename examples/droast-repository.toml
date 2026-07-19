@@ -1,0 +1,15 @@
+#:schema https://raw.githubusercontent.com/immanuwell/dockerfile-roast/main/schemas/droast.schema.json
+# Copy to the repository root as droast.toml.
+# The inherited path is resolved relative to this file.
+
+extends = ".droast/organization.toml"
+
+# Repository additions are merged with the inherited baseline.
+extend-approved-base-images = [
+  "registry.example.com/platform/java@sha256:*",
+  "registry.example.com/platform/node@sha256:*",
+]
+
+[[overrides]]
+paths = ["migration/**/Dockerfile"]
+skip = ["DF011"]

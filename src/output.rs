@@ -51,7 +51,9 @@ pub fn print_findings(file: &str, findings: &[Finding], format: OutputFormat, no
         OutputFormat::Json => print_json(file, findings),
         OutputFormat::Github => print_github(file, findings),
         OutputFormat::Compact => print_compact(file, findings),
-        OutputFormat::Sarif => unreachable!("SARIF output is handled via print_sarif, not print_findings"),
+        OutputFormat::Sarif => {
+            unreachable!("SARIF output is handled via print_sarif, not print_findings")
+        }
     }
 }
 
@@ -73,7 +75,11 @@ fn print_terminal(file: &str, findings: &[Finding], no_roast: bool) {
         return;
     }
 
-    println!("\n  {} {}\n", "🔥".bold(), format!("Roasting {}...", file).bold());
+    println!(
+        "\n  {} {}\n",
+        "🔥".bold(),
+        format!("Roasting {}...", file).bold()
+    );
 
     for f in findings {
         let line_info = if f.line > 0 {
@@ -101,9 +107,18 @@ fn print_terminal(file: &str, findings: &[Finding], no_roast: bool) {
         }
     }
 
-    let errors = findings.iter().filter(|f| f.severity == Severity::Error).count();
-    let warnings = findings.iter().filter(|f| f.severity == Severity::Warning).count();
-    let infos = findings.iter().filter(|f| f.severity == Severity::Info).count();
+    let errors = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Error)
+        .count();
+    let warnings = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Warning)
+        .count();
+    let infos = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Info)
+        .count();
 
     println!(
         "  {} {} error(s), {} warning(s), {} info(s)",
@@ -114,36 +129,60 @@ fn print_terminal(file: &str, findings: &[Finding], no_roast: bool) {
     );
 
     if errors > 0 {
-        println!("\n  {} This Dockerfile is a liability. Fix the errors.", "💀".bold());
+        println!(
+            "\n  {} This Dockerfile is a liability. Fix the errors.",
+            "💀".bold()
+        );
     } else if warnings > 0 {
-        println!("\n  {} Could be worse. Could also be much better.", "🤔".bold());
+        println!(
+            "\n  {} Could be worse. Could also be much better.",
+            "🤔".bold()
+        );
     } else {
-        println!("\n  {} Only informational findings. You're almost competent.", "📝".bold());
+        println!(
+            "\n  {} Only informational findings. You're almost competent.",
+            "📝".bold()
+        );
     }
     println!();
 }
 
 fn print_json(file: &str, findings: &[Finding]) {
-    println!("{}", serde_json::to_string_pretty(&json_output(file, findings)).unwrap());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json_output(file, findings)).unwrap()
+    );
 }
 
 fn json_output(file: &str, findings: &[Finding]) -> JsonOutput {
-    let errors = findings.iter().filter(|f| f.severity == Severity::Error).count();
-    let warnings = findings.iter().filter(|f| f.severity == Severity::Warning).count();
-    let infos = findings.iter().filter(|f| f.severity == Severity::Info).count();
+    let errors = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Error)
+        .count();
+    let warnings = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Warning)
+        .count();
+    let infos = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Info)
+        .count();
     JsonOutput {
         file: file.to_string(),
         total: findings.len(),
         errors,
         warnings,
         infos,
-        findings: findings.iter().map(|f| JsonFinding {
-            rule: f.rule.to_string(),
-            severity: f.severity.to_string(),
-            line: f.line,
-            message: f.message.clone(),
-            roast: f.roast.clone(),
-        }).collect(),
+        findings: findings
+            .iter()
+            .map(|f| JsonFinding {
+                rule: f.rule.to_string(),
+                severity: f.severity.to_string(),
+                line: f.line,
+                message: f.message.clone(),
+                roast: f.roast.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -168,7 +207,11 @@ fn print_github(file: &str, findings: &[Finding]) {
             Severity::Warning => "warning",
             Severity::Info => "notice",
         };
-        let line_part = if f.line > 0 { format!(",line={}", f.line) } else { String::new() };
+        let line_part = if f.line > 0 {
+            format!(",line={}", f.line)
+        } else {
+            String::new()
+        };
         println!(
             "::{} file={}{},title=[{}] {}::{}",
             level, file, line_part, f.rule, f.message, f.roast
@@ -178,8 +221,15 @@ fn print_github(file: &str, findings: &[Finding]) {
 
 fn print_compact(file: &str, findings: &[Finding]) {
     for f in findings {
-        let line_info = if f.line > 0 { format!(":{}", f.line) } else { String::new() };
-        println!("{}{}:{} [{}] {}", file, line_info, f.severity, f.rule, f.message);
+        let line_info = if f.line > 0 {
+            format!(":{}", f.line)
+        } else {
+            String::new()
+        };
+        println!(
+            "{}{}:{} [{}] {}",
+            file, line_info, f.severity, f.rule, f.message
+        );
     }
 }
 
@@ -199,6 +249,10 @@ fn build_sarif(results: &[(&str, &[Finding])]) -> String {
     let rule_desc: HashMap<&str, &str> = all_rule_meta
         .iter()
         .map(|r| (r.id, r.description))
+        .collect();
+    let rule_categories: HashMap<&str, &[&str]> = all_rule_meta
+        .iter()
+        .map(|rule| (rule.id, rule.categories()))
         .collect();
 
     // Collect the ordered, deduplicated set of rule IDs that actually fired.
@@ -224,7 +278,7 @@ fn build_sarif(results: &[(&str, &[Finding])]) -> String {
         for f in *findings {
             let entry = rule_max_sev.entry(f.rule).or_insert(Severity::Info);
             if f.severity > *entry {
-                *entry = f.severity.clone();
+                *entry = f.severity;
             }
         }
     }
@@ -235,12 +289,14 @@ fn build_sarif(results: &[(&str, &[Finding])]) -> String {
         .map(|&id| {
             let desc = rule_desc.get(id).copied().unwrap_or(id);
             let level = sarif_level(rule_max_sev.get(id).unwrap_or(&Severity::Info));
+            let categories = rule_categories.get(id).copied().unwrap_or_default();
             serde_json::json!({
                 "id": id,
                 "name": id,
                 "shortDescription": { "text": desc },
                 "helpUri": "https://github.com/immanuwell/dockerfile-roast",
-                "defaultConfiguration": { "level": level }
+                "defaultConfiguration": { "level": level },
+                "properties": { "tags": categories }
             })
         })
         .collect();

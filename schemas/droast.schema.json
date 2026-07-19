@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/immanuwell/dockerfile-roast/main/schemas/droast.schema.json",
+  "title": "droast configuration",
+  "description": "Optional Dockerfile lint and organization policy settings.",
+  "type": "object",
+  "allOf": [
+    { "$ref": "#/$defs/settings" }
+  ],
+  "properties": {
+    "extends": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      ]
+    },
+    "preset": { "$ref": "#/$defs/preset" },
+    "overrides": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/pathOverride" }
+    }
+  },
+  "unevaluatedProperties": false,
+  "$defs": {
+    "severity": {
+      "type": "string",
+      "enum": ["info", "warning", "error"]
+    },
+    "preset": {
+      "type": "string",
+      "enum": ["minimal", "security", "performance", "production", "strict"]
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "correctness",
+        "maintainability",
+        "performance",
+        "reliability",
+        "reproducibility",
+        "security",
+        "supply-chain"
+      ]
+    },
+    "ruleList": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^DF[0-9]{3}$" },
+      "uniqueItems": true
+    },
+    "labelFormat": {
+      "type": "string",
+      "anyOf": [
+        { "enum": ["text", "url", "semver", "hash", "rfc3339", "spdx", "email"] },
+        { "pattern": "^regex:.+$" }
+      ]
+    },
+    "settings": {
+      "type": "object",
+      "properties": {
+        "skip": { "$ref": "#/$defs/ruleList" },
+        "min-severity": { "$ref": "#/$defs/severity" },
+        "no-roast": { "type": "boolean" },
+        "no-fail": { "type": "boolean" },
+        "format": {
+          "type": "string",
+          "enum": ["terminal", "json", "github", "compact", "sarif"]
+        },
+        "categories": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/category" },
+          "uniqueItems": true
+        },
+        "skip-categories": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/category" },
+          "uniqueItems": true
+        },
+        "severity-overrides": {
+          "type": "object",
+          "patternProperties": {
+            "^DF[0-9]{3}$": { "$ref": "#/$defs/severity" }
+          },
+          "additionalProperties": false
+        },
+        "inline-suppressions": { "type": "boolean" },
+        "require-suppression-reason": { "type": "boolean" },
+        "suppression-reason-pattern": { "type": "string", "format": "regex" },
+        "require-suppression-expiration": { "type": "boolean" },
+        "max-suppression-days": { "type": "integer", "minimum": 0, "maximum": 365000 },
+        "report-unused-suppressions": { "type": "boolean" },
+        "approved-registries": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "extend-approved-registries": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "approved-base-images": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "extend-approved-base-images": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "required-labels": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/labelFormat" }
+        },
+        "strict-labels": { "type": "boolean" }
+      }
+    },
+    "pathOverride": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/settings" }
+      ],
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "preset": { "$ref": "#/$defs/preset" }
+      },
+      "required": ["paths"],
+      "unevaluatedProperties": false
+    }
+  }
+}

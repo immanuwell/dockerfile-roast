@@ -8,7 +8,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Shell};
 use colored::*;
 
-use config::DroastConfig;
+use config::{DroastConfig, PolicySettings};
 use linter::LintOptions;
 use output::{print_findings, print_summary_header, OutputFormat};
 use rules::Severity;
@@ -113,7 +113,19 @@ struct Cli {
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 
-    /// Output format [default: terminal] [possible values: terminal, json, github, compact]
+    /// Apply a built-in preset: minimal, security, performance, production, or strict
+    #[arg(long, value_name = "NAME")]
+    preset: Option<String>,
+
+    /// Run rules in these categories (comma-separated)
+    #[arg(long, value_delimiter = ',', value_name = "CATEGORY")]
+    category: Vec<String>,
+
+    /// Skip rules in these categories (comma-separated)
+    #[arg(long, value_delimiter = ',', value_name = "CATEGORY")]
+    skip_category: Vec<String>,
+
+    /// Output format: terminal, json, github, compact, or sarif
     #[arg(short, long, value_enum)]
     format: Option<FormatArg>,
 
@@ -121,22 +133,27 @@ struct Cli {
     #[arg(short = 's', long, value_enum)]
     min_severity: Option<SeverityArg>,
 
+    /// Skip these comma-separated rule IDs
     #[arg(long, value_delimiter = ',', value_name = "RULE")]
     skip: Vec<String>,
 
-    /// Run only these rules (comma-separated IDs). Overrides --skip when both are given.
+    /// Run only these comma-separated rule IDs
     #[arg(long, value_delimiter = ',', value_name = "RULE")]
     only: Vec<String>,
 
+    /// Show technical messages without roast text
     #[arg(long)]
     no_roast: bool,
 
+    /// Check the effective .dockerignore for every build context
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     check_dockerignore: bool,
 
+    /// Always exit successfully after linting
     #[arg(long)]
     no_fail: bool,
 
+    /// List rule IDs, severities, categories, and descriptions
     #[arg(long)]
     list_rules: bool,
 
@@ -149,7 +166,12 @@ fn main() -> Result<()> {
 
     match cli.command {
         Some(Commands::Completion { shell }) => {
-            generate(Shell::from(shell), &mut Cli::command(), "droast", &mut io::stdout());
+            generate(
+                Shell::from(shell),
+                &mut Cli::command(),
+                "droast",
+                &mut io::stdout(),
+            );
             return Ok(());
         }
         Some(Commands::Init) => {
@@ -171,35 +193,25 @@ fn main() -> Result<()> {
     // Priority: CLI flag > droast.toml > built-in default.
     let cfg = match &cli.config {
         Some(path) => DroastConfig::load_from(path)?,
-        None => DroastConfig::load(),
+        None => DroastConfig::try_load()?,
     };
 
-    let format: OutputFormat = cli.format
+    let mut global_settings = cfg.settings.clone();
+    if cli.preset.is_some() {
+        global_settings.merge(config::preset_settings(cli.preset.as_deref())?);
+    }
+
+    let format: OutputFormat = cli
+        .format
         .map(Into::into)
-        .or_else(|| parse_format(cfg.format.as_deref()))
+        .or_else(|| parse_format(global_settings.format.as_deref()))
         .unwrap_or(OutputFormat::Terminal);
 
-    let min_severity: Severity = cli.min_severity
-        .map(Into::into)
-        .or_else(|| parse_severity(cfg.min_severity.as_deref()))
-        .unwrap_or(Severity::Info);
-
     // --no-roast on CLI always wins; config can also enable it.
-    let no_roast = cli.no_roast || cfg.no_roast.unwrap_or(false);
+    let no_roast = cli.no_roast || global_settings.no_roast.unwrap_or(false);
 
     // --no-fail on CLI always wins; config can also enable it.
-    let no_fail = cli.no_fail || cfg.no_fail.unwrap_or(false);
-
-    // skip: union of CLI and config (config = baseline, CLI = additions).
-    let mut skip = cli.skip.clone();
-    if let Some(config_skip) = &cfg.skip {
-        for rule in config_skip {
-            let normalized = rule.to_uppercase();
-            if !skip.iter().any(|s| s.eq_ignore_ascii_case(&normalized)) {
-                skip.push(normalized);
-            }
-        }
-    }
+    let no_fail = cli.no_fail || global_settings.no_fail.unwrap_or(false);
 
     // SARIF suppresses the ASCII banner — it writes pure JSON to stdout.
     if format == OutputFormat::Terminal {
@@ -219,13 +231,6 @@ fn main() -> Result<()> {
         exit(1);
     }
 
-    let opts = LintOptions {
-        skip_rules: skip,
-        only_rules: cli.only.iter().map(|s| s.to_uppercase()).collect(),
-        min_severity,
-        check_dockerignore: cli.check_dockerignore,
-    };
-
     let mut any_error = false;
     let mut total_findings = 0usize;
 
@@ -233,9 +238,14 @@ fn main() -> Result<()> {
         // Document formats collect all results and emit exactly one valid document.
         let mut all_results: Vec<linter::LintResult> = Vec::new();
         for file in &files {
+            let settings = effective_settings(&cfg, &cli, &file.dockerfile)?;
+            let opts = lint_options(&settings, &cli)?;
+            let file_no_fail = cli.no_fail || settings.no_fail.unwrap_or(no_fail);
             match lint_one(file, &opts) {
                 Ok(result) => {
-                    if linter::has_errors(&result.findings) { any_error = true; }
+                    if linter::has_errors(&result.findings) && !file_no_fail {
+                        any_error = true;
+                    }
                     all_results.push(result);
                 }
                 Err(e) => {
@@ -255,11 +265,17 @@ fn main() -> Result<()> {
         }
     } else {
         for file in &files {
+            let settings = effective_settings(&cfg, &cli, &file.dockerfile)?;
+            let opts = lint_options(&settings, &cli)?;
+            let file_no_roast = cli.no_roast || settings.no_roast.unwrap_or(no_roast);
+            let file_no_fail = cli.no_fail || settings.no_fail.unwrap_or(no_fail);
             match lint_one(file, &opts) {
                 Ok(result) => {
                     total_findings += result.findings.len();
-                    if linter::has_errors(&result.findings) { any_error = true; }
-                    print_findings(&result.file, &result.findings, format, no_roast);
+                    if linter::has_errors(&result.findings) && !file_no_fail {
+                        any_error = true;
+                    }
+                    print_findings(&result.file, &result.findings, format, file_no_roast);
                 }
                 Err(e) => {
                     eprintln!("{} {}", "x".red().bold(), e);
@@ -270,13 +286,104 @@ fn main() -> Result<()> {
         if files.len() > 1 && format == OutputFormat::Terminal {
             println!(
                 "  {} Linted {} file(s), {} total finding(s)\n",
-                "-".dimmed(), files.len(), total_findings
+                "-".dimmed(),
+                files.len(),
+                total_findings
             );
         }
     }
 
-    if any_error && !no_fail { exit(1); }
+    if any_error && !no_fail {
+        exit(1);
+    }
     Ok(())
+}
+
+fn effective_settings(
+    config: &DroastConfig,
+    cli: &Cli,
+    path: &std::path::Path,
+) -> anyhow::Result<PolicySettings> {
+    let mut settings = config.effective_for(path)?;
+    if cli.preset.is_some() {
+        settings.merge(config::preset_settings(cli.preset.as_deref())?);
+    }
+    if !cli.category.is_empty() {
+        settings.categories = Some(cli.category.clone());
+    }
+    if !cli.skip_category.is_empty() {
+        let mut categories = settings.skip_categories.take().unwrap_or_default();
+        for category in &cli.skip_category {
+            if !categories
+                .iter()
+                .any(|current| current.eq_ignore_ascii_case(category))
+            {
+                categories.push(category.clone());
+            }
+        }
+        settings.skip_categories = Some(categories);
+    }
+    settings.validate("effective CLI configuration")?;
+    Ok(settings)
+}
+
+fn lint_options(settings: &PolicySettings, cli: &Cli) -> anyhow::Result<LintOptions> {
+    let known_rules = rules::all_rules()
+        .into_iter()
+        .map(|rule| rule.id)
+        .collect::<std::collections::HashSet<_>>();
+    for rule in cli.skip.iter().chain(&cli.only) {
+        let normalized = rule.to_ascii_uppercase();
+        if !known_rules.contains(normalized.as_str()) {
+            anyhow::bail!("Unknown rule ID '{}' on the command line", rule);
+        }
+    }
+    let mut skip = settings.skip.clone().unwrap_or_default();
+    for rule in &cli.skip {
+        if !skip
+            .iter()
+            .any(|current| current.eq_ignore_ascii_case(rule))
+        {
+            skip.push(rule.to_ascii_uppercase());
+        }
+    }
+    let severity_overrides = settings
+        .severity_overrides
+        .iter()
+        .map(|(rule, severity)| {
+            parse_severity(Some(severity))
+                .map(|severity| (rule.to_ascii_uppercase(), severity))
+                .ok_or_else(|| anyhow::anyhow!("Invalid severity override for {rule}"))
+        })
+        .collect::<anyhow::Result<std::collections::BTreeMap<_, _>>>()?;
+
+    Ok(LintOptions {
+        skip_rules: skip,
+        only_rules: cli
+            .only
+            .iter()
+            .map(|rule| rule.to_ascii_uppercase())
+            .collect(),
+        min_severity: cli
+            .min_severity
+            .map(Into::into)
+            .or_else(|| parse_severity(settings.min_severity.as_deref()))
+            .unwrap_or(Severity::Info),
+        check_dockerignore: cli.check_dockerignore,
+        severity_overrides,
+        categories: settings.categories.clone().unwrap_or_default(),
+        skip_categories: settings.skip_categories.clone().unwrap_or_default(),
+        inline_suppressions: settings.inline_suppressions.unwrap_or(true),
+        require_suppression_reason: settings.require_suppression_reason.unwrap_or(false),
+        suppression_reason_pattern: settings.suppression_reason_pattern.clone(),
+        require_suppression_expiration: settings.require_suppression_expiration.unwrap_or(false),
+        max_suppression_days: settings.max_suppression_days,
+        report_unused_suppressions: settings.report_unused_suppressions.unwrap_or(false),
+        approved_registries: settings.approved_registries.clone(),
+        approved_base_images: settings.approved_base_images.clone(),
+        required_labels: settings.required_labels.clone(),
+        strict_labels: settings.strict_labels.unwrap_or(false),
+    })
 }
 
 fn cmd_init() -> Result<()> {
@@ -294,64 +401,84 @@ fn cmd_init() -> Result<()> {
     Ok(())
 }
 
-const CONFIG_TEMPLATE: &str = r#"# droast.toml — project-level configuration
+const CONFIG_TEMPLATE: &str = r#"# droast.toml - optional project and organization policy
 # https://github.com/immanuwell/dockerfile-roast
 #
 # All settings are optional and commented out by default.
 # This file has no effect until you uncomment a line.
 # CLI flags always take precedence over values set here.
-#
-# droast searches for this file starting from the current directory,
-# walking up to the nearest .git root.
 
-# ── rules ────────────────────────────────────────────────────────────────────
+# Inherit one or more local policy files. Relative paths start here.
+# extends = [".config/company-droast.toml"]
 
-# Suppress specific rules project-wide. Useful for rules your team has
-# consciously accepted (e.g. no HEALTHCHECK by design, no EXPOSE needed).
-# Run `droast --list-rules` for the full list of rule IDs.
-#
+# Built-in presets: minimal | security | performance | production | strict
+# Explicit settings below override preset defaults.
+# preset = "production"
+
+# Rules and severity
 # skip = ["DF012", "DF022"]
-
-# ── severity ─────────────────────────────────────────────────────────────────
-
-# Minimum severity level to report.
-# Values: "info" (default) | "warning" | "error"
-# "warning" is a good default for CI — suppresses style hints, keeps real issues.
-#
 # min-severity = "info"
+# categories = ["security", "supply-chain"]
+# skip-categories = ["maintainability"]
 
-# ── output ───────────────────────────────────────────────────────────────────
+# Governed inline suppressions
+# Syntax:
+#   # droast ignore=DF001 reason="migration" expires=2026-09-30
+#   # droast global ignore=DF020 reason="runtime user" expires=2026-09-30
+# inline-suppressions = true
+# require-suppression-reason = false
+# suppression-reason-pattern = "^(SEC|PLAT)-[0-9]+ .+$"
+# require-suppression-expiration = false
+# max-suppression-days = 90
+# report-unused-suppressions = false
 
-# Output format.
-# Values: "terminal" (default) | "github" | "json" | "compact"
-# Use "github" in GitHub Actions to get inline PR annotations.
-# Use "json" to pipe findings into other tools.
-#
+# Supply-chain allowlists support glob patterns.
+# approved-registries = ["docker.io", "ghcr.io", "registry.example.com"]
+# extend-approved-registries = ["mirror.example.com"]
+# approved-base-images = ["alpine:3.*", "ghcr.io/example/runtime@sha256:*"]
+# extend-approved-base-images = ["ghcr.io/example/extra-runtime@sha256:*"]
+
+# Output and behavior
 # format = "terminal"
-
-# ── behaviour ────────────────────────────────────────────────────────────────
-
-# Suppress roast messages — print technical descriptions only.
-# Useful if your team finds the humour distracting (they're wrong, but ok).
-#
 # no-roast = false
-
-# Advisory mode: never exit with code 1, even when errors are found.
-# Findings are still printed; the build is never blocked.
-# Handy while rolling droast out across a large codebase.
-#
 # no-fail = false
+
+# Image label schema
+# strict-labels = false
+#
+# [severity-overrides]
+# DF013 = "error"
+# DF033 = "warning"
+#
+# [required-labels]
+# "org.opencontainers.image.source" = "url"
+# "org.opencontainers.image.version" = "semver"
+# "org.opencontainers.image.revision" = "hash"
+# "org.opencontainers.image.licenses" = "spdx"
+
+# Path-specific policy. Matching blocks are applied in order.
+# [[overrides]]
+# paths = ["services/**/Dockerfile", "services/**/*.Dockerfile"]
+# preset = "strict"
+# skip = ["DF012"]
+#
+# [overrides.severity-overrides]
+# DF020 = "error"
 "#;
 
 fn parse_format(s: Option<&str>) -> Option<OutputFormat> {
     match s? {
         "terminal" => Some(OutputFormat::Terminal),
-        "json"     => Some(OutputFormat::Json),
-        "github"   => Some(OutputFormat::Github),
-        "compact"  => Some(OutputFormat::Compact),
-        "sarif"    => Some(OutputFormat::Sarif),
+        "json" => Some(OutputFormat::Json),
+        "github" => Some(OutputFormat::Github),
+        "compact" => Some(OutputFormat::Compact),
+        "sarif" => Some(OutputFormat::Sarif),
         other => {
-            eprintln!("{} droast.toml: unknown format {:?}, ignoring", "!".yellow(), other);
+            eprintln!(
+                "{} droast.toml: unknown format {:?}, ignoring",
+                "!".yellow(),
+                other
+            );
             None
         }
     }
@@ -359,11 +486,15 @@ fn parse_format(s: Option<&str>) -> Option<OutputFormat> {
 
 fn parse_severity(s: Option<&str>) -> Option<Severity> {
     match s? {
-        "info"    => Some(Severity::Info),
+        "info" => Some(Severity::Info),
         "warning" => Some(Severity::Warning),
-        "error"   => Some(Severity::Error),
+        "error" => Some(Severity::Error),
         other => {
-            eprintln!("{} droast.toml: unknown min-severity {:?}, ignoring", "!".yellow(), other);
+            eprintln!(
+                "{} droast.toml: unknown min-severity {:?}, ignoring",
+                "!".yellow(),
+                other
+            );
             None
         }
     }
@@ -380,10 +511,14 @@ fn exit(code: i32) -> ! {
 }
 
 /// Lint a single file path or `-` (stdin).
-fn lint_one(input: &repository::BuildInput, opts: &linter::LintOptions) -> anyhow::Result<linter::LintResult> {
+fn lint_one(
+    input: &repository::BuildInput,
+    opts: &linter::LintOptions,
+) -> anyhow::Result<linter::LintResult> {
     if input.dockerfile == std::path::Path::new("-") {
         let mut content = String::new();
-        std::io::stdin().read_to_string(&mut content)
+        std::io::stdin()
+            .read_to_string(&mut content)
             .map_err(|e| anyhow::anyhow!("Failed to read stdin: {e}"))?;
         Ok(linter::lint_content(&content, "<stdin>", opts))
     } else {
@@ -393,15 +528,27 @@ fn lint_one(input: &repository::BuildInput, opts: &linter::LintOptions) -> anyho
 
 fn print_rule_list() {
     println!("\n  {}\n", "Available Rules".bold().underline());
-    println!("  {:<8} {:<8} {}", "ID".bold(), "SEVERITY".bold(), "DESCRIPTION".bold());
-    println!("  {}", "─".repeat(80));
+    println!(
+        "  {:<8} {:<8} {:<34} {}",
+        "ID".bold(),
+        "SEVERITY".bold(),
+        "CATEGORIES".bold(),
+        "DESCRIPTION".bold()
+    );
+    println!("  {}", "─".repeat(118));
     for rule in rules::all_rules() {
         let sev = match rule.severity {
-            rules::Severity::Error   => "ERROR".red().bold(),
+            rules::Severity::Error => "ERROR".red().bold(),
             rules::Severity::Warning => "WARN ".yellow().bold(),
-            rules::Severity::Info    => "INFO ".cyan(),
+            rules::Severity::Info => "INFO ".cyan(),
         };
-        println!("  {:<8} {} {}", rule.id.cyan(), sev, rule.description);
+        println!(
+            "  {:<8} {} {:<34} {}",
+            rule.id.cyan(),
+            sev,
+            rule.categories().join(","),
+            rule.description
+        );
     }
     println!();
     println!("  Use --skip DF001,DF002 to suppress specific rules.");
@@ -417,6 +564,7 @@ fn print_rule_list_json() {
                 "id": rule.id,
                 "severity": rule.severity.to_string(),
                 "description": rule.description,
+                "categories": rule.categories(),
             })
         })
         .collect();

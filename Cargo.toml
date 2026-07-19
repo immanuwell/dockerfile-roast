@@ -9,7 +9,7 @@ homepage = "https://github.com/immanuwell/dockerfile-roast"
 readme = "README.md"
 keywords = ["dockerfile", "linter", "docker", "cli"]
 categories = ["command-line-utilities", "development-tools"]
-include = ["/src/**", "/tests/**", "/Cargo.toml", "/Cargo.lock", "/build.rs", "/README.md", "/LICENSE"]
+include = ["/src/**", "/tests/**", "/examples/**", "/schemas/**", "/Cargo.toml", "/Cargo.lock", "/build.rs", "/README.md", "/DOCS.md", "/LICENSE"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -34,6 +34,9 @@ dotenvy = "0.15.7"
 hcl-rs = "0.19.7"
 ignore = "0.4"
 serde_yaml = "0.9.34"
+semver = "1"
+spdx = "0.10"
+time = { version = "0.3", features = ["parsing"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

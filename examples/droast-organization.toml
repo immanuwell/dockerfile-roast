@@ -1,0 +1,29 @@
+#:schema https://raw.githubusercontent.com/immanuwell/dockerfile-roast/main/schemas/droast.schema.json
+# Central policy intended to be inherited by repository droast.toml files.
+# Distribute this as a pinned file through your normal platform tooling.
+
+preset = "production"
+no-roast = true
+require-suppression-reason = true
+suppression-reason-pattern = "^(SEC|PLAT)-[0-9]+ .+$"
+require-suppression-expiration = true
+max-suppression-days = 90
+report-unused-suppressions = true
+
+approved-registries = [
+  "docker.io",
+  "ghcr.io",
+  "registry.example.com",
+]
+
+[severity-overrides]
+DF013 = "error"
+DF014 = "error"
+DF021 = "error"
+DF057 = "error"
+DF065 = "error"
+
+[required-labels]
+"org.opencontainers.image.source" = "url"
+"org.opencontainers.image.revision" = "hash"
+"com.example.owner" = "email"
