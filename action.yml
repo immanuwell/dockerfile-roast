@@ -42,7 +42,7 @@ inputs:
     required: false
     default: 'false'
   image-tag:
-    description: 'droast image tag to pull (e.g. latest, 1.4.2)' # droast:release-version
+    description: 'droast image tag to pull (e.g. latest, 1.4.3)' # droast:release-version
     required: false
     default: 'latest'
 

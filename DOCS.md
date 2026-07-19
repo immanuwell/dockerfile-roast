@@ -135,7 +135,7 @@ The release includes Linux, macOS, and Windows builds. Put the extracted executa
 ### Container image
 
 ```bash
-docker pull ghcr.io/immanuwell/droast:1.4.2
+docker pull ghcr.io/immanuwell/droast:1.4.3
 ```
 
 Use a fixed version in CI. Use `latest` only when automatic upgrades are acceptable.
@@ -157,7 +157,7 @@ wasmer run --volume "$PWD:/workspace" immanuwell/droast -- /workspace
 Use a fixed package version in CI:
 
 ```bash
-wasmer run --volume "$PWD:/workspace" immanuwell/droast@1.4.2 -- /workspace
+wasmer run --volume "$PWD:/workspace" immanuwell/droast@1.4.3 -- /workspace
 ```
 
 When the repository uses configuration, pass its mounted path explicitly:
@@ -1125,12 +1125,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: immanuwell/dockerfile-roast@1.4.2
+      - uses: immanuwell/dockerfile-roast@1.4.3
         with:
           files: .
           min-severity: warning
           no-roast: true
-          image-tag: 1.4.2
+          image-tag: 1.4.3
 ```
 
 The action defaults to the root `Dockerfile`. Set `files: .` for recursive repository discovery, Compose, and Bake awareness.
@@ -1152,34 +1152,34 @@ Action inputs:
 Preset example:
 
 ```yaml
-- uses: immanuwell/dockerfile-roast@1.4.2
+- uses: immanuwell/dockerfile-roast@1.4.3
   with:
     files: .
     preset: security
-    image-tag: 1.4.2
+    image-tag: 1.4.3
 ```
 
 Non-blocking rollout:
 
 ```yaml
-- uses: immanuwell/dockerfile-roast@1.4.2
+- uses: immanuwell/dockerfile-roast@1.4.3
   with:
     files: .
     min-severity: info
     no-roast: true
     no-fail: true
-    image-tag: 1.4.2
+    image-tag: 1.4.3
 ```
 
 Skip reviewed exceptions:
 
 ```yaml
-- uses: immanuwell/dockerfile-roast@1.4.2
+- uses: immanuwell/dockerfile-roast@1.4.3
   with:
     files: .
     skip: DF012,DF022
     no-roast: true
-    image-tag: 1.4.2
+    image-tag: 1.4.3
 ```
 
 ### GitHub code scanning with SARIF
@@ -1206,7 +1206,7 @@ jobs:
           docker run --rm \
             -v "$GITHUB_WORKSPACE:/workspace" \
             -w /workspace \
-            ghcr.io/immanuwell/droast:1.4.2 \
+            ghcr.io/immanuwell/droast:1.4.3 \
             --format sarif --no-roast --no-fail . > droast.sarif
       - uses: github/codeql-action/upload-sarif@v3
         with:
@@ -1218,7 +1218,7 @@ jobs:
 ```yaml
 droast:
   image:
-    name: ghcr.io/immanuwell/droast:1.4.2
+    name: ghcr.io/immanuwell/droast:1.4.3
     entrypoint: [""]
   script:
     - droast --no-roast --min-severity warning .
@@ -1250,7 +1250,7 @@ jobs:
             docker run --rm \
               -v "$PWD:/workspace" \
               -w /workspace \
-              ghcr.io/immanuwell/droast:1.4.2 \
+              ghcr.io/immanuwell/droast:1.4.3 \
               --no-roast --min-severity warning .
 
 workflows:
@@ -1271,7 +1271,7 @@ pipeline {
           docker run --rm \
             -v "$WORKSPACE:/workspace" \
             -w /workspace \
-            ghcr.io/immanuwell/droast:1.4.2 \
+            ghcr.io/immanuwell/droast:1.4.3 \
             --no-roast --min-severity warning .
         '''
       }
@@ -1289,7 +1289,7 @@ steps:
       docker run --rm \
         -v "$(Build.SourcesDirectory):/workspace" \
         -w /workspace \
-        ghcr.io/immanuwell/droast:1.4.2 \
+        ghcr.io/immanuwell/droast:1.4.3 \
         --no-roast --min-severity warning .
     displayName: Lint Dockerfiles
 ```
@@ -1354,7 +1354,7 @@ Use `droast .` in CI when Compose, Bake, or build-context resolution matters.
 docker run --rm \
   -v "$PWD:/workspace" \
   -w /workspace \
-  ghcr.io/immanuwell/droast:1.4.2 \
+  ghcr.io/immanuwell/droast:1.4.3 \
   --no-roast .
 ```
 
@@ -1364,7 +1364,7 @@ docker run --rm \
 docker run --rm \
   -v "$PWD:/workspace" \
   -w /workspace \
-  ghcr.io/immanuwell/droast:1.4.2 \
+  ghcr.io/immanuwell/droast:1.4.3 \
   Dockerfile
 ```
 
@@ -1374,7 +1374,7 @@ docker run --rm \
 docker run --rm \
   -v "$PWD:/workspace" \
   -w /workspace \
-  ghcr.io/immanuwell/droast:1.4.2 \
+  ghcr.io/immanuwell/droast:1.4.3 \
   --format json --no-roast --no-fail . > droast.json
 ```
 
@@ -1386,7 +1386,7 @@ Linting does not need to change the repository:
 docker run --rm \
   -v "$PWD:/workspace:ro" \
   -w /workspace \
-  ghcr.io/immanuwell/droast:1.4.2 \
+  ghcr.io/immanuwell/droast:1.4.3 \
   --no-roast .
 ```
 
@@ -1463,7 +1463,7 @@ Add it:
 
 ```toml
 [dependencies]
-dockerfile-roast = "1.4.2"
+dockerfile-roast = "1.4.3"
 ```
 
 ### Lint text
