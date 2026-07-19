@@ -23,7 +23,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref }}
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -41,7 +41,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref }}
 
       - name: Log in to GHCR
         uses: docker/login-action@v4
@@ -91,7 +91,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -110,7 +110,7 @@ jobs:
 
       - name: Install Wasmer
         run: |
-          curl https://get.wasmer.io -sSfL | sh -s "v 7.1.0"
+          curl https://get.wasmer.io -sSfL | sh -s -- v7.1.0
           echo "$HOME/.wasmer/bin" >> "$GITHUB_PATH"
           "$HOME/.wasmer/bin/wasmer" --version
 

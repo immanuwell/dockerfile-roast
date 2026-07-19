@@ -1,4 +1,4 @@
-FROM rust:1.85-alpine AS builder
+FROM rust:1.88-alpine AS builder
 
 RUN apk add --no-cache musl-dev
 
@@ -9,7 +9,7 @@ COPY src ./src
 
 ARG DROAST_VERSION
 ENV DROAST_VERSION=${DROAST_VERSION}
-RUN cargo build --release --bin droast
+RUN cargo build --release --locked --bin droast
 
 # ─────────────────────────────────────────────────────────────────────────────
 
