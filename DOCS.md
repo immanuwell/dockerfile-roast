@@ -1914,6 +1914,10 @@ let instructions = parse("FROM alpine:3.20\n");
 
 Run `droast --list-rules` for the authoritative list in the installed version. This catalog describes all 75 current rules.
 
+### Docker build-check compatibility
+
+[`compatibility/docker-build-checks.json`](compatibility/docker-build-checks.json) is the machine-readable contract for Docker's current 21 build checks. `supported` means a rule has matching semantics and a direct compatibility fixture; `partial` means Droast overlaps but does not yet claim parity; `planned` has no compatible implementation yet. The matrix is intentionally conservative and tested for complete coverage of Docker's published check list.
+
 ### Base images, stages, and reproducibility
 
 | Rule | Severity | Check |

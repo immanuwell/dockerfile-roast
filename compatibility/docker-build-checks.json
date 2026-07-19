@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "source": "https://docs.docker.com/reference/build-checks/",
+  "checks": [
+    {"docker_check": "ConsistentInstructionCasing", "status": "planned", "droast_rules": []},
+    {"docker_check": "CopyIgnoredFile", "status": "planned", "droast_rules": ["DF033"]},
+    {"docker_check": "DuplicateStageName", "status": "partial", "droast_rules": ["DF042"]},
+    {"docker_check": "ExposeInvalidFormat", "status": "partial", "droast_rules": ["DF040"]},
+    {"docker_check": "ExposeProtoCasing", "status": "planned", "droast_rules": []},
+    {"docker_check": "FromAsCasing", "status": "planned", "droast_rules": []},
+    {"docker_check": "FromPlatformFlagConstDisallowed", "status": "partial", "droast_rules": ["DF061"]},
+    {"docker_check": "InvalidDefaultArgInFrom", "status": "planned", "droast_rules": []},
+    {"docker_check": "InvalidDefinitionDescription", "status": "planned", "droast_rules": []},
+    {"docker_check": "JSONArgsRecommended", "status": "partial", "droast_rules": ["DF018", "DF025"]},
+    {"docker_check": "LegacyKeyValueFormat", "status": "planned", "droast_rules": []},
+    {"docker_check": "MaintainerDeprecated", "status": "partial", "droast_rules": ["DF019"]},
+    {"docker_check": "MultipleInstructionsDisallowed", "status": "partial", "droast_rules": ["DF038", "DF039", "DF041"]},
+    {"docker_check": "NoEmptyContinuation", "status": "partial", "droast_rules": ["DF071"]},
+    {"docker_check": "RedundantTargetPlatform", "status": "planned", "droast_rules": []},
+    {"docker_check": "ReservedStageName", "status": "planned", "droast_rules": []},
+    {"docker_check": "SecretsUsedInArgOrEnv", "status": "partial", "droast_rules": ["DF013", "DF014"]},
+    {"docker_check": "StageNameCasing", "status": "planned", "droast_rules": []},
+    {"docker_check": "UndefinedArgInFrom", "status": "planned", "droast_rules": []},
+    {"docker_check": "UndefinedVar", "status": "planned", "droast_rules": []},
+    {"docker_check": "WorkdirRelativePath", "status": "partial", "droast_rules": ["DF009"]}
+  ]
+}
