@@ -108,7 +108,7 @@ droast --format sarif Dockerfile     # SARIF 2.1.0 for GitHub Advanced Security 
 
 When given a directory—or no path at all—droast recursively discovers `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `Containerfile`, and `Containerfile.*`. It also reads Compose YAML and Docker Bake HCL/JSON files to find non-standard Dockerfile paths and their declared build contexts. Repository ignore rules are respected, while hidden project directories such as `.devcontainer` remain discoverable.
 
-For `DF033`, droast uses the effective ignore file Docker would use: `<Dockerfile>.dockerignore` beside the Dockerfile takes precedence over `.dockerignore` at the build-context root. Missing, empty, comment-only, and negation-only ignore files are reported; use `--check-dockerignore=false` to disable this context check.
+For `DF033`, Docker mode uses the effective ignore file Docker would use: `<Dockerfile>.dockerignore` beside the Dockerfile takes precedence over `.dockerignore` at the build-context root. Podman mode instead prefers `.containerignore`, then falls back to `.dockerignore`. Select it with `--engine podman` or `[workflow] engine = "podman"`. Missing, empty, comment-only, and negation-only ignore files are reported; use `--check-ignorefile=false` to disable this context check.
 
 ## configuration
 
@@ -127,6 +127,9 @@ DF020 = "error"
 [shellcheck]
 mode = "auto" # off (default) | auto | required
 exclude = ["SC2086"]
+
+[workflow]
+engine = "podman" # docker (default) | podman
 ```
 
 droast searches for `droast.toml` starting from the current directory, walking up to the nearest `.git` root. CLI flags always take precedence over the file — the file just sets the defaults so you don't repeat yourself.
@@ -195,6 +198,7 @@ available inputs (all optional):
 | `skip` | — | comma-separated rule IDs to ignore |
 | `no-roast` | `false` | technical output only, no jokes |
 | `no-fail` | `false` | advisory mode — never blocks the build |
+| `engine` | config or `docker` | build-context conventions: `docker` or `podman` |
 | `image-tag` | `latest` | pin to a specific droast release, e.g. `1.4.4` |
 
 example with options:
@@ -252,6 +256,25 @@ docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile droast /Dockerfile
 ```
 
 the image is published automatically to `ghcr.io/immanuwell/droast` on every release tag.
+
+## podman
+
+the same OCI image works with rootless Podman. Mount the repository with `:Z` on SELinux hosts so Podman can relabel it for the container:
+
+```bash
+podman run --rm \
+    -v "$PWD:/workspace:Z" \
+    -w /workspace \
+    ghcr.io/immanuwell/droast \
+    --engine podman .
+```
+
+`--engine podman` makes `DF033` follow Podman’s `.containerignore`-before-`.dockerignore` precedence; it does not require a Podman daemon or change Dockerfile parsing. Persist that workflow for a repository with:
+
+```toml
+[workflow]
+engine = "podman"
+```
 
 ## wasmer
 

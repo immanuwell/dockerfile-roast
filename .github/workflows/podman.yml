@@ -1,0 +1,29 @@
+name: Podman compatibility
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  container-workflow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Podman
+        run: |
+          if ! command -v podman >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --yes podman
+          fi
+          podman --version
+
+      - name: Build and run droast with Podman
+        run: |
+          podman build --build-arg DROAST_VERSION=test -t droast-podman-test .
+          podman run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace:Z" \
+            -w /workspace \
+            droast-podman-test \
+            --engine podman --only DF071 --no-fail .

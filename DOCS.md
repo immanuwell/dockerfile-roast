@@ -140,6 +140,15 @@ docker pull ghcr.io/immanuwell/droast:1.4.3
 
 Use a fixed version in CI. Use `latest` only when automatic upgrades are acceptable.
 
+The image is OCI-compatible and can also be run with Podman:
+
+```bash
+podman run --rm -v "$PWD:/workspace:Z" -w /workspace \
+  ghcr.io/immanuwell/droast:1.4.4 --engine podman .
+```
+
+Use `:Z` for a private SELinux relabel of the mounted repository. On systems without SELinux it is harmless to omit the suffix.
+
 ### Wasmer package
 
 Run droast as a sandboxed WASI command from the [Wasmer Registry](https://wasmer.io/immanuwell/droast):
@@ -310,7 +319,8 @@ printf 'FROM alpine:latest\n' | droast -
 | `--skip IDS` | Skip comma-separated rule IDs |
 | `--only IDS` | Run only comma-separated rule IDs |
 | `--no-roast` | Show technical messages only |
-| `--check-dockerignore BOOL` | Enable or disable effective `.dockerignore` checks |
+| `--check-ignorefile BOOL` | Enable or disable effective build-context ignore-file checks (`--check-dockerignore` remains an alias) |
+| `--engine NAME` | Build-context conventions: `docker` (default) or `podman` |
 | `--no-fail` | Always exit successfully after linting |
 | `--list-rules` | Print the available rules |
 | `-h, --help` | Print help |
@@ -372,6 +382,8 @@ Warnings alone do not produce exit code `1`. Use output review or a chosen rule 
 - `Containerfile.*`
 - Dockerfiles referenced by Compose files
 - Dockerfiles referenced by Bake HCL or JSON files
+
+Use `--engine podman` when linting a Podman build workflow. This preserves the shared Dockerfile rules while making DF033 select `.containerignore` before `.dockerignore`.
 
 Duplicate references are linted once.
 
@@ -457,7 +469,7 @@ coverage
 Disable the check for an unusual workflow:
 
 ```bash
-droast --check-dockerignore false .
+droast --check-ignorefile false .
 ```
 
 ## Configuration
@@ -493,6 +505,9 @@ DF065 = "error"
 [shellcheck]
 mode = "auto"
 exclude = ["SC2086"]
+
+[workflow]
+engine = "podman"
 
 [required-labels]
 "org.opencontainers.image.source" = "url"
@@ -532,6 +547,7 @@ See [`examples/droast-enterprise.toml`](examples/droast-enterprise.toml) for a c
 | `strict-labels` | boolean | Reject labels outside the schema |
 | `shellcheck.mode` | string | `off` (default), `auto`, `required` |
 | `shellcheck.exclude` | array | ShellCheck IDs to suppress, such as `SC2086` |
+| `workflow.engine` | string | `docker` (default), `podman` |
 | `overrides` | array of tables | Apply settings to matching paths |
 | `no-roast` | boolean | `true`, `false` |
 | `no-fail` | boolean | `true`, `false` |
@@ -593,7 +609,7 @@ droast --config .droast/team.toml .
 
 ### CLI-only controls
 
-`--only` and `--check-dockerignore` are CLI-only. They are not TOML keys.
+`--only` and `--check-ignorefile` are CLI-only. They are not TOML keys.
 
 ### Per-rule severity overrides
 
@@ -1173,6 +1189,7 @@ Action inputs:
 | `skip` | empty | Comma-separated rule IDs to skip |
 | `no-roast` | `false` | Use technical messages only |
 | `no-fail` | `false` | Keep the workflow step non-blocking |
+| `engine` | config or `docker` | Build-context conventions: `docker` or `podman` |
 | `image-tag` | `latest` | Select the container version used by the action |
 
 Preset example:

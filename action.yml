@@ -41,6 +41,10 @@ inputs:
     description: 'Exit 0 even when errors are found (non-blocking / advisory mode)'
     required: false
     default: 'false'
+  engine:
+    description: 'Build-context conventions: docker or podman'
+    required: false
+    default: ''
   image-tag:
     description: 'droast image tag to pull (e.g. latest, 1.4.4)' # droast:release-version
     required: false
@@ -82,6 +86,10 @@ runs:
 
         if [[ "${{ inputs.no-fail }}" == "true" ]]; then
           ARGS+=(--no-fail)
+        fi
+
+        if [[ -n "${{ inputs.engine }}" ]]; then
+          ARGS+=(--engine "${{ inputs.engine }}")
         fi
 
         docker run --rm \
