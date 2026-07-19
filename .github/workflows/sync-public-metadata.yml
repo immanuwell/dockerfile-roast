@@ -11,6 +11,7 @@ on:
       - 'README.md'
       - 'docs/index.html'
       - 'action.yml'
+      - 'wasmer.toml'
       - 'scripts/update-public-metadata.sh'
       - 'scripts/update-rules-readme.sh'
       - '.github/workflows/sync-public-metadata.yml'
@@ -40,7 +41,7 @@ jobs:
       - name: Commit synchronized metadata
         shell: bash
         run: |
-          git add README.md docs/index.html action.yml
+          git add README.md docs/index.html action.yml wasmer.toml
           if git diff --staged --quiet; then
             echo "Public metadata is already synchronized."
             exit 0

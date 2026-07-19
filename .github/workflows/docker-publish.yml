@@ -1,4 +1,4 @@
-name: Publish Docker image
+name: Publish Docker image and Wasmer package
 
 on:
   push:
@@ -13,6 +13,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE: ghcr.io/${{ github.repository_owner }}/droast
+  WASMER_NAMESPACE: ${{ vars.WASMER_NAMESPACE || github.repository_owner }}
 
 jobs:
   metadata:
@@ -78,3 +79,68 @@ jobs:
             DROAST_VERSION=${{ inputs.tag || github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  publish-wasmer:
+    name: Publish Wasmer package
+    needs: metadata
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+
+      - name: Cache Rust artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: wasmer-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: wasmer-${{ runner.os }}-
+
+      - name: Install Wasmer
+        run: |
+          curl https://get.wasmer.io -sSfL | sh -s "v 7.1.0"
+          echo "$HOME/.wasmer/bin" >> "$GITHUB_PATH"
+          "$HOME/.wasmer/bin/wasmer" --version
+
+      - name: Build and validate package
+        env:
+          RELEASE_VERSION: ${{ inputs.tag || github.ref_name }}
+        run: ./scripts/build-wasmer-package.sh
+
+      - name: Publish package
+        env:
+          WASMER_TOKEN: ${{ secrets.WASMER_TOKEN }}
+          VERSION: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [[ -z "$WASMER_TOKEN" ]]; then
+            echo "WASMER_TOKEN repository secret is required to publish the package" >&2
+            exit 1
+          fi
+
+          if wasmer package download \
+            "$WASMER_NAMESPACE/droast@$VERSION" \
+            --out-path /tmp/droast.webc \
+            --quiet; then
+            echo "$WASMER_NAMESPACE/droast@$VERSION is already published; skipping"
+            exit 0
+          fi
+
+          wasmer publish \
+            --namespace "$WASMER_NAMESPACE" \
+            --name droast \
+            --version "$VERSION" \
+            --non-interactive \
+            --wait=container \
+            .

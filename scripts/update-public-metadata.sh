@@ -7,6 +7,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 README="$REPO_ROOT/README.md"
 SITE="$REPO_ROOT/docs/index.html"
 ACTION="$REPO_ROOT/action.yml"
+WASMER="$REPO_ROOT/wasmer.toml"
 CHECK=false
 
 if [[ "${1:-}" == "--check" ]]; then
@@ -135,6 +136,13 @@ perl -pi -e '
     }
 ' "$ACTION"
 
+perl -pi -e '
+    if (/droast:release-version/) {
+        $versions = s/\b\d+\.\d+\.\d+\b/$ENV{DROAST_PUBLIC_VERSION}/g;
+        die "expected one release version on marked wasmer.toml line\n" unless $versions == 1;
+    }
+' "$WASMER"
+
 STALE_COUNTS="$(grep -Eohi '[0-9]+ rules' "$README" "$SITE" "$ACTION" \
     | grep -Eiv "^${RULE_COUNT} rules$" || true)"
 [[ -z "$STALE_COUNTS" ]] || {
@@ -143,7 +151,7 @@ STALE_COUNTS="$(grep -Eohi '[0-9]+ rules' "$README" "$SITE" "$ACTION" \
 }
 
 if $CHECK; then
-    if ! git -C "$REPO_ROOT" diff --exit-code -- README.md docs/index.html action.yml >/dev/null; then
+    if ! git -C "$REPO_ROOT" diff --exit-code -- README.md docs/index.html action.yml wasmer.toml >/dev/null; then
         echo "public metadata is stale; run ./scripts/update-public-metadata.sh and commit the result" >&2
         exit 1
     fi

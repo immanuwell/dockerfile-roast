@@ -18,6 +18,7 @@ Use this guide as a quick reference. Every section favors copy-paste examples ov
 - [CI integration](#ci-integration)
 - [Local development workflows](#local-development-workflows)
 - [Docker and container usage](#docker-and-container-usage)
+- [Wasmer and WASI](#wasmer-and-wasi)
 - [VS Code](#vs-code)
 - [Web version](#web-version)
 - [Rust library](#rust-library)
@@ -138,6 +139,33 @@ docker pull ghcr.io/immanuwell/droast:1.4.2
 ```
 
 Use a fixed version in CI. Use `latest` only when automatic upgrades are acceptable.
+
+### Wasmer package
+
+Run droast as a sandboxed WASI command from the [Wasmer Registry](https://wasmer.io/immanuwell/droast):
+
+```bash
+wasmer run immanuwell/droast -- --check-dockerignore=false - < Dockerfile
+```
+
+No host files are visible unless you explicitly mount them. To lint a repository:
+
+```bash
+wasmer run --volume "$PWD:/workspace" immanuwell/droast -- /workspace
+```
+
+Use a fixed package version in CI:
+
+```bash
+wasmer run --volume "$PWD:/workspace" immanuwell/droast@1.4.2 -- /workspace
+```
+
+When the repository uses configuration, pass its mounted path explicitly:
+
+```bash
+wasmer run --volume "$PWD:/workspace" immanuwell/droast -- \
+  --config /workspace/droast.toml /workspace
+```
 
 ### Install the VS Code extension
 
@@ -1360,6 +1388,29 @@ docker run --rm \
   -w /workspace \
   ghcr.io/immanuwell/droast:1.4.2 \
   --no-roast .
+```
+
+## Wasmer and WASI
+
+The Wasmer package provides the same command-line interface through WASI. Stdin linting needs no filesystem permission:
+
+```bash
+wasmer run immanuwell/droast -- \
+  --only DF001,DF002 --check-dockerignore=false - < Dockerfile
+```
+
+For repository discovery, Compose, Bake, `.dockerignore`, and project configuration, mount the repository and use guest paths:
+
+```bash
+wasmer run --volume "$PWD:/workspace" immanuwell/droast -- \
+  --config /workspace/droast.toml /workspace
+```
+
+Build and validate the package locally:
+
+```bash
+./scripts/build-wasmer-package.sh
+wasmer run target/wasmer/droast.webc -- --version
 ```
 
 ## VS Code

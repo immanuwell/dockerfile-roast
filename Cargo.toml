@@ -29,7 +29,7 @@ anyhow = "1"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 clap_complete = "4"
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
 dotenvy = "0.15.7"
 hcl-rs = "0.19.7"
 ignore = "0.4"
@@ -38,5 +38,5 @@ semver = "1"
 spdx = "0.10"
 time = { version = "0.3", features = ["parsing"] }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 wasm-bindgen = "0.2"

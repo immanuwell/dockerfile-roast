@@ -9,6 +9,8 @@
   ・
   <a href="https://github.com/marketplace/actions/droast-dockerfile-linter">GH action</a>
   ・
+  <a href="https://wasmer.io/immanuwell/droast">Wasmer</a>
+  ・
   <a href="#comparison-with-other-tools">comparison</a>
 </p>
 
@@ -63,6 +65,18 @@ brew install immanuwell/droast/droast
 
 ```bash
 cargo install dockerfile-roast
+```
+
+**Wasmer** ([Wasmer Registry](https://wasmer.io/immanuwell/droast), sandboxed WASI command):
+
+```bash
+wasmer run immanuwell/droast -- --check-dockerignore=false - < Dockerfile
+```
+
+To scan files or a repository, explicitly mount the directory into the sandbox:
+
+```bash
+wasmer run --volume "$PWD:/workspace" immanuwell/droast -- /workspace
 ```
 
 or grab a prebuilt binary from the releases page if you'd rather not wait for the rust compiler to do its thing.
@@ -206,6 +220,25 @@ docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile droast /Dockerfile
 ```
 
 the image is published automatically to `ghcr.io/immanuwell/droast` on every release tag.
+
+## wasmer
+
+droast is also published as a WASI package in the [Wasmer Registry](https://wasmer.io/immanuwell/droast). It uses the same CLI and rule engine as the native binary.
+
+Lint through stdin without granting filesystem access:
+
+```bash
+wasmer run immanuwell/droast -- \
+    --check-dockerignore=false --format compact - < Dockerfile
+```
+
+Lint a mounted repository:
+
+```bash
+wasmer run --volume "$PWD:/workspace" immanuwell/droast -- /workspace
+```
+
+Wasmer denies host filesystem access unless a directory is mounted. If the repository uses `droast.toml`, pass `--config /workspace/droast.toml` after the `--` separator.
 
 ## shell completions
 
