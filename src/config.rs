@@ -45,6 +45,13 @@ pub struct ShellcheckSettings {
     pub exclude: Vec<String>,
 }
 
+/// Container-engine workflow settings that affect repository context handling.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct WorkflowSettings {
+    pub engine: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct PathOverride {
@@ -66,6 +73,8 @@ pub struct DroastConfig {
     pub settings: PolicySettings,
     #[serde(default)]
     pub shellcheck: ShellcheckSettings,
+    #[serde(default)]
+    pub workflow: WorkflowSettings,
     #[serde(default)]
     pub overrides: Vec<PathOverride>,
     #[serde(skip)]
@@ -268,6 +277,7 @@ impl DroastConfig {
         layer.overlay_preset(local.settings);
         merged.settings.merge(layer);
         replace(&mut merged.shellcheck.mode, local.shellcheck.mode);
+        replace(&mut merged.workflow.engine, local.workflow.engine);
         for code in local.shellcheck.exclude {
             if !merged
                 .shellcheck
@@ -287,6 +297,7 @@ impl DroastConfig {
     fn merge(&mut self, child: DroastConfig) {
         self.settings.merge(child.settings);
         replace(&mut self.shellcheck.mode, child.shellcheck.mode);
+        replace(&mut self.workflow.engine, child.workflow.engine);
         for code in child.shellcheck.exclude {
             if !self
                 .shellcheck
@@ -327,6 +338,7 @@ impl DroastConfig {
                 bail!("Unknown ShellCheck mode '{mode}'; expected off, auto, or required");
             }
         }
+        crate::repository::ContainerEngine::parse(self.workflow.engine.as_deref())?;
         for code in &self.shellcheck.exclude {
             if !regex::Regex::new(r"^SC[0-9]{4}$")
                 .expect("valid static expression")

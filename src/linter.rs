@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::parser;
-use crate::repository::{self, DockerignoreProblem};
+use crate::repository::{self, ContainerEngine, DockerignoreProblem};
 use crate::rules::{self, Finding, Severity};
 use crate::shellcheck;
 
@@ -15,6 +15,7 @@ pub struct LintOptions {
     pub only_rules: Vec<String>,
     pub min_severity: Severity,
     pub check_dockerignore: bool,
+    pub engine: ContainerEngine,
     pub severity_overrides: BTreeMap<String, Severity>,
     pub categories: Vec<String>,
     pub skip_categories: Vec<String>,
@@ -39,6 +40,7 @@ impl Default for LintOptions {
             only_rules: Vec::new(),
             min_severity: Severity::Info,
             check_dockerignore: true,
+            engine: ContainerEngine::Docker,
             severity_overrides: BTreeMap::new(),
             categories: Vec::new(),
             skip_categories: Vec::new(),
@@ -72,7 +74,7 @@ pub fn lint_content(content: &str, filename: &str, opts: &LintOptions) -> LintRe
     if opts.check_dockerignore && rule_id_enabled(opts, "DF033") {
         let context = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let stdin_marker = context.join(".droast-stdin");
-        add_dockerignore_finding(&mut result, &stdin_marker, &context, opts);
+        add_ignorefile_finding(&mut result, &stdin_marker, &context, opts);
     }
     finalize_findings(content, &mut result.findings, opts);
     result
@@ -126,7 +128,7 @@ pub fn lint_file_with_context(
         .with_context(|| format!("Failed to read '{}'", path.display()))?;
     let mut result = lint_content_without_context(&content, &path.display().to_string(), opts);
     if opts.check_dockerignore && rule_id_enabled(opts, "DF033") {
-        add_dockerignore_finding(&mut result, path, context, opts);
+        add_ignorefile_finding(&mut result, path, context, opts);
     }
     finalize_findings(&content, &mut result.findings, opts);
     Ok(result)
@@ -179,7 +181,7 @@ fn finalize_findings(content: &str, findings: &mut Vec<Finding>, opts: &LintOpti
     findings.sort_by(|a, b| a.line.cmp(&b.line).then(b.severity.cmp(&a.severity)));
 }
 
-fn add_dockerignore_finding(
+fn add_ignorefile_finding(
     result: &mut LintResult,
     dockerfile: &Path,
     context: &Path,
@@ -188,7 +190,7 @@ fn add_dockerignore_finding(
     if !rule_id_enabled(opts, "DF033") {
         return;
     }
-    let problem = match repository::dockerignore_problem(dockerfile, context) {
+    let problem = match repository::ignorefile_problem_for_engine(dockerfile, context, opts.engine) {
         Ok(problem) => problem,
         Err(error) => {
             result.findings.push(Finding {
@@ -198,8 +200,8 @@ fn add_dockerignore_finding(
                 rule: "DF033".into(),
                 severity: Severity::Info,
                 line: 0,
-                message: format!("Cannot read the effective .dockerignore: {error}"),
-                roast: "The build-context filter is unreadable, so nobody can tell what Docker will receive.".to_string(),
+                message: format!("Cannot read the effective build-context ignore file: {error}"),
+                roast: "The build-context filter is unreadable, so nobody can tell what the image build will receive.".to_string(),
             });
             return;
         }
@@ -209,12 +211,12 @@ fn add_dockerignore_finding(
     };
     let message = match problem {
         DockerignoreProblem::Missing { expected } => format!(
-            "No effective .dockerignore for build context '{}' (expected '{}')",
+            "No effective build-context ignore file for '{}' (expected '{}')",
             context.display(),
             expected.display()
         ),
         DockerignoreProblem::Empty { path } => format!(
-            "Effective .dockerignore '{}' has no exclusion patterns",
+            "Effective build-context ignore file '{}' has no exclusion patterns",
             path.display()
         ),
     };

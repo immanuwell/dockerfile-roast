@@ -65,6 +65,21 @@ enum ShellcheckModeArg {
     Required,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum EngineArg {
+    Docker,
+    Podman,
+}
+
+impl From<EngineArg> for repository::ContainerEngine {
+    fn from(engine: EngineArg) -> Self {
+        match engine {
+            EngineArg::Docker => Self::Docker,
+            EngineArg::Podman => Self::Podman,
+        }
+    }
+}
+
 impl From<ShellcheckModeArg> for shellcheck::Mode {
     fn from(mode: ShellcheckModeArg) -> Self {
         match mode {
@@ -166,9 +181,13 @@ struct Cli {
     #[arg(long)]
     no_roast: bool,
 
-    /// Check the effective .dockerignore for every build context
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    /// Check the effective build-context ignore file for every build context
+    #[arg(long = "check-ignorefile", alias = "check-dockerignore", default_value_t = true, action = clap::ArgAction::Set)]
     check_dockerignore: bool,
+
+    /// Build-context conventions to use: docker or podman
+    #[arg(long, value_enum)]
+    engine: Option<EngineArg>,
 
     /// ShellCheck integration: off, auto, or required
     #[arg(long, value_enum)]
@@ -224,6 +243,10 @@ fn main() -> Result<()> {
         .shellcheck
         .map(Into::into)
         .unwrap_or(shellcheck::Mode::parse(cfg.shellcheck.mode.as_deref())?);
+    let engine = cli
+        .engine
+        .map(Into::into)
+        .unwrap_or(repository::ContainerEngine::parse(cfg.workflow.engine.as_deref())?);
 
     let mut global_settings = cfg.settings.clone();
     if cli.preset.is_some() {
@@ -247,7 +270,7 @@ fn main() -> Result<()> {
         print_summary_header();
     }
 
-    let discovery = repository::discover(&cli.files);
+    let discovery = repository::discover(&cli.files, engine);
     for warning in &discovery.warnings {
         eprintln!("{} {}", "!".yellow(), warning);
     }
@@ -268,7 +291,7 @@ fn main() -> Result<()> {
         let mut all_results: Vec<linter::LintResult> = Vec::new();
         for file in &files {
             let settings = effective_settings(&cfg, &cli, &file.dockerfile)?;
-            let opts = lint_options(&settings, &cli, shellcheck_mode, &cfg.shellcheck.exclude)?;
+            let opts = lint_options(&settings, &cli, shellcheck_mode, &cfg.shellcheck.exclude, engine)?;
             let file_no_fail = cli.no_fail || settings.no_fail.unwrap_or(no_fail);
             match lint_one(file, &opts) {
                 Ok(result) => {
@@ -295,7 +318,7 @@ fn main() -> Result<()> {
     } else {
         for file in &files {
             let settings = effective_settings(&cfg, &cli, &file.dockerfile)?;
-            let opts = lint_options(&settings, &cli, shellcheck_mode, &cfg.shellcheck.exclude)?;
+            let opts = lint_options(&settings, &cli, shellcheck_mode, &cfg.shellcheck.exclude, engine)?;
             let file_no_roast = cli.no_roast || settings.no_roast.unwrap_or(no_roast);
             let file_no_fail = cli.no_fail || settings.no_fail.unwrap_or(no_fail);
             match lint_one(file, &opts) {
@@ -361,6 +384,7 @@ fn lint_options(
     cli: &Cli,
     shellcheck_mode: shellcheck::Mode,
     shellcheck_exclude: &[String],
+    engine: repository::ContainerEngine,
 ) -> anyhow::Result<LintOptions> {
     let known_rules = rules::all_rules()
         .into_iter()
@@ -404,6 +428,7 @@ fn lint_options(
             .or_else(|| parse_severity(settings.min_severity.as_deref()))
             .unwrap_or(Severity::Info),
         check_dockerignore: cli.check_dockerignore,
+        engine,
         severity_overrides,
         categories: settings.categories.clone().unwrap_or_default(),
         skip_categories: settings.skip_categories.clone().unwrap_or_default(),

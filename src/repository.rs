@@ -15,6 +15,23 @@ pub struct BuildInput {
     pub context: PathBuf,
 }
 
+/// Selects build-context conventions without invoking a container engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerEngine {
+    Docker,
+    Podman,
+}
+
+impl ContainerEngine {
+    pub fn parse(value: Option<&str>) -> anyhow::Result<Self> {
+        match value.unwrap_or("docker").to_ascii_lowercase().as_str() {
+            "docker" => Ok(Self::Docker),
+            "podman" => Ok(Self::Podman),
+            other => anyhow::bail!("Unknown workflow engine '{other}'; expected docker or podman"),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Discovery {
     pub inputs: Vec<BuildInput>,
@@ -28,7 +45,7 @@ pub enum DockerignoreProblem {
 }
 
 /// Resolve CLI paths into local Dockerfiles and their effective build contexts.
-pub fn discover(requested: &[PathBuf]) -> Discovery {
+pub fn discover(requested: &[PathBuf], engine: ContainerEngine) -> Discovery {
     let requested = if requested.is_empty() {
         vec![PathBuf::from(".")]
     } else {
@@ -43,7 +60,7 @@ pub fn discover(requested: &[PathBuf]) -> Discovery {
             match glob::glob(&pattern) {
                 Ok(matches) => {
                     for path in matches.flatten() {
-                        discover_path(&path, &mut inputs, &mut discovery.warnings);
+                        discover_path(&path, engine, &mut inputs, &mut discovery.warnings);
                     }
                 }
                 Err(error) => discovery
@@ -51,7 +68,7 @@ pub fn discover(requested: &[PathBuf]) -> Discovery {
                     .push(format!("invalid path pattern {pattern:?}: {error}")),
             }
         } else {
-            discover_path(&requested_path, &mut inputs, &mut discovery.warnings);
+            discover_path(&requested_path, engine, &mut inputs, &mut discovery.warnings);
         }
     }
 
@@ -61,13 +78,14 @@ pub fn discover(requested: &[PathBuf]) -> Discovery {
 
 fn discover_path(
     path: &Path,
+    engine: ContainerEngine,
     inputs: &mut BTreeMap<(PathBuf, PathBuf), BuildInput>,
     warnings: &mut Vec<String>,
 ) {
     if path == Path::new("-") {
         insert_input(inputs, path.to_path_buf(), current_directory());
     } else if path.is_dir() {
-        discover_directory(path, inputs, warnings);
+        discover_directory(path, engine, inputs, warnings);
     } else if path.is_file() && is_compose_file(path) {
         discover_compose(path, inputs, warnings);
     } else if path.is_file() && is_bake_file(path) {
@@ -80,6 +98,7 @@ fn discover_path(
 
 fn discover_directory(
     root: &Path,
+    engine: ContainerEngine,
     inputs: &mut BTreeMap<(PathBuf, PathBuf), BuildInput>,
     warnings: &mut Vec<String>,
 ) {
@@ -136,7 +155,7 @@ fn discover_directory(
         if contains_dockerfile(inputs, &dockerfile) {
             continue;
         }
-        let context = infer_context(&dockerfile, root);
+        let context = infer_context(&dockerfile, root, engine);
         insert_input(inputs, dockerfile, context);
     }
 }
@@ -149,14 +168,14 @@ fn contains_dockerfile(
     inputs.keys().any(|(known, _)| known == &dockerfile)
 }
 
-fn infer_context(dockerfile: &Path, repository_root: &Path) -> PathBuf {
+fn infer_context(dockerfile: &Path, repository_root: &Path, engine: ContainerEngine) -> PathBuf {
     let root = absolute_path(repository_root);
     let mut directory = dockerfile
         .parent()
         .map(absolute_path)
         .unwrap_or_else(|| root.clone());
     loop {
-        if directory.join(".dockerignore").is_file() {
+        if has_context_ignore_file(&directory, engine) {
             return directory;
         }
         if directory == root || !directory.starts_with(&root) {
@@ -166,6 +185,15 @@ fn infer_context(dockerfile: &Path, repository_root: &Path) -> PathBuf {
             return root;
         };
         directory = parent.to_path_buf();
+    }
+}
+
+fn has_context_ignore_file(context: &Path, engine: ContainerEngine) -> bool {
+    match engine {
+        ContainerEngine::Docker => context.join(".dockerignore").is_file(),
+        ContainerEngine::Podman => {
+            context.join(".containerignore").is_file() || context.join(".dockerignore").is_file()
+        }
     }
 }
 
@@ -515,27 +543,44 @@ fn insert_input(
 }
 
 /// Return the missing or ineffective ignore file for a build input.
-pub fn dockerignore_problem(
+pub fn ignorefile_problem(
     dockerfile: &Path,
     context: &Path,
 ) -> std::io::Result<Option<DockerignoreProblem>> {
-    let specific = dockerfile
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(format!(
-            "{}.dockerignore",
-            dockerfile
-                .file_name()
-                .unwrap_or_else(|| OsStr::new("Dockerfile"))
-                .to_string_lossy()
-        ));
+    ignorefile_problem_for_engine(dockerfile, context, ContainerEngine::Docker)
+}
+
+/// Return the missing or ineffective ignore file selected by the chosen engine.
+pub fn ignorefile_problem_for_engine(
+    dockerfile: &Path,
+    context: &Path,
+    engine: ContainerEngine,
+) -> std::io::Result<Option<DockerignoreProblem>> {
+    let specific = dockerfile.parent().unwrap_or_else(|| Path::new(".")).join(format!(
+        "{}.dockerignore",
+        dockerfile.file_name().unwrap_or_else(|| OsStr::new("Dockerfile")).to_string_lossy()
+    ));
     let root = context.join(".dockerignore");
-    let effective = if specific.is_file() {
-        specific
-    } else if root.is_file() {
-        root
-    } else {
-        return Ok(Some(DockerignoreProblem::Missing { expected: root }));
+    let container = context.join(".containerignore");
+    let effective = match engine {
+        ContainerEngine::Docker => {
+            if specific.is_file() {
+                specific
+            } else if root.is_file() {
+                root.clone()
+            } else {
+                return Ok(Some(DockerignoreProblem::Missing { expected: root }));
+            }
+        }
+        ContainerEngine::Podman => {
+            if container.is_file() {
+                container
+            } else if root.is_file() {
+                root.clone()
+            } else {
+                return Ok(Some(DockerignoreProblem::Missing { expected: container }));
+            }
+        }
     };
     let content = std::fs::read_to_string(&effective)?;
     if has_exclusion_pattern(&content) {

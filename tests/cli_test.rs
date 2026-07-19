@@ -363,7 +363,10 @@ fn no_arguments_discovers_the_current_repository() {
 #[test]
 fn discovery_preserves_hidden_project_directories_and_ignores_excluded_trees() {
     let fixture = repository_fixture();
-    let discovery = repository::discover(std::slice::from_ref(&fixture));
+    let discovery = repository::discover(
+        std::slice::from_ref(&fixture),
+        repository::ContainerEngine::Docker,
+    );
 
     assert!(discovery
         .inputs
@@ -378,7 +381,10 @@ fn discovery_preserves_hidden_project_directories_and_ignores_excluded_trees() {
 #[test]
 fn declared_contexts_override_repository_context_inference() {
     let fixture = repository_fixture();
-    let discovery = repository::discover(std::slice::from_ref(&fixture));
+    let discovery = repository::discover(
+        std::slice::from_ref(&fixture),
+        repository::ContainerEngine::Docker,
+    );
     let api = discovery
         .inputs
         .iter()
@@ -467,8 +473,41 @@ fn missing_context_root_ignore_is_reported() {
             && result["message"]["text"]
                 .as_str()
                 .unwrap()
-                .contains("No effective .dockerignore")
+                .contains("No effective build-context ignore file")
     }));
+}
+
+#[test]
+fn podman_prefers_containerignore_over_dockerignore() {
+    let root = std::env::temp_dir().join(format!("droast-podman-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("Containerfile"), "FROM alpine:3.20\n").unwrap();
+    std::fs::write(root.join(".dockerignore"), "target\n").unwrap();
+    std::fs::write(root.join(".containerignore"), "# comments do not exclude files\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            root.to_str().unwrap(),
+            "--engine",
+            "podman",
+            "--format",
+            "json",
+            "--only",
+            "DF033",
+            "--no-fail",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["findings"][0]["rule"], "DF033");
+    assert!(document["findings"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains(".containerignore"));
+
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
