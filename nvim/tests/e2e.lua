@@ -1,6 +1,8 @@
 local root = vim.env.DROAST_REPO_ROOT
 assert(root and root ~= "", "DROAST_REPO_ROOT must point to the repository root")
 vim.opt.rtp:append(root .. "/nvim")
+vim.cmd("runtime plugin/droast.lua")
+assert(vim.fn.exists(":DroastLint") == 2, "automatic setup did not register :DroastLint")
 
 local droast = require("droast")
 droast.setup({

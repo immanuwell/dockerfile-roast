@@ -121,8 +121,11 @@ end
 
 function M.setup(options)
   M.config = vim.tbl_deep_extend("force", M.config, options or {})
-  vim.api.nvim_create_user_command("DroastLint", function() M.lint() end, {})
-  vim.api.nvim_create_user_command("DroastQuickfix", M.quickfix, {})
+  if not M.commands_created then
+    vim.api.nvim_create_user_command("DroastLint", function() M.lint() end, {})
+    vim.api.nvim_create_user_command("DroastQuickfix", M.quickfix, {})
+    M.commands_created = true
+  end
   local group = vim.api.nvim_create_augroup("droast", { clear = true })
   if M.config.on_save then
     vim.api.nvim_create_autocmd("BufWritePost", {

@@ -48,19 +48,24 @@ the binary is bundled — no separate install needed. findings appear in real ti
 
 ## neovim extension
 
-The repository includes a dependency-free Neovim plugin with asynchronous
-diagnostics, `:DroastLint`, `:DroastQuickfix`, and optional lint-on-save. Add
-the `nvim/` directory to your runtime path, then configure it:
+Install the dependency-free Neovim plugin in one command; no plugin manager is
+required:
 
-```lua
-vim.opt.rtp:append("/path/to/dockerfile-roast/nvim")
-require("droast").setup({
-  command = "droast", -- defaults to droast on $PATH
-  on_save = true,
-})
+```bash
+curl -fsSL https://raw.githubusercontent.com/immanuwell/dockerfile-roast/main/scripts/install-neovim-extension.sh | sh
 ```
 
-Use `args` to pass ordinary Droast CLI options, such as `{"--preset", "production"}`.
+Or use the dedicated [droast.nvim](https://github.com/immanuwell/droast.nvim)
+repository with your preferred plugin manager:
+
+```lua
+-- lazy.nvim:  { "immanuwell/droast.nvim" }
+-- packer.nvim: use "immanuwell/droast.nvim"
+-- mini.deps: MiniDeps.add({ source = "immanuwell/droast.nvim" })
+```
+
+It starts automatically with `droast` on `PATH`, lint-on-save, and native
+diagnostics. Override defaults with `require("droast").setup({ args = { "--preset", "production" } })`.
 
 ## install
 

@@ -1778,23 +1778,27 @@ The bundled dependency-free plugin publishes Droast findings through Neovim's
 native diagnostics API. It provides `:DroastLint`, `:DroastQuickfix`, and
 lint-on-save for Dockerfile and Containerfile names.
 
-Add the repository's `nvim/` directory to `runtimepath` through your plugin
-manager or directly:
+Install it without a plugin manager:
 
-```lua
-vim.opt.rtp:append("/path/to/dockerfile-roast/nvim")
-
-require("droast").setup({
-  command = "droast",
-  on_save = true,
-  args = { "--preset", "production" },
-})
+```bash
+curl -fsSL https://raw.githubusercontent.com/immanuwell/dockerfile-roast/main/scripts/install-neovim-extension.sh | sh
 ```
 
-`command` defaults to `droast` on `PATH`. `args` accepts normal Droast CLI
-options; the plugin adds JSON output, `--no-roast`, `--no-fail`, the current
-file path, and disables the repository-wide ignore-file advisory so editor
-diagnostics stay focused on the open Dockerfile.
+Or install the dedicated `immanuwell/droast.nvim` repository through a plugin
+manager:
+
+```lua
+-- lazy.nvim:  { "immanuwell/droast.nvim" }
+-- packer.nvim: use "immanuwell/droast.nvim"
+-- mini.deps:   MiniDeps.add({ source = "immanuwell/droast.nvim" })
+```
+
+The plugin starts automatically with `droast` on `PATH` and lint-on-save. To
+override defaults, call `require("droast").setup({ args = { "--preset", "production" } })`.
+`args` accepts normal Droast CLI options; the plugin adds JSON output,
+`--no-roast`, `--no-fail`, the current file path, and disables the
+repository-wide ignore-file advisory so editor diagnostics stay focused on the
+open Dockerfile.
 
 Run the headless integration test with Neovim 0.9 or newer:
 

@@ -10,3 +10,11 @@ command -v "$nvim_bin" >/dev/null || {
 cargo build --release --locked --manifest-path "$repo_root/Cargo.toml"
 DROAST_REPO_ROOT="$repo_root" "$nvim_bin" --headless -u NONE \
   -c "lua dofile('$repo_root/nvim/tests/e2e.lua')"
+
+install_data="$(mktemp -d)"
+DROAST_NEOVIM_REPOSITORY="$repo_root" XDG_DATA_HOME="$install_data" \
+  "$repo_root/scripts/install-neovim-extension.sh"
+installed_plugin="$install_data/nvim/site/pack/droast/start/dockerfile-roast"
+DROAST_REPO_ROOT="$repo_root" DROAST_INSTALLED_PLUGIN_ROOT="$installed_plugin" \
+  "$nvim_bin" --headless -u NONE \
+  -c "lua dofile('$repo_root/nvim/tests/install-e2e.lua')"
