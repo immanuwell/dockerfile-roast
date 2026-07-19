@@ -458,21 +458,21 @@ MIT. do whatever.
 <details>
 <summary>benchmark methodology and detailed results</summary>
 
-The comparison used droast 1.4.2 and Hadolint 2.14.0 on Ubuntu 24.04 x86-64.
+The comparison used droast 1.4.4 and Hadolint 2.14.0 on Ubuntu 24.04.4 LTS x86-64.
 
-Both tools scanned the same lexically sorted set of 121 real-world Dockerfiles containing 28,279 lines. Each tool received three untimed warm-up scans followed by 30 measured scans. Runs were interleaved, and the execution order was reversed on every iteration to reduce ordering bias. One process invocation scanned the entire corpus, configuration was neutralized, and SARIF serialization was included in the elapsed time.
+Both tools scanned the same lexically sorted set of 321 real-world Dockerfiles containing 49,563 lines. Each tool received three untimed warm-up scans followed by 10 measured scans. Runs were interleaved, and the execution order was reversed on every iteration to reduce ordering bias. One process invocation scanned the entire corpus, configuration was neutralized, and SARIF serialization was included in the elapsed time.
 
 | metric | droast | Hadolint |
 |---|---:|---:|
-| median full-corpus scan | 191.043 ms | 1,177.579 ms |
-| p95 full-corpus scan | 230.480 ms | 1,328.547 ms |
-| files per second | 633.4 | 102.8 |
-| lines per second | 148,024 | 24,015 |
-| Linux x86-64 binary | 4,584,920 bytes | 54,727,336 bytes |
-| findings | 2,070 | 444 |
-| errors | 245 | 42 |
-| warnings | 1,519 | 231 |
-| notes | 306 | 171 |
+| median full-corpus scan | 984.5 ms | 3,844 ms |
+| p95 full-corpus scan | 1,085 ms | 4,615 ms |
+| files per second | 326.1 | 83.5 |
+| lines per second | 50,343 | 12,894 |
+| Linux x86-64 binary | 7,513,704 bytes | 54,727,336 bytes |
+| findings | 18,516 | 1,435 |
+| errors | 14,774 | 100 |
+| warnings | 2,872 | 875 |
+| notes | 870 | 460 |
 
 The benchmark measures execution speed and binary size, not detection quality. Finding totals are not directly comparable because the tools have different rule sets, severities, shell-analysis coverage, and parser behavior.
 
