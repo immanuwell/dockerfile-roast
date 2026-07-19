@@ -1,0 +1,23 @@
+name: Neovim extension
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Neovim
+        run: sudo apt-get update && sudo apt-get install --yes neovim
+
+      - name: Exercise Neovim diagnostics end to end
+        run: scripts/test-neovim-extension.sh

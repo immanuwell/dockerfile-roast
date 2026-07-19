@@ -46,6 +46,22 @@ code --install-extension ImmanuelTikhonov.droast
 
 the binary is bundled — no separate install needed. findings appear in real time with roast messages on hover.
 
+## neovim extension
+
+The repository includes a dependency-free Neovim plugin with asynchronous
+diagnostics, `:DroastLint`, `:DroastQuickfix`, and optional lint-on-save. Add
+the `nvim/` directory to your runtime path, then configure it:
+
+```lua
+vim.opt.rtp:append("/path/to/dockerfile-roast/nvim")
+require("droast").setup({
+  command = "droast", -- defaults to droast on $PATH
+  on_save = true,
+})
+```
+
+Use `args` to pass ordinary Droast CLI options, such as `{"--preset", "production"}`.
+
 ## install
 
 **one-liner** (macOS and Linux, detects Homebrew automatically):
