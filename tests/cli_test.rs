@@ -178,6 +178,34 @@ fn init_generates_a_valid_complete_policy_template() {
 }
 
 #[test]
+fn init_imports_compatible_hadolint_configuration() {
+    let root = policy_fixture("hadolint-import");
+    std::fs::write(
+        root.join(".hadolint.yaml"),
+        "ignored: [DL3003, DL3025, SC2086]\ntrustedRegistries: [docker.io]\noverride:\n  error: [DL3002]\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .current_dir(&root)
+        .args(["init", "--from-hadolint"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let config = root.join("droast.toml");
+    let content = std::fs::read_to_string(&config).unwrap();
+    assert!(content.contains("skip = [\"DF008\", \"DF018\", \"DF025\"]"));
+    assert!(content.contains("DF002 = \"error\""));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("SC2086"));
+    dockerfile_roast::config::DroastConfig::load_from(&config).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cli_presets_select_their_rule_categories() {
     let root = policy_fixture("presets");
     let dockerfile = root.join("Dockerfile");

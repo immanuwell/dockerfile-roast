@@ -1,4 +1,4 @@
-use dockerfile_roast::{config, linter, output, repository, rules};
+use dockerfile_roast::{config, hadolint, linter, output, repository, rules};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process;
@@ -87,7 +87,11 @@ enum Commands {
     /// Generates a fully-commented template — every setting is present but
     /// disabled so the file has no effect until you uncomment what you need.
     /// Aborts if droast.toml already exists.
-    Init,
+    Init {
+        /// Import settings from Hadolint YAML; without PATH uses .hadolint.yaml
+        #[arg(long, value_name = "PATH", num_args = 0..=1, default_missing_value = ".hadolint.yaml")]
+        from_hadolint: Option<PathBuf>,
+    },
 }
 
 #[derive(Parser, Debug)]
@@ -174,8 +178,8 @@ fn main() -> Result<()> {
             );
             return Ok(());
         }
-        Some(Commands::Init) => {
-            return cmd_init();
+        Some(Commands::Init { from_hadolint }) => {
+            return cmd_init(from_hadolint.as_deref());
         }
         None => {}
     }
@@ -386,7 +390,7 @@ fn lint_options(settings: &PolicySettings, cli: &Cli) -> anyhow::Result<LintOpti
     })
 }
 
-fn cmd_init() -> Result<()> {
+fn cmd_init(from_hadolint: Option<&std::path::Path>) -> Result<()> {
     let path = std::path::Path::new("droast.toml");
     if path.exists() {
         eprintln!(
@@ -395,9 +399,35 @@ fn cmd_init() -> Result<()> {
         );
         exit(1);
     }
-    std::fs::write(path, CONFIG_TEMPLATE)?;
-    println!("{} Created droast.toml", "✓".green().bold());
-    println!("  All settings are commented out — uncomment what you need.");
+    if let Some(source) = from_hadolint {
+        let imported = hadolint::import_config(source)?;
+        std::fs::write(path, imported.config)?;
+        println!(
+            "{} Created droast.toml from {}",
+            "✓".green().bold(),
+            source.display()
+        );
+        println!(
+            "  Imported {} Hadolint rule alias(es).",
+            imported.imported_rules
+        );
+        if !imported.unmapped_rules.is_empty() {
+            eprintln!(
+                "! No droast alias for Hadolint rule(s): {}",
+                imported.unmapped_rules.join(", ")
+            );
+        }
+        if !imported.unmapped_settings.is_empty() {
+            eprintln!(
+                "! No equivalent droast setting for: {}",
+                imported.unmapped_settings.join(", ")
+            );
+        }
+    } else {
+        std::fs::write(path, CONFIG_TEMPLATE)?;
+        println!("{} Created droast.toml", "✓".green().bold());
+        println!("  All settings are commented out — uncomment what you need.");
+    }
     Ok(())
 }
 

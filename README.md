@@ -133,6 +133,14 @@ To keep lint configuration elsewhere, pass its path explicitly:
 droast --config .lint/droast.toml Dockerfile
 ```
 
+To migrate a Hadolint policy, generate an equivalent `droast.toml` from its YAML configuration:
+
+```bash
+droast init --from-hadolint .hadolint.yaml
+```
+
+Compatible settings and Hadolint `DL` rule aliases are imported; Droast reports every setting or rule that has no equivalent so the migration stays reviewable.
+
 Larger teams can add path-specific overrides, rule categories, inherited organization policy, registry and base-image allowlists, required OCI labels, and governed inline suppressions with mandatory reasons and expiration dates:
 
 ```dockerfile

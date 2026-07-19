@@ -323,6 +323,13 @@ Create `droast.toml` in the current directory:
 droast init
 ```
 
+Import a Hadolint YAML configuration instead. With no path, this reads `.hadolint.yaml` from the current directory:
+
+```bash
+droast init --from-hadolint
+droast init --from-hadolint .config/hadolint.yml
+```
+
 Generate shell completion output:
 
 ```bash
@@ -455,6 +462,12 @@ droast --check-dockerignore false .
 ## Configuration
 
 Configuration is optional. The file name is `droast.toml`.
+
+### Import Hadolint configuration
+
+`droast init --from-hadolint [PATH]` converts compatible Hadolint YAML settings into a new `droast.toml`. It imports `ignored`, severity `override` entries, `trustedRegistries`, label schemas, `strict-labels`, `no-fail`, `disable-ignore-pragma`, supported output formats, and failure thresholds. Hadolint `DL` rules with equivalent Droast checks are translated to `DF` IDs; a single Hadolint rule can map to more than one Droast rule.
+
+The command prints unmapped rules and settings to stderr and leaves them out of the generated policy. Review those messages before committing: ShellCheck rules, Hadolint-only checks, and unsupported output formats intentionally do not become silent policy changes.
 
 ### Complete example
 
