@@ -84,7 +84,7 @@ pub fn categories_for(id: &str) -> &'static [&'static str] {
         }
         "DF072" | "DF074" => &["correctness", "security"],
         "DF075" => &["correctness", "reliability"],
-        "DF076" | "DF078" | "DF079" | "DF082" | "DF084" | "DF085" | "DF086" | "DF087" => {
+        "DF076" | "DF077" | "DF078" | "DF079" | "DF082" | "DF084" | "DF085" | "DF086" | "DF087" => {
             &["correctness", "reliability"]
         }
         "DF083" => &["correctness", "reproducibility"],
@@ -549,6 +549,12 @@ pub fn all_rules() -> Vec<Rule> {
             severity: Severity::Warning,
             description: "Use a consistent casing style for Dockerfile instructions",
             func: rule_consistent_instruction_casing,
+        },
+        Rule {
+            id: "DF077",
+            severity: Severity::Error,
+            description: "Do not COPY or ADD files excluded from the build context",
+            func: rule_configured_policy,
         },
         Rule {
             id: "DF078",

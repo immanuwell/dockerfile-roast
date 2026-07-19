@@ -3,7 +3,7 @@
   "source": "https://docs.docker.com/reference/build-checks/",
   "checks": [
     {"docker_check": "ConsistentInstructionCasing", "status": "partial", "droast_rules": ["DF076"]},
-    {"docker_check": "CopyIgnoredFile", "status": "planned", "droast_rules": ["DF033"]},
+    {"docker_check": "CopyIgnoredFile", "status": "partial", "droast_rules": ["DF077"]},
     {"docker_check": "DuplicateStageName", "status": "partial", "droast_rules": ["DF042"]},
     {"docker_check": "ExposeInvalidFormat", "status": "partial", "droast_rules": ["DF040"]},
     {"docker_check": "ExposeProtoCasing", "status": "partial", "droast_rules": ["DF078"]},

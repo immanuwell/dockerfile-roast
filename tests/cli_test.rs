@@ -134,6 +134,30 @@ fn baseline_fingerprints_are_emitted_and_suppress_existing_errors() {
 }
 
 #[test]
+fn copy_ignored_file_uses_the_effective_build_context_ignore_file() {
+    let root = policy_fixture("copy-ignored");
+    let dockerfile = root.join("Dockerfile");
+    std::fs::write(&dockerfile, "FROM alpine:3.20\nCOPY secret.txt /app/\n").unwrap();
+    std::fs::write(root.join(".dockerignore"), "secret.txt\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--only", "DF077",
+            "--format", "json",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["findings"][0]["rule"], "DF077");
+    assert_eq!(result["findings"][0]["line"], 2);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cli_applies_path_specific_configuration() {
     let root = policy_fixture("path-override");
     let service = root.join("services/api");

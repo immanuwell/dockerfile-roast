@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use hcl::eval::{Context, Evaluate};
 use hcl::{BlockLabel, Body, Expression, Value as HclValue};
 use ignore::WalkBuilder;
+use ignore::gitignore::GitignoreBuilder;
 use serde_yaml::Value as YamlValue;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -804,31 +805,9 @@ pub fn ignorefile_problem_for_engine(
     context: &Path,
     engine: ContainerEngine,
 ) -> std::io::Result<Option<DockerignoreProblem>> {
-    let specific = dockerfile.parent().unwrap_or_else(|| Path::new(".")).join(format!(
-        "{}.dockerignore",
-        dockerfile.file_name().unwrap_or_else(|| OsStr::new("Dockerfile")).to_string_lossy()
-    ));
-    let root = context.join(".dockerignore");
-    let container = context.join(".containerignore");
-    let effective = match engine {
-        ContainerEngine::Docker => {
-            if specific.is_file() {
-                specific
-            } else if root.is_file() {
-                root.clone()
-            } else {
-                return Ok(Some(DockerignoreProblem::Missing { expected: root }));
-            }
-        }
-        ContainerEngine::Podman => {
-            if container.is_file() {
-                container
-            } else if root.is_file() {
-                root.clone()
-            } else {
-                return Ok(Some(DockerignoreProblem::Missing { expected: container }));
-            }
-        }
+    let effective = match effective_ignorefile(dockerfile, context, engine) {
+        Some(path) => path,
+        None => return Ok(Some(DockerignoreProblem::Missing { expected: expected_ignorefile(dockerfile, context, engine) })),
     };
     let content = std::fs::read_to_string(&effective)?;
     if has_exclusion_pattern(&content) {
@@ -836,6 +815,60 @@ pub fn ignorefile_problem_for_engine(
     } else {
         Ok(Some(DockerignoreProblem::Empty { path: effective }))
     }
+}
+
+fn expected_ignorefile(_dockerfile: &Path, context: &Path, engine: ContainerEngine) -> PathBuf {
+    match engine {
+        ContainerEngine::Docker => context.join(".dockerignore"),
+        ContainerEngine::Podman => context.join(".containerignore"),
+    }
+}
+
+fn effective_ignorefile(dockerfile: &Path, context: &Path, engine: ContainerEngine) -> Option<PathBuf> {
+    let specific = dockerfile.parent().unwrap_or_else(|| Path::new(".")).join(format!(
+        "{}.dockerignore",
+        dockerfile.file_name().unwrap_or_else(|| OsStr::new("Dockerfile")).to_string_lossy()
+    ));
+    let root = context.join(".dockerignore");
+    let container = context.join(".containerignore");
+    match engine {
+        ContainerEngine::Docker if specific.is_file() => Some(specific),
+        ContainerEngine::Docker if root.is_file() => Some(root),
+        ContainerEngine::Podman if container.is_file() => Some(container),
+        ContainerEngine::Podman if root.is_file() => Some(root),
+        _ => None,
+    }
+}
+
+/// Return local COPY/ADD sources that are excluded by the effective ignore file.
+/// This uses gitignore-compatible matching for Docker's documented pattern subset;
+/// unusual Docker-only pattern behavior remains deliberately conservative.
+pub fn ignored_copy_sources(
+    dockerfile: &Path,
+    context: &Path,
+    engine: ContainerEngine,
+) -> std::io::Result<Vec<(usize, String)>> {
+    let Some(ignorefile) = effective_ignorefile(dockerfile, context, engine) else { return Ok(Vec::new()); };
+    let mut builder = GitignoreBuilder::new(context);
+    builder.add(ignorefile);
+    let matcher = builder.build().map_err(std::io::Error::other)?;
+    let content = std::fs::read_to_string(dockerfile)?;
+    let document = crate::parser::parse_document(&content);
+    let mut ignored = Vec::new();
+    for instruction in document.instructions.iter().filter(|instruction| matches!(instruction.instruction.as_str(), "COPY" | "ADD")) {
+        let words = instruction.words.iter().filter(|word| !word.value.starts_with("--")).collect::<Vec<_>>();
+        let source_count = words.len().saturating_sub(1);
+        for source in words.into_iter().take(source_count) {
+            if source.value.contains("://") || source.value.contains('*') || source.value.contains('?') || source.value.starts_with('/') {
+                continue;
+            }
+            let candidate = context.join(&source.value);
+            if matcher.matched_path_or_any_parents(&candidate, false).is_ignore() {
+                ignored.push((instruction.line, source.value.clone()));
+            }
+        }
+    }
+    Ok(ignored)
 }
 
 fn has_exclusion_pattern(content: &str) -> bool {

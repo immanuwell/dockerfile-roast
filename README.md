@@ -314,11 +314,11 @@ droast completion fish | source
 
 ## what it catches
 
-<p data-droast-rule-count>84 rules, ngl thats a lot. run <code>droast --list-rules</code> for the full breakdown.</p>
+<p data-droast-rule-count>85 rules, ngl thats a lot. run <code>droast --list-rules</code> for the full breakdown.</p>
 
 <!-- BEGIN RULES -->
 <details>
-<summary data-droast-rule-count>all 84 rules</summary>
+<summary data-droast-rule-count>all 85 rules</summary>
 
 ```
 
@@ -402,6 +402,7 @@ droast completion fish | source
   DF074    ERROR    correctness,security               Image labels must satisfy the configured schema
   DF075    INFO     correctness,reliability            Containerfile.in must be linted after Podman CPP preprocessing
   DF076    WARN     correctness,reliability            Use a consistent casing style for Dockerfile instructions
+  DF077    ERROR    correctness,reliability            Do not COPY or ADD files excluded from the build context
   DF078    WARN     correctness,reliability            Use lowercase protocol names in EXPOSE
   DF079    WARN     correctness,reliability            Match AS casing to FROM in multi-stage builds
   DF082    WARN     correctness,reliability            Use key=value syntax for ENV and LABEL

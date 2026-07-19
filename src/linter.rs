@@ -153,6 +153,9 @@ pub fn lint_file_with_context(
     if opts.check_dockerignore && rule_id_enabled(opts, "DF033") {
         add_ignorefile_finding(&mut result, path, context, opts);
     }
+    if rule_id_enabled(opts, "DF077") {
+        add_copy_ignored_findings(&mut result, path, context, opts);
+    }
     finalize_findings(&content, &mut result.findings, opts);
     Ok(result)
 }
@@ -261,6 +264,20 @@ fn add_ignorefile_finding(
         message,
         roast: "This build context has no effective exclusions, so caches, repositories, dependencies, and secrets can all join the image-build road trip.".to_string(),
     });
+}
+
+fn add_copy_ignored_findings(result: &mut LintResult, dockerfile: &Path, context: &Path, opts: &LintOptions) {
+    let ignored = match repository::ignored_copy_sources(dockerfile, context, opts.engine) {
+        Ok(ignored) => ignored,
+        Err(_) => return,
+    };
+    for (line, source) in ignored {
+        result.findings.push(Finding {
+            rule: "DF077".into(), severity: Severity::Error, line, column: 0, end_line: 0, end_column: 0,
+            message: format!("{} source '{}' is excluded by the effective build-context ignore file", "COPY/ADD", source),
+            roast: "That source is ignored before the build starts. Docker cannot copy a file it never received.".into(),
+        });
+    }
 }
 
 pub fn has_errors(findings: &[Finding]) -> bool {
