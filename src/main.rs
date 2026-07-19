@@ -197,6 +197,14 @@ struct Cli {
     #[arg(long)]
     no_fail: bool,
 
+    /// JSON baseline used to distinguish existing findings from new findings
+    #[arg(long, value_name = "PATH")]
+    baseline: Option<PathBuf>,
+
+    /// Write all current findings to --baseline in the deterministic baseline format
+    #[arg(long, requires = "baseline")]
+    write_baseline: bool,
+
     /// List rule IDs, severities, categories, and descriptions
     #[arg(long)]
     list_rules: bool,
@@ -264,6 +272,13 @@ fn main() -> Result<()> {
 
     // --no-fail on CLI always wins; config can also enable it.
     let no_fail = cli.no_fail || global_settings.no_fail.unwrap_or(false);
+    let baseline = if cli.write_baseline {
+        None
+    } else if let Some(path) = &cli.baseline {
+        Some(dockerfile_roast::baseline::load(path)?)
+    } else {
+        None
+    };
 
     // SARIF suppresses the ASCII banner — it writes pure JSON to stdout.
     if format == OutputFormat::Terminal {
@@ -295,7 +310,11 @@ fn main() -> Result<()> {
             let file_no_fail = cli.no_fail || settings.no_fail.unwrap_or(no_fail);
             match lint_one(file, &opts) {
                 Ok(result) => {
-                    if linter::has_errors(&result.findings) && !file_no_fail {
+                    let has_blocking_error = result.findings.iter().any(|finding| {
+                        finding.severity == Severity::Error
+                            && !baseline.as_ref().is_some_and(|known| dockerfile_roast::baseline::contains(known, &result.file, finding))
+                    });
+                    if has_blocking_error && !file_no_fail {
                         any_error = true;
                     }
                     all_results.push(result);
@@ -310,6 +329,9 @@ fn main() -> Result<()> {
             .iter()
             .map(|r| (r.file.as_str(), r.findings.as_slice()))
             .collect();
+        if cli.write_baseline {
+            dockerfile_roast::baseline::write(cli.baseline.as_ref().expect("clap requires --baseline"), &pairs)?;
+        }
         if format == OutputFormat::Sarif {
             output::print_sarif(&pairs);
         } else {
@@ -324,7 +346,11 @@ fn main() -> Result<()> {
             match lint_one(file, &opts) {
                 Ok(result) => {
                     total_findings += result.findings.len();
-                    if linter::has_errors(&result.findings) && !file_no_fail {
+                    let has_blocking_error = result.findings.iter().any(|finding| {
+                        finding.severity == Severity::Error
+                            && !baseline.as_ref().is_some_and(|known| dockerfile_roast::baseline::contains(known, &result.file, finding))
+                    });
+                    if has_blocking_error && !file_no_fail {
                         any_error = true;
                     }
                     print_findings(&result.file, &result.findings, format, file_no_roast);
@@ -334,6 +360,19 @@ fn main() -> Result<()> {
                     any_error = true;
                 }
             }
+        }
+        if cli.write_baseline {
+            // Terminal output is streamed, so lint once more only when writing a
+            // baseline is explicitly requested in this output mode.
+            let mut baseline_results = Vec::new();
+            for file in &files {
+                let settings = effective_settings(&cfg, &cli, &file.dockerfile)?;
+                let opts = lint_options(&settings, &cli, shellcheck_mode, &cfg.shellcheck.exclude, engine)?;
+                let result = lint_one(file, &opts)?;
+                baseline_results.push(result);
+            }
+            let pairs = baseline_results.iter().map(|result| (result.file.as_str(), result.findings.as_slice())).collect::<Vec<_>>();
+            dockerfile_roast::baseline::write(cli.baseline.as_ref().expect("clap requires --baseline"), &pairs)?;
         }
         if files.len() > 1 && format == OutputFormat::Terminal {
             println!(

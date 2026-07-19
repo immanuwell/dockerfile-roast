@@ -15,6 +15,8 @@ pub mod policy;
 pub mod repository;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub mod shellcheck;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub mod baseline;
 
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 pub mod wasm;

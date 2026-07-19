@@ -92,6 +92,48 @@ fn cli_applies_severity_overrides_from_config() {
 }
 
 #[test]
+fn baseline_fingerprints_are_emitted_and_suppress_existing_errors() {
+    let root = policy_fixture("baseline");
+    let dockerfile = root.join("Dockerfile");
+    let baseline = root.join("droast-baseline.json");
+    std::fs::write(&dockerfile, "FROM alpine:3.20\nUSER root\n").unwrap();
+
+    let write = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--only", "DF002",
+            "--baseline", baseline.to_str().unwrap(),
+            "--write-baseline",
+            "--format", "json",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(write.status.success(), "{}", String::from_utf8_lossy(&write.stderr));
+    let json: serde_json::Value = serde_json::from_slice(&write.stdout).unwrap();
+    assert!(json["findings"][0]["fingerprint"].as_str().unwrap().starts_with("sha256:"));
+
+    let check = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--only", "DF002",
+            "--baseline", baseline.to_str().unwrap(),
+            "--format", "sarif",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(check.status.success(), "{}", String::from_utf8_lossy(&check.stderr));
+    let sarif: serde_json::Value = serde_json::from_slice(&check.stdout).unwrap();
+    assert!(sarif["runs"][0]["results"][0]["partialFingerprints"]["droast/v1"]
+        .as_str()
+        .unwrap()
+        .starts_with("sha256:"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cli_applies_path_specific_configuration() {
     let root = policy_fixture("path-override");
     let service = root.join("services/api");

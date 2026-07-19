@@ -1138,6 +1138,26 @@ Create a SARIF 2.1.0 report:
 droast --format sarif --no-roast --no-fail . > droast.sarif
 ```
 
+### Baselines and stable fingerprints
+
+Every JSON finding includes a deterministic `sha256:` fingerprint. SARIF results
+carry the same value in `partialFingerprints.droast/v1`. The identity uses the
+normalized file path, rule ID, and diagnostic message, so unrelated line
+insertions do not invalidate an accepted finding.
+
+Record the current findings for an existing repository:
+
+```bash
+droast --baseline droast-baseline.json --write-baseline --no-fail .
+```
+
+Use that baseline in CI. Existing error findings remain visible in output, but
+only errors absent from the baseline make Droast return a non-zero status:
+
+```bash
+droast --baseline droast-baseline.json .
+```
+
 `--no-fail` lets the report upload step run even when droast finds errors.
 
 ### Quiet advisory runs

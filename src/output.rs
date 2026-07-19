@@ -1,6 +1,7 @@
 use crate::rules::{Finding, Severity};
 use colored::*;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -29,6 +30,7 @@ impl std::str::FromStr for OutputFormat {
 #[derive(Serialize)]
 struct JsonFinding {
     rule: String,
+    fingerprint: String,
     severity: String,
     line: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -188,6 +190,7 @@ fn json_output(file: &str, findings: &[Finding]) -> JsonOutput {
             .iter()
             .map(|f| JsonFinding {
                 rule: f.rule.to_string(),
+                fingerprint: finding_fingerprint(file, f),
                 severity: f.severity.to_string(),
                 line: f.line,
                 column: (f.column > 0).then_some(f.column),
@@ -198,6 +201,15 @@ fn json_output(file: &str, findings: &[Finding]) -> JsonOutput {
             })
             .collect(),
     }
+}
+
+/// Stable baseline identity. It intentionally excludes the physical line so a
+/// finding survives unrelated insertions above it, while retaining the file,
+/// rule, and normalized diagnostic message.
+pub fn finding_fingerprint(file: &str, finding: &Finding) -> String {
+    let normalized_message = finding.message.split_whitespace().collect::<Vec<_>>().join(" ");
+    let material = format!("droast-fingerprint-v1\0{}\0{}\0{}", normalize_uri(file), finding.rule, normalized_message);
+    format!("sha256:{:x}", Sha256::digest(material.as_bytes()))
 }
 
 /// Emit one valid JSON document for a repository scan while preserving the
@@ -342,6 +354,7 @@ fn build_sarif(results: &[(&str, &[Finding])]) -> String {
                 "ruleIndex": idx,
                 "level": sarif_level(&f.severity),
                 "message": { "text": f.message },
+                "partialFingerprints": { "droast/v1": finding_fingerprint(file, f) },
                 "locations": [{
                     "physicalLocation": {
                         "artifactLocation": {
@@ -449,7 +462,7 @@ pub fn print_summary_header() {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_sarif, json_output};
+    use super::{build_sarif, finding_fingerprint, json_output};
     use crate::rules::{Finding, Severity};
 
     fn shellcheck_finding() -> Finding {
@@ -473,12 +486,16 @@ mod tests {
         assert_eq!(json["findings"][0]["column"], 9);
 
         let sarif: serde_json::Value =
-            serde_json::from_str(&build_sarif(&[("Dockerfile", &[finding])])).unwrap();
+            serde_json::from_str(&build_sarif(&[("Dockerfile", &[finding.clone()])])).unwrap();
         assert_eq!(sarif["runs"][0]["results"][0]["ruleId"], "SC2086");
         assert_eq!(
             sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"]
                 ["startColumn"],
             9
+        );
+        assert_eq!(
+            finding_fingerprint("Dockerfile", &finding),
+            finding_fingerprint("Dockerfile", &Finding { line: 99, ..finding })
         );
     }
 }
