@@ -254,7 +254,7 @@ pub fn parse_document(content: &str) -> Dockerfile {
             logical.push(&semantic[..kept], semantic_start);
 
             let normalized = if is_first {
-                semantic[effective_keyword_len.min(semantic.len())..kept].trim()
+                semantic[effective_keyword_len.min(kept)..kept].trim()
             } else {
                 semantic[..kept].trim()
             };

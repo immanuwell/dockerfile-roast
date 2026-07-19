@@ -234,6 +234,17 @@ fn empty_files_and_unterminated_continuations_report_diagnostics() {
 }
 
 #[test]
+fn lone_continuation_token_is_reported_without_panicking() {
+    let document = parse_document("\\\nFROM alpine:3.20\n");
+    assert!(
+        document
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "P004")
+    );
+}
+
+#[test]
 fn modern_fixture_parses_without_recovery_diagnostics() {
     let source = include_str!("fixtures/modern.Dockerfile");
     let document = parse_document(source);
