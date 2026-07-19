@@ -1,0 +1,42 @@
+name: BuildKit differential
+
+on:
+  workflow_dispatch:
+    inputs:
+      sample_count:
+        description: 'Number of real Dockerfiles to compare'
+        required: false
+        default: '100'
+  schedule:
+    - cron: '17 3 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Fetch pinned real-world corpus
+        env:
+          DROAST_CORPUS_TARGET: ${{ inputs.sample_count || '100' }}
+        run: scripts/fetch-compatibility-corpus.sh
+
+      - name: Compare parser acceptance with pinned BuildKit
+        env:
+          DROAST_DIFFERENTIAL_LIMIT: ${{ inputs.sample_count || '100' }}
+          DROAST_BUILDKIT_IMAGE: moby/buildkit:v0.17.3
+        run: scripts/run-buildkit-differential.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: buildkit-differential
+          path: .droast-corpus/buildkit-differential.tsv
+          if-no-files-found: error

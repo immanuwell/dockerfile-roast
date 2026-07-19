@@ -21,3 +21,13 @@ The downloader refuses to overwrite an existing corpus. Its selection excludes
 test fixtures and documentation, requires a `FROM` instruction, and caps each
 repository so a single monorepo cannot dominate the result. Validate all files
 with `scripts/run-compatibility-corpus.sh`.
+
+Compare parser acceptance with a pinned BuildKit check implementation:
+
+```bash
+scripts/run-buildkit-differential.sh
+```
+
+The resulting TSV distinguishes parser acceptance deltas from policy-finding
+deltas. It deliberately does not run a full image build: most corpus files need
+their original build context, secrets, or generated inputs.
