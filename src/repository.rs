@@ -871,6 +871,30 @@ pub fn ignored_copy_sources(
     Ok(ignored)
 }
 
+/// Whether the effective ignore file excludes the common broad-copy hazards
+/// `.git`, `node_modules`, `.env`, and `dist`. This is deliberately a narrow
+/// signal for diagnostic wording, not proof that `COPY .` is optimal.
+pub fn ignores_common_copy_all_hazards(
+    dockerfile: &Path,
+    context: &Path,
+    engine: ContainerEngine,
+) -> std::io::Result<bool> {
+    let Some(ignorefile) = effective_ignorefile(dockerfile, context, engine) else {
+        return Ok(false);
+    };
+    let mut builder = GitignoreBuilder::new(context);
+    builder.add(ignorefile);
+    let matcher = builder.build().map_err(std::io::Error::other)?;
+    Ok([
+        (".git", true),
+        ("node_modules", true),
+        (".env", false),
+        ("dist", true),
+    ]
+    .into_iter()
+    .all(|(path, is_dir)| matcher.matched_path_or_any_parents(context.join(path), is_dir).is_ignore()))
+}
+
 fn has_exclusion_pattern(content: &str) -> bool {
     content.lines().enumerate().any(|(index, line)| {
         let line = if index == 0 {

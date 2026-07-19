@@ -158,6 +158,30 @@ fn copy_ignored_file_uses_the_effective_build_context_ignore_file() {
 }
 
 #[test]
+fn copy_all_acknowledges_common_effective_ignore_patterns() {
+    let root = policy_fixture("copy-all-ignore");
+    let dockerfile = root.join("Dockerfile");
+    std::fs::write(&dockerfile, "FROM alpine:3.20\nCOPY . .\n").unwrap();
+    std::fs::write(root.join(".dockerignore"), ".git\nnode_modules\n.env\ndist\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--only", "DF007",
+            "--format", "json",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["findings"][0]["rule"], "DF007");
+    assert!(result["findings"][0]["message"].as_str().unwrap().contains("protected build context"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cli_applies_path_specific_configuration() {
     let root = policy_fixture("path-override");
     let service = root.join("services/api");

@@ -156,6 +156,9 @@ pub fn lint_file_with_context(
     if rule_id_enabled(opts, "DF077") {
         add_copy_ignored_findings(&mut result, path, context, opts);
     }
+    if rule_id_enabled(opts, "DF007") {
+        contextualize_copy_all_findings(&mut result, path, context, opts);
+    }
     finalize_findings(&content, &mut result.findings, opts);
     Ok(result)
 }
@@ -277,6 +280,21 @@ fn add_copy_ignored_findings(result: &mut LintResult, dockerfile: &Path, context
             message: format!("{} source '{}' is excluded by the effective build-context ignore file", "COPY/ADD", source),
             roast: "That source is ignored before the build starts. Docker cannot copy a file it never received.".into(),
         });
+    }
+}
+
+fn contextualize_copy_all_findings(
+    result: &mut LintResult,
+    dockerfile: &Path,
+    context: &Path,
+    opts: &LintOptions,
+) {
+    if !repository::ignores_common_copy_all_hazards(dockerfile, context, opts.engine).unwrap_or(false) {
+        return;
+    }
+    for finding in result.findings.iter_mut().filter(|finding| finding.rule == "DF007") {
+        finding.message = "COPY . uses a protected build context but still broadens cache invalidation".into();
+        finding.roast = "Your ignore file keeps .git, node_modules, .env, and dist out of the build context. Nice. COPY . still makes every included file part of this layer's cache key, so prefer explicit copies when practical.".into();
     }
 }
 
