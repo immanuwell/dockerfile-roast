@@ -1,4 +1,4 @@
-use crate::parser::{parse_document, DiagnosticSeverity, Instruction};
+use crate::parser::{parse_document, DiagnosticSeverity, Instruction, SourceSpan};
 use regex::Regex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -84,6 +84,10 @@ pub fn categories_for(id: &str) -> &'static [&'static str] {
         }
         "DF072" | "DF074" => &["correctness", "security"],
         "DF075" => &["correctness", "reliability"],
+        "DF076" | "DF078" | "DF079" | "DF082" | "DF084" | "DF085" | "DF086" | "DF087" => {
+            &["correctness", "reliability"]
+        }
+        "DF083" => &["correctness", "reproducibility"],
         _ => &[],
     }
 }
@@ -540,11 +544,209 @@ pub fn all_rules() -> Vec<Rule> {
             description: "Containerfile.in must be linted after Podman CPP preprocessing",
             func: rule_configured_policy,
         },
+        Rule {
+            id: "DF076",
+            severity: Severity::Warning,
+            description: "Use a consistent casing style for Dockerfile instructions",
+            func: rule_consistent_instruction_casing,
+        },
+        Rule {
+            id: "DF078",
+            severity: Severity::Warning,
+            description: "Use lowercase protocol names in EXPOSE",
+            func: rule_expose_proto_casing,
+        },
+        Rule {
+            id: "DF079",
+            severity: Severity::Warning,
+            description: "Match AS casing to FROM in multi-stage builds",
+            func: rule_from_as_casing,
+        },
+        Rule {
+            id: "DF082",
+            severity: Severity::Warning,
+            description: "Use key=value syntax for ENV and LABEL",
+            func: rule_legacy_key_value_format,
+        },
+        Rule {
+            id: "DF083",
+            severity: Severity::Warning,
+            description: "Do not set FROM --platform to the default target platform",
+            func: rule_redundant_target_platform,
+        },
+        Rule {
+            id: "DF084",
+            severity: Severity::Error,
+            description: "Do not use reserved Dockerfile stage names",
+            func: rule_reserved_stage_name,
+        },
+        Rule {
+            id: "DF085",
+            severity: Severity::Warning,
+            description: "Use lowercase multi-stage build names",
+            func: rule_stage_name_casing,
+        },
+        Rule {
+            id: "DF086",
+            severity: Severity::Error,
+            description: "Declare ARG variables used by FROM before the first FROM",
+            func: rule_undefined_arg_in_from,
+        },
+        Rule {
+            id: "DF087",
+            severity: Severity::Error,
+            description: "Declare Dockerfile variables before using them",
+            func: rule_undefined_variable,
+        },
     ]
 }
 
 fn rule_configured_policy(_instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     Vec::new()
+}
+
+fn finding_at_span(rule: &str, severity: Severity, span: SourceSpan, message: String, roast: &str) -> Finding {
+    Finding {
+        rule: rule.into(),
+        severity,
+        line: span.start.line,
+        column: span.start.column,
+        end_line: span.end.line,
+        end_column: span.end.column,
+        message,
+        roast: roast.into(),
+    }
+}
+
+fn rule_consistent_instruction_casing(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
+    let mut expected_uppercase = None;
+    let mut findings = Vec::new();
+    for instruction in instrs {
+        let spelling = instruction.keyword_span.text(raw);
+        let is_uppercase = spelling.bytes().all(|byte| !byte.is_ascii_alphabetic() || byte.is_ascii_uppercase());
+        let is_lowercase = spelling.bytes().all(|byte| !byte.is_ascii_alphabetic() || byte.is_ascii_lowercase());
+        if !is_uppercase && !is_lowercase {
+            findings.push(finding_at_span("DF076", Severity::Warning, instruction.keyword_span,
+                format!("Instruction '{}' uses mixed casing", spelling),
+                "Pick all-uppercase or all-lowercase Dockerfile instructions so the file stops shouting in two dialects."));
+            continue;
+        }
+        if let Some(expected) = expected_uppercase {
+            if expected != is_uppercase {
+                findings.push(finding_at_span("DF076", Severity::Warning, instruction.keyword_span,
+                    format!("Instruction '{}' does not match the file's instruction casing", spelling),
+                    "Your Dockerfile switches typography halfway through the build. Pick one instruction casing and commit to it."));
+            }
+        } else {
+            expected_uppercase = Some(is_uppercase);
+        }
+    }
+    findings
+}
+
+fn rule_expose_proto_casing(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "EXPOSE").into_iter().flat_map(|instruction| {
+        instruction.words.iter().filter_map(|word| {
+            let (_, protocol) = word.value.rsplit_once('/')?;
+            (protocol != protocol.to_ascii_lowercase()).then(|| finding_at_span("DF078", Severity::Warning, word.span,
+                format!("EXPOSE protocol '{}' should be lowercase", protocol),
+                "TCP and UDP are protocols, not acronyms in a ransom note. Use lowercase in EXPOSE."))
+        }).collect::<Vec<_>>()
+    }).collect()
+}
+
+fn rule_from_as_casing(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "FROM").into_iter().filter_map(|instruction| {
+        let from_spelling = instruction.keyword_span.text(raw);
+        let expected_uppercase = from_spelling.bytes().all(|byte| !byte.is_ascii_alphabetic() || byte.is_ascii_uppercase());
+        instruction.words.iter().find(|word| word.value.eq_ignore_ascii_case("as")).and_then(|word| {
+            let is_uppercase = word.raw.bytes().all(|byte| !byte.is_ascii_alphabetic() || byte.is_ascii_uppercase());
+            (expected_uppercase != is_uppercase).then(|| finding_at_span("DF079", Severity::Warning, word.span,
+                format!("'{}' should use the same casing as '{}'", word.raw, from_spelling),
+                "FROM and AS are on the same team. Give them matching uniforms."))
+        })
+    }).collect()
+}
+
+fn rule_legacy_key_value_format(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs.iter().filter(|instruction| matches!(instruction.instruction.as_str(), "ENV" | "LABEL"))
+        .filter_map(|instruction| {
+            let words = &instruction.words;
+            (words.len() >= 2 && !words[0].value.contains('='))
+                .then(|| finding_at_span("DF082", Severity::Warning, words[0].span,
+                    format!("{} uses legacy space-separated key/value syntax", instruction.instruction),
+                    "Space-separated ENV and LABEL values are vintage Dockerfile syntax. Use key=value before it starts growing sideburns."))
+        }).collect()
+}
+
+fn rule_redundant_target_platform(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "FROM").into_iter().flat_map(|instruction| instruction.flags.iter().filter_map(|flag| {
+        (flag.name.eq_ignore_ascii_case("platform") && flag.value.as_deref() == Some("$TARGETPLATFORM"))
+            .then(|| finding_at_span("DF083", Severity::Warning, flag.span,
+                "FROM --platform=$TARGETPLATFORM is redundant because it is the default".into(),
+                "That platform flag repeats Docker's default. The Dockerfile is narrating what Docker already knows."))
+    }).collect::<Vec<_>>()).collect()
+}
+
+fn rule_reserved_stage_name(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "FROM").into_iter().filter_map(|instruction| {
+        let alias = parse_from_arguments(&instruction.arguments)?.alias?;
+        (alias.eq_ignore_ascii_case("scratch")).then(|| instruction.words.iter().find(|word| word.value == alias).map(|word|
+            finding_at_span("DF084", Severity::Error, word.span, "Stage name 'scratch' is reserved".into(),
+                "Calling a stage scratch is asking Docker to confuse your named stage with its special empty image."))).flatten()
+    }).collect()
+}
+
+fn rule_stage_name_casing(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "FROM").into_iter().filter_map(|instruction| {
+        let alias = parse_from_arguments(&instruction.arguments)?.alias?;
+        (alias != alias.to_ascii_lowercase()).then(|| instruction.words.iter().find(|word| word.value == alias).map(|word|
+            finding_at_span("DF085", Severity::Warning, word.span, format!("Stage name '{}' should be lowercase", alias),
+                "Stage names are case-sensitive, which is a terrible place for a surprise. Keep them lowercase."))).flatten()
+    }).collect()
+}
+
+fn global_args(instrs: &[Instruction]) -> std::collections::HashSet<String> {
+    instrs.iter().take_while(|instruction| instruction.instruction != "FROM")
+        .filter(|instruction| instruction.instruction == "ARG")
+        .filter_map(|instruction| instruction.words.first())
+        .map(|word| word.value.split('=').next().unwrap_or(&word.value).to_string())
+        .collect()
+}
+
+fn known_build_variable(name: &str) -> bool {
+    matches!(name, "BUILDPLATFORM" | "BUILDOS" | "BUILDARCH" | "BUILDVARIANT" | "TARGETPLATFORM" | "TARGETOS" | "TARGETARCH" | "TARGETVARIANT" | "HTTP_PROXY" | "HTTPS_PROXY" | "FTP_PROXY" | "NO_PROXY" | "ALL_PROXY")
+}
+
+fn rule_undefined_arg_in_from(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let declared = global_args(instrs);
+    instrs_of(instrs, "FROM").into_iter().flat_map(|instruction| instruction.variables.iter().filter_map(|variable| {
+        (!declared.contains(&variable.name) && !known_build_variable(&variable.name)).then(|| finding_at_span("DF086", Severity::Error, variable.span,
+            format!("FROM references undefined ARG '{}'; declare it before the first FROM", variable.name),
+            "This FROM variable has no global ARG declaration. Docker cannot build an image from vibes."))
+    }).collect::<Vec<_>>()).collect()
+}
+
+fn rule_undefined_variable(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let mut declared = global_args(instrs);
+    let mut findings = Vec::new();
+    for instruction in instrs {
+        if instruction.instruction == "ARG" || instruction.instruction == "ENV" {
+            for word in &instruction.words {
+                declared.insert(word.value.split('=').next().unwrap_or(&word.value).to_string());
+            }
+            continue;
+        }
+        if instruction.instruction == "RUN" { continue; }
+        for variable in &instruction.variables {
+            if !declared.contains(&variable.name) && !known_build_variable(&variable.name) {
+                findings.push(finding_at_span("DF087", Severity::Error, variable.span,
+                    format!("{} references undefined variable '{}'", instruction.instruction, variable.name),
+                    "That variable appears from nowhere. Declare it with ARG or ENV before Docker starts improvising."));
+            }
+        }
+    }
+    findings
 }
 
 fn rule_parser_syntax(_instrs: &[Instruction], raw: &str) -> Vec<Finding> {

@@ -194,6 +194,14 @@ pub(crate) fn rule_id_enabled(opts: &LintOptions, id: &str) -> bool {
 }
 
 fn finalize_findings(content: &str, findings: &mut Vec<Finding>, opts: &LintOptions) {
+    let document = parser::parse_document(content);
+    for finding in findings.iter_mut().filter(|finding| finding.line > 0 && finding.column == 0) {
+        if let Some(instruction) = document.instructions.iter().find(|instruction| instruction.line == finding.line) {
+            finding.column = instruction.span.start.column;
+            finding.end_line = instruction.span.end.line;
+            finding.end_column = instruction.span.end.column;
+        }
+    }
     crate::policy::apply_inline_suppressions(content, findings, opts);
     for finding in findings.iter_mut() {
         if let Some(severity) = opts.severity_overrides.get(&finding.rule) {

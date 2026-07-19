@@ -16,6 +16,13 @@ fn has_rule(findings: &[Finding], rule_id: &str) -> bool {
     findings.iter().any(|f| f.rule == rule_id)
 }
 
+fn finding<'a>(findings: &'a [Finding], rule_id: &str) -> &'a Finding {
+    findings
+        .iter()
+        .find(|finding| finding.rule == rule_id)
+        .unwrap_or_else(|| panic!("expected {rule_id} finding"))
+}
+
 fn no_rule(findings: &[Finding], rule_id: &str) -> bool {
     !has_rule(findings, rule_id)
 }
@@ -1359,6 +1366,43 @@ fn shell_rules_inspect_run_heredoc_contents() {
     assert!(has_rule(&findings, "DF015"));
     assert!(has_rule(&findings, "DF016"));
     assert!(no_rule(&findings, "DF071"));
+}
+
+// ─── Docker build-check compatibility ───────────────────────────────────────
+
+#[test]
+fn docker_casing_checks_report_token_spans() {
+    let findings = lint("FROM alpine:3.20 as Build\nrun true\nEXPOSE 8080/TCP\n");
+    let instruction = finding(&findings, "DF076");
+    assert_eq!((instruction.line, instruction.column, instruction.end_line), (2, 1, 2));
+    let as_keyword = finding(&findings, "DF079");
+    assert_eq!((as_keyword.line, as_keyword.column), (1, 18));
+    let protocol = finding(&findings, "DF078");
+    assert_eq!((protocol.line, protocol.column), (3, 8));
+}
+
+#[test]
+fn docker_key_value_and_stage_checks_accept_modern_forms() {
+    let findings = lint("FROM --platform=$BUILDPLATFORM alpine:3.20 AS build\nENV NAME=value\nLABEL org.opencontainers.image.title=droast\n");
+    assert!(no_rule(&findings, "DF082"));
+    assert!(no_rule(&findings, "DF083"));
+    assert!(no_rule(&findings, "DF084"));
+    assert!(no_rule(&findings, "DF085"));
+
+    let findings = lint("FROM --platform=$TARGETPLATFORM alpine:3.20 AS Build\nENV NAME value\n");
+    assert!(has_rule(&findings, "DF082"));
+    assert!(has_rule(&findings, "DF083"));
+    assert!(has_rule(&findings, "DF085"));
+}
+
+#[test]
+fn docker_variable_checks_distinguish_declared_and_undefined_variables() {
+    let findings = lint("ARG TAG=3.20\nFROM alpine:${TAG} AS build\nCOPY ${MISSING} /app/\n");
+    assert!(no_rule(&findings, "DF086"));
+    assert!(has_rule(&findings, "DF087"));
+
+    let findings = lint("FROM alpine:${TAG}\n");
+    assert!(has_rule(&findings, "DF086"));
 }
 
 #[test]

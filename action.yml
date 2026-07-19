@@ -1,5 +1,5 @@
 name: 'droast — Dockerfile linter'
-description: 'Lint Dockerfiles with all 75 rules and report findings as GitHub annotations.' # droast:rule-count
+description: 'Lint Dockerfiles with all 84 rules and report findings as GitHub annotations.' # droast:rule-count
 author: 'immanuwell'
 
 branding:

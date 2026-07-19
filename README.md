@@ -314,11 +314,11 @@ droast completion fish | source
 
 ## what it catches
 
-<p data-droast-rule-count>75 rules, ngl thats a lot. run <code>droast --list-rules</code> for the full breakdown.</p>
+<p data-droast-rule-count>84 rules, ngl thats a lot. run <code>droast --list-rules</code> for the full breakdown.</p>
 
 <!-- BEGIN RULES -->
 <details>
-<summary data-droast-rule-count>all 75 rules</summary>
+<summary data-droast-rule-count>all 84 rules</summary>
 
 ```
 
@@ -401,6 +401,15 @@ droast completion fish | source
   DF073    ERROR    reproducibility,supply-chain       Base images must satisfy the approved image policy
   DF074    ERROR    correctness,security               Image labels must satisfy the configured schema
   DF075    INFO     correctness,reliability            Containerfile.in must be linted after Podman CPP preprocessing
+  DF076    WARN     correctness,reliability            Use a consistent casing style for Dockerfile instructions
+  DF078    WARN     correctness,reliability            Use lowercase protocol names in EXPOSE
+  DF079    WARN     correctness,reliability            Match AS casing to FROM in multi-stage builds
+  DF082    WARN     correctness,reliability            Use key=value syntax for ENV and LABEL
+  DF083    WARN     correctness,reproducibility        Do not set FROM --platform to the default target platform
+  DF084    ERROR    correctness,reliability            Do not use reserved Dockerfile stage names
+  DF085    WARN     correctness,reliability            Use lowercase multi-stage build names
+  DF086    ERROR    correctness,reliability            Declare ARG variables used by FROM before the first FROM
+  DF087    ERROR    correctness,reliability            Declare Dockerfile variables before using them
 
   Use --skip DF001,DF002 to suppress specific rules.
   Use --min-severity warning to hide INFO findings.
