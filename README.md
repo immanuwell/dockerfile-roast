@@ -176,12 +176,12 @@ roast Dockerfiles before they even reach CI, via [pre-commit](https://pre-commit
 
 ```yaml
 - repo: https://github.com/immanuwell/dockerfile-roast
-  rev: 1.4.2
+  rev: 1.4.4
   hooks:
     - id: droast
 ```
 
-the hook runs on `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `Containerfile` and `Containerfile.*` — the same names droast discovers on its own. pass flags through `args` as usual:
+the hook runs on `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `Containerfile`, and `Containerfile.*`, while excluding Dockerfile-specific `.dockerignore` files. pass flags through `args` as usual:
 
 ```yaml
     - id: droast
