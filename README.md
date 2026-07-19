@@ -149,7 +149,7 @@ See the **[complete configuration guide](DOCS.md#configuration)** and the copy-p
 add droast to any repo in 5 lines:
 
 ```yaml
-- uses: immanuwell/dockerfile-roast@1.4.3
+- uses: immanuwell/dockerfile-roast@1.4.4
 ```
 
 full example (`.github/workflows/lint.yml`):
@@ -164,7 +164,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: immanuwell/dockerfile-roast@1.4.3
+      - uses: immanuwell/dockerfile-roast@1.4.4
 ```
 
 findings show up as inline annotations on the PR diff. no configuration required.
@@ -181,12 +181,12 @@ available inputs (all optional):
 | `skip` | — | comma-separated rule IDs to ignore |
 | `no-roast` | `false` | technical output only, no jokes |
 | `no-fail` | `false` | advisory mode — never blocks the build |
-| `image-tag` | `latest` | pin to a specific droast release, e.g. `1.4.3` |
+| `image-tag` | `latest` | pin to a specific droast release, e.g. `1.4.4` |
 
 example with options:
 
 ```yaml
-- uses: immanuwell/dockerfile-roast@1.4.3
+- uses: immanuwell/dockerfile-roast@1.4.4
   with:
     files: '**/Dockerfile'
     preset: production
