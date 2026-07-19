@@ -106,7 +106,7 @@ droast --format compact Dockerfile   # one line per finding
 droast --format sarif Dockerfile     # SARIF 2.1.0 for GitHub Advanced Security / IDEs
 ```
 
-When given a directory—or no path at all—droast recursively discovers `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `Containerfile`, and `Containerfile.*`. It also reads Compose YAML and Docker Bake HCL/JSON files to find non-standard Dockerfile paths and their declared build contexts. Repository ignore rules are respected, while hidden project directories such as `.devcontainer` remain discoverable.
+When given a directory—or no path at all—droast recursively discovers `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `Containerfile`, and `Containerfile.*`. It also reads Compose YAML and Docker Bake HCL/JSON files to find non-standard Dockerfile paths and their declared build contexts. In Podman mode, it additionally follows Quadlet `.build`/`.kube` units and local-image `*.kube.yaml` layouts. Repository ignore rules are respected, while hidden project directories such as `.devcontainer` remain discoverable.
 
 For `DF033`, Docker mode uses the effective ignore file Docker would use: `<Dockerfile>.dockerignore` beside the Dockerfile takes precedence over `.dockerignore` at the build-context root. Podman mode instead prefers `.containerignore`, then falls back to `.dockerignore`. Select it with `--engine podman` or `[workflow] engine = "podman"`. Missing, empty, comment-only, and negation-only ignore files are reported; use `--check-ignorefile=false` to disable this context check.
 

@@ -511,6 +511,60 @@ fn podman_prefers_containerignore_over_dockerignore() {
 }
 
 #[test]
+fn podman_discovers_quadlet_and_kube_local_builds() {
+    let root = std::env::temp_dir().join(format!("droast-quadlet-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("quadlet-context")).unwrap();
+    std::fs::create_dir_all(root.join("kube-app")).unwrap();
+    std::fs::write(root.join("quadlet-context/Containerfile"), "FROM alpine:3.20\n").unwrap();
+    std::fs::write(root.join("kube-app/Containerfile"), "FROM alpine:3.20\n").unwrap();
+    std::fs::write(
+        root.join("app.build"),
+        "[Build]\nFile=quadlet-context/Containerfile\nSetWorkingDirectory=unit\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("pod.kube"),
+        "[Kube]\nYaml=pod.yaml\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("pod.yaml"),
+        "apiVersion: v1\nkind: Pod\nspec:\n  containers:\n    - name: app\n      image: kube-app\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            root.to_str().unwrap(),
+            "--engine",
+            "podman",
+            "--format",
+            "sarif",
+            "--only",
+            "DF071",
+            "--no-fail",
+            "--check-ignorefile=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let artifacts = document["runs"][0]["artifacts"].as_array().unwrap();
+    assert_eq!(artifacts.len(), 2);
+    assert!(artifacts.iter().any(|artifact| artifact["location"]["uri"]
+        .as_str()
+        .unwrap()
+        .ends_with("quadlet-context/Containerfile")));
+    assert!(artifacts.iter().any(|artifact| artifact["location"]["uri"]
+        .as_str()
+        .unwrap()
+        .ends_with("kube-app/Containerfile")));
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn dockerfile_specific_ignore_works_without_a_context_root_ignore() {
     let fixture = repository_fixture();
     let sarif = run_sarif(&[

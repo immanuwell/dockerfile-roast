@@ -383,6 +383,8 @@ Warnings alone do not produce exit code `1`. Use output review or a chosen rule 
 - Dockerfiles referenced by Compose files
 - Dockerfiles referenced by Bake HCL or JSON files
 
+With `--engine podman`, discovery also follows Quadlet `.build` units, Quadlet `.kube` units, and `kube.yaml`/`*.kube.yaml` manifests that use Podman’s local-image directory layout. Remote build contexts and image references remain out of scope because they do not identify a local Containerfile to lint.
+
 Use `--engine podman` when linting a Podman build workflow. This preserves the shared Dockerfile rules while making DF033 select `.containerignore` before `.dockerignore`.
 
 Duplicate references are linted once.

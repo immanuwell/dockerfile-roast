@@ -90,6 +90,12 @@ fn discover_path(
         discover_compose(path, inputs, warnings);
     } else if path.is_file() && is_bake_file(path) {
         discover_bake(path, inputs, warnings);
+    } else if engine == ContainerEngine::Podman && path.is_file() && is_quadlet_build_file(path) {
+        discover_quadlet_build(path, inputs, warnings);
+    } else if engine == ContainerEngine::Podman && path.is_file() && is_quadlet_kube_file(path) {
+        discover_quadlet_kube(path, inputs, warnings);
+    } else if engine == ContainerEngine::Podman && path.is_file() && is_kube_play_file(path) {
+        discover_kube_play(path, inputs, warnings);
     } else {
         let context = path.parent().unwrap_or_else(|| Path::new("."));
         insert_input(inputs, path.to_path_buf(), absolute_path(context));
@@ -105,6 +111,9 @@ fn discover_directory(
     let mut dockerfiles = Vec::new();
     let mut compose_files = Vec::new();
     let mut bake_files = Vec::new();
+    let mut quadlet_build_files = Vec::new();
+    let mut quadlet_kube_files = Vec::new();
+    let mut kube_files = Vec::new();
 
     let mut walker = WalkBuilder::new(root);
     walker
@@ -135,11 +144,20 @@ fn discover_directory(
             compose_files.push(path);
         } else if is_bake_file(&path) {
             bake_files.push(path);
+        } else if engine == ContainerEngine::Podman && is_quadlet_build_file(&path) {
+            quadlet_build_files.push(path);
+        } else if engine == ContainerEngine::Podman && is_quadlet_kube_file(&path) {
+            quadlet_kube_files.push(path);
+        } else if engine == ContainerEngine::Podman && is_kube_play_file(&path) {
+            kube_files.push(path);
         }
     }
 
     compose_files.sort();
     bake_files.sort();
+    quadlet_build_files.sort();
+    quadlet_kube_files.sort();
+    kube_files.sort();
     dockerfiles.sort();
 
     // Build definitions carry stronger context information than filename-only
@@ -150,6 +168,15 @@ fn discover_directory(
     }
     for path in bake_files {
         discover_bake(&path, inputs, warnings);
+    }
+    for path in quadlet_build_files {
+        discover_quadlet_build(&path, inputs, warnings);
+    }
+    for path in quadlet_kube_files {
+        discover_quadlet_kube(&path, inputs, warnings);
+    }
+    for path in kube_files {
+        discover_kube_play(&path, inputs, warnings);
     }
     for dockerfile in dockerfiles {
         if contains_dockerfile(inputs, &dockerfile) {
@@ -353,6 +380,227 @@ fn discover_bake(
         let dockerfile = resolve_path(&context, dockerfile_value);
         insert_referenced(inputs, dockerfile, context, "Bake", bake_file, warnings);
     }
+}
+
+fn discover_quadlet_build(
+    unit: &Path,
+    inputs: &mut BTreeMap<(PathBuf, PathBuf), BuildInput>,
+    warnings: &mut Vec<String>,
+) {
+    let content = match std::fs::read_to_string(unit) {
+        Ok(content) => content,
+        Err(error) => {
+            warnings.push(format!("cannot read Quadlet build unit '{}': {error}", unit.display()));
+            return;
+        }
+    };
+    if !quadlet_has_section(&content, "Build") {
+        return;
+    }
+    let base = unit.parent().unwrap_or_else(|| Path::new("."));
+    let files = quadlet_values(&content, "Build", "File");
+    let working_directory = quadlet_values(&content, "Build", "SetWorkingDirectory")
+        .into_iter()
+        .last()
+        .or_else(|| quadlet_values(&content, "Service", "WorkingDirectory").into_iter().last());
+
+    if files.is_empty() {
+        let Some(context) = quadlet_context(base, None, working_directory.as_deref()) else {
+            warnings.push(format!(
+                "Quadlet build unit '{}' has no local build context",
+                unit.display()
+            ));
+            return;
+        };
+        if let Some(dockerfile) = default_containerfile(&context) {
+            insert_referenced(inputs, dockerfile, context, "Quadlet build", unit, warnings);
+        } else {
+            warnings.push(format!(
+                "Quadlet build unit '{}' has no Containerfile or Dockerfile in '{}'",
+                unit.display(),
+                context.display()
+            ));
+        }
+        return;
+    }
+
+    for file in files {
+        if file == "-" {
+            warnings.push(format!(
+                "Quadlet build unit '{}' reads its Containerfile from stdin and cannot be discovered",
+                unit.display()
+            ));
+            continue;
+        }
+        let Some(dockerfile) = resolve_local_path(base, &file) else {
+            warnings.push(format!(
+                "Quadlet build unit '{}' references a non-local Containerfile '{file}'",
+                unit.display()
+            ));
+            continue;
+        };
+        let Some(context) = quadlet_context(base, Some(&dockerfile), working_directory.as_deref()) else {
+            warnings.push(format!(
+                "Quadlet build unit '{}' has a non-local build context",
+                unit.display()
+            ));
+            continue;
+        };
+        insert_referenced(inputs, dockerfile, context, "Quadlet build", unit, warnings);
+    }
+}
+
+fn discover_quadlet_kube(
+    unit: &Path,
+    inputs: &mut BTreeMap<(PathBuf, PathBuf), BuildInput>,
+    warnings: &mut Vec<String>,
+) {
+    let content = match std::fs::read_to_string(unit) {
+        Ok(content) => content,
+        Err(error) => {
+            warnings.push(format!("cannot read Quadlet kube unit '{}': {error}", unit.display()));
+            return;
+        }
+    };
+    if !quadlet_has_section(&content, "Kube") {
+        return;
+    }
+    let base = unit.parent().unwrap_or_else(|| Path::new("."));
+    for yaml in quadlet_values(&content, "Kube", "Yaml") {
+        let Some(path) = resolve_local_path(base, &yaml) else {
+            warnings.push(format!(
+                "Quadlet kube unit '{}' references a non-local YAML source '{yaml}'",
+                unit.display()
+            ));
+            continue;
+        };
+        if path.is_file() {
+            discover_kube_play(&path, inputs, warnings);
+        } else {
+            warnings.push(format!(
+                "Quadlet kube unit '{}' references missing YAML '{}'",
+                unit.display(),
+                path.display()
+            ));
+        }
+    }
+}
+
+fn discover_kube_play(
+    yaml_file: &Path,
+    inputs: &mut BTreeMap<(PathBuf, PathBuf), BuildInput>,
+    warnings: &mut Vec<String>,
+) {
+    let content = match std::fs::read_to_string(yaml_file) {
+        Ok(content) => content,
+        Err(error) => {
+            warnings.push(format!("cannot read Kubernetes YAML '{}': {error}", yaml_file.display()));
+            return;
+        }
+    };
+    let document: YamlValue = match serde_yaml::from_str(&content) {
+        Ok(document) => document,
+        Err(error) => {
+            warnings.push(format!("cannot parse Kubernetes YAML '{}': {error}", yaml_file.display()));
+            return;
+        }
+    };
+    let base = yaml_file.parent().unwrap_or_else(|| Path::new("."));
+    for image in kube_image_values(&document) {
+        let Some(image_dir) = local_kube_image_directory(&image) else {
+            continue;
+        };
+        let context = base.join(image_dir);
+        let Some(dockerfile) = default_containerfile(&context) else {
+            continue;
+        };
+        insert_referenced(inputs, dockerfile, context, "Podman kube play", yaml_file, warnings);
+    }
+}
+
+fn quadlet_values(content: &str, target_section: &str, target_key: &str) -> Vec<String> {
+    let mut section = "";
+    let mut values = Vec::new();
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if let Some(name) = line.strip_prefix('[').and_then(|name| name.strip_suffix(']')) {
+            section = name.trim();
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if section.eq_ignore_ascii_case(target_section) && key.trim().eq_ignore_ascii_case(target_key) {
+            values.push(value.trim().to_string());
+        }
+    }
+    values
+}
+
+fn quadlet_has_section(content: &str, target_section: &str) -> bool {
+    content.lines().any(|line| {
+        line.trim()
+            .strip_prefix('[')
+            .and_then(|name| name.strip_suffix(']'))
+            .is_some_and(|name| name.trim().eq_ignore_ascii_case(target_section))
+    })
+}
+
+fn quadlet_context(base: &Path, dockerfile: Option<&Path>, value: Option<&str>) -> Option<PathBuf> {
+    match value.unwrap_or("file") {
+        "file" => dockerfile.and_then(Path::parent).map(Path::to_path_buf),
+        "unit" => Some(base.to_path_buf()),
+        value => resolve_local_path(base, value),
+    }
+}
+
+fn default_containerfile(context: &Path) -> Option<PathBuf> {
+    ["Containerfile", "Dockerfile"]
+        .into_iter()
+        .map(|name| context.join(name))
+        .find(|path| path.is_file())
+}
+
+fn kube_image_values(document: &YamlValue) -> Vec<String> {
+    let mut images = Vec::new();
+    collect_kube_image_values(document, &mut images);
+    images
+}
+
+fn collect_kube_image_values(value: &YamlValue, images: &mut Vec<String>) {
+    match value {
+        YamlValue::Mapping(entries) => {
+            for (key, value) in entries {
+                if key.as_str() == Some("image") {
+                    if let Some(image) = value.as_str() {
+                        images.push(image.to_string());
+                    }
+                }
+                collect_kube_image_values(value, images);
+            }
+        }
+        YamlValue::Sequence(values) => {
+            for value in values {
+                collect_kube_image_values(value, images);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn local_kube_image_directory(image: &str) -> Option<&str> {
+    if image.is_empty()
+        || image.contains('/')
+        || image.contains(':')
+        || image.contains('@')
+        || image == "latest"
+    {
+        return None;
+    }
+    Some(image)
 }
 
 fn parse_bake_json(content: &str) -> Result<HashMap<String, BakeTarget>, serde_json::Error> {
@@ -639,6 +887,24 @@ fn is_bake_file(path: &Path) -> bool {
         return false;
     };
     name.starts_with("docker-bake") && (name.ends_with(".hcl") || name.ends_with(".json"))
+}
+
+fn is_quadlet_build_file(path: &Path) -> bool {
+    path.extension() == Some(OsStr::new("build"))
+}
+
+fn is_quadlet_kube_file(path: &Path) -> bool {
+    path.extension() == Some(OsStr::new("kube"))
+}
+
+fn is_kube_play_file(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    name == "kube.yaml"
+        || name == "kube.yml"
+        || name.ends_with(".kube.yaml")
+        || name.ends_with(".kube.yml")
 }
 
 fn contains_glob(path: &str) -> bool {
