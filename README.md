@@ -102,11 +102,13 @@ droast works out of the box with zero configuration. for teams that want to comm
 
 ```toml
 # droast.toml — all fields optional
-skip        = ["DF012", "DF022"]  # rules to suppress project-wide
-min-severity = "warning"          # hide info-level findings
-no-roast    = false               # true = technical output only
-no-fail     = false               # true = never block CI
-format      = "terminal"          # terminal | json | github | compact
+preset       = "production"       # minimal | security | performance | production | strict
+skip         = ["DF012", "DF022"]
+min-severity = "warning"
+no-roast     = true
+
+[severity-overrides]
+DF020 = "error"
 ```
 
 droast searches for `droast.toml` starting from the current directory, walking up to the nearest `.git` root. CLI flags always take precedence over the file — the file just sets the defaults so you don't repeat yourself.
@@ -117,7 +119,14 @@ To keep lint configuration elsewhere, pass its path explicitly:
 droast --config .lint/droast.toml Dockerfile
 ```
 
-`skip` is the most useful field for CI pipelines: add rules your team has consciously accepted (e.g. you ship without HEALTHCHECK by design) so developers don't drown in noise they can't act on.
+Larger teams can add path-specific overrides, rule categories, inherited organization policy, registry and base-image allowlists, required OCI labels, and governed inline suppressions with mandatory reasons and expiration dates:
+
+```dockerfile
+# droast ignore=DF001 reason="PLAT-142 migration" expires=2026-09-30
+FROM alpine:latest
+```
+
+See the **[complete configuration guide](DOCS.md#configuration)** and the copy-paste [`examples/droast-enterprise.toml`](examples/droast-enterprise.toml). None of these controls are required; zero-config behavior stays unchanged.
 
 ## github action
 
@@ -151,7 +160,10 @@ available inputs (all optional):
 | input | default | description |
 |-------|---------|-------------|
 | `files` | `Dockerfile` | file(s) or glob to lint |
-| `min-severity` | `info` | `info`, `warning`, or `error` |
+| `min-severity` | config or `info` | `info`, `warning`, or `error` |
+| `preset` | — | `minimal`, `security`, `performance`, `production`, or `strict` |
+| `category` | — | comma-separated rule categories to run |
+| `skip-category` | — | comma-separated rule categories to skip |
 | `skip` | — | comma-separated rule IDs to ignore |
 | `no-roast` | `false` | technical output only, no jokes |
 | `no-fail` | `false` | advisory mode — never blocks the build |
@@ -163,7 +175,7 @@ example with options:
 - uses: immanuwell/dockerfile-roast@1.4.2
   with:
     files: '**/Dockerfile'
-    min-severity: warning
+    preset: production
     skip: DF012,DF022
     no-fail: true        # report findings but don't block the PR
 ```
@@ -212,89 +224,92 @@ droast completion fish | source
 
 ## what it catches
 
-<p data-droast-rule-count>71 rules, ngl thats a lot. run <code>droast --list-rules</code> for the full breakdown.</p>
+<p data-droast-rule-count>74 rules, ngl thats a lot. run <code>droast --list-rules</code> for the full breakdown.</p>
 
 <!-- BEGIN RULES -->
 <details>
-<summary data-droast-rule-count>all 71 rules</summary>
+<summary data-droast-rule-count>all 74 rules</summary>
 
 ```
 
   Available Rules
 
-  ID       SEVERITY DESCRIPTION
-  ────────────────────────────────────────────────────────────────────────────────
-  DF001    WARN     Use specific base image tags instead of 'latest'
-  DF002    ERROR    Do not run as root
-  DF011    WARN     Use multi-stage builds to reduce image size
-  DF013    ERROR    Avoid storing secrets in ENV variables
-  DF014    ERROR    Avoid hardcoding passwords or tokens in ARG/ENV
-  DF020    WARN     Set explicit non-root USER
-  DF003    WARN     Combine RUN commands to reduce layers
-  DF004    WARN     Clean apt/yum/apk cache in the same RUN layer
-  DF005    INFO     Pin package versions for reproducibility
-  DF006    WARN     Avoid ADD for local files; prefer COPY
-  DF007    WARN     Do not copy the entire build context (COPY . .)
-  DF008    INFO     Use WORKDIR instead of inline cd commands
-  DF009    WARN     Use absolute paths in WORKDIR
-  DF010    WARN     Avoid using sudo inside containers
-  DF012    INFO     Set HEALTHCHECK for long-running services
-  DF017    WARN     Use ENTRYPOINT with CMD for flexible images
-  DF018    WARN     Avoid using shell form for ENTRYPOINT
-  DF019    WARN     Do not use deprecated MAINTAINER; use LABEL instead
-  DF022    INFO     Specify EXPOSE for documented ports
-  DF023    WARN     Avoid multiple FROM without aliases (unintended multistage)
-  DF024    WARN     Avoid using :latest in FROM even with aliases
-  DF025    WARN     Use JSON array syntax for CMD/ENTRYPOINT
-  DF026    WARN     Avoid recursive COPY from root
-  DF030    INFO     Avoid using pip without --no-cache-dir
-  DF031    INFO     Avoid npm install without ci/--production for prod images
-  DF032    INFO     Set PYTHONDONTWRITEBYTECODE and PYTHONUNBUFFERED for Python images
-  DF033    INFO     Use an effective .dockerignore for each build context
-  DF034    ERROR    Avoid chmod 777 — overly permissive
-  DF035    INFO     Avoid using curl without --fail flags
-  DF036    WARN     Avoid Dockerfile with no CMD or ENTRYPOINT
-  DF015    ERROR    Avoid using apt-get without -y flag
-  DF016    INFO     Use --no-install-recommends with apt-get
-  DF021    ERROR    Avoid wget|sh pipe patterns (execute remote code)
-  DF027    ERROR    Do not use yum without -y flag
-  DF028    WARN     Cache-bust apt-get update
-  DF029    WARN     Avoid apk add without --no-cache
-  DF037    ERROR    Dockerfile must begin with FROM, ARG, or a comment
-  DF038    WARN     Multiple CMD instructions — only the last one takes effect
-  DF039    ERROR    Multiple ENTRYPOINT instructions — only the last one takes effect
-  DF040    ERROR    EXPOSE port must be in valid range 0-65535
-  DF041    ERROR    Multiple HEALTHCHECK instructions — only the last one applies
-  DF042    ERROR    FROM stage aliases must be unique
-  DF043    WARN     zypper install without non-interactive flag
-  DF044    WARN     Avoid zypper dist-upgrade in Dockerfiles
-  DF045    INFO     Run zypper clean after zypper install
-  DF046    WARN     Run dnf clean all after dnf install
-  DF047    WARN     Run yum clean all after yum install
-  DF048    ERROR    COPY with multiple sources requires destination to end with /
-  DF049    WARN     COPY --from must reference a previously defined stage
-  DF050    ERROR    COPY --from cannot reference the current stage
-  DF051    WARN     Pin versions in pip install
-  DF052    WARN     Pin versions in apk add
-  DF053    WARN     Pin versions in gem install
-  DF054    WARN     Pin versions in go install with @version
-  DF055    INFO     Run yarn cache clean after yarn install
-  DF056    INFO     Use wget --progress=dot:giga to avoid bloated build logs
-  DF057    WARN     Set -o pipefail before RUN commands that use pipes
-  DF058    WARN     Use either wget or curl consistently, not both
-  DF059    WARN     Use apt-get or apt-cache instead of apt in scripts
-  DF060    INFO     Avoid running pointless interactive commands inside containers
-  DF061    WARN     Do not use --platform in FROM unless required
-  DF062    ERROR    ENV variable must not reference itself in the same statement
-  DF063    WARN     COPY to relative destination requires WORKDIR to be set first
-  DF064    WARN     useradd without -l flag may create excessively large images
-  DF065    WARN     FROM uses an unrecognised image registry
-  DF066    WARN     Bash-specific syntax used without a SHELL instruction
-  DF067    INFO     COPY of a local archive — ADD auto-extracts tarballs
-  DF068    ERROR    FROM, ONBUILD, and MAINTAINER are forbidden as ONBUILD triggers
-  DF069    WARN     Avoid apt-get upgrade / dist-upgrade — makes builds non-reproducible
-  DF070    WARN     Avoid broad COPY before package install — invalidates Docker layer cache
-  DF071    ERROR    Dockerfile syntax must be valid
+  ID       SEVERITY CATEGORIES                         DESCRIPTION
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  DF001    WARN     correctness,reproducibility        Use specific base image tags instead of 'latest'
+  DF002    ERROR    security                           Do not run as root
+  DF011    WARN     performance                        Use multi-stage builds to reduce image size
+  DF013    ERROR    security                           Avoid storing secrets in ENV variables
+  DF014    ERROR    security                           Avoid hardcoding passwords or tokens in ARG/ENV
+  DF020    WARN     security                           Set explicit non-root USER
+  DF003    WARN     performance                        Combine RUN commands to reduce layers
+  DF004    WARN     performance                        Clean apt/yum/apk cache in the same RUN layer
+  DF005    INFO     correctness,reproducibility        Pin package versions for reproducibility
+  DF006    WARN     maintainability,performance        Avoid ADD for local files; prefer COPY
+  DF007    WARN     performance                        Do not copy the entire build context (COPY . .)
+  DF008    INFO     maintainability,performance        Use WORKDIR instead of inline cd commands
+  DF009    WARN     correctness,maintainability        Use absolute paths in WORKDIR
+  DF010    WARN     security                           Avoid using sudo inside containers
+  DF012    INFO     maintainability,reliability        Set HEALTHCHECK for long-running services
+  DF017    WARN     maintainability,reliability        Use ENTRYPOINT with CMD for flexible images
+  DF018    WARN     correctness,reliability            Avoid using shell form for ENTRYPOINT
+  DF019    WARN     correctness,maintainability        Do not use deprecated MAINTAINER; use LABEL instead
+  DF022    INFO     maintainability,reliability        Specify EXPOSE for documented ports
+  DF023    WARN     correctness,maintainability        Avoid multiple FROM without aliases (unintended multistage)
+  DF024    WARN     correctness,reproducibility        Avoid using :latest in FROM even with aliases
+  DF025    WARN     correctness,reliability            Use JSON array syntax for CMD/ENTRYPOINT
+  DF026    WARN     maintainability,performance        Avoid recursive COPY from root
+  DF030    INFO     performance                        Avoid using pip without --no-cache-dir
+  DF031    INFO     performance                        Avoid npm install without ci/--production for prod images
+  DF032    INFO     maintainability,reliability        Set PYTHONDONTWRITEBYTECODE and PYTHONUNBUFFERED for Python images
+  DF033    INFO     performance,security               Use an effective .dockerignore for each build context
+  DF034    ERROR    security                           Avoid chmod 777 — overly permissive
+  DF035    INFO     maintainability,reliability        Avoid using curl without --fail flags
+  DF036    WARN     maintainability,reliability        Avoid Dockerfile with no CMD or ENTRYPOINT
+  DF015    ERROR    correctness,reliability            Avoid using apt-get without -y flag
+  DF016    INFO     performance                        Use --no-install-recommends with apt-get
+  DF021    ERROR    security,supply-chain              Avoid wget|sh pipe patterns (execute remote code)
+  DF027    ERROR    correctness,reliability            Do not use yum without -y flag
+  DF028    WARN     performance                        Cache-bust apt-get update
+  DF029    WARN     performance                        Avoid apk add without --no-cache
+  DF037    ERROR    correctness,maintainability        Dockerfile must begin with FROM, ARG, or a comment
+  DF038    WARN     correctness,maintainability        Multiple CMD instructions — only the last one takes effect
+  DF039    ERROR    correctness,reliability            Multiple ENTRYPOINT instructions — only the last one takes effect
+  DF040    ERROR    correctness,reliability            EXPOSE port must be in valid range 0-65535
+  DF041    ERROR    correctness,reliability            Multiple HEALTHCHECK instructions — only the last one applies
+  DF042    ERROR    correctness,reproducibility        FROM stage aliases must be unique
+  DF043    WARN     correctness,maintainability        zypper install without non-interactive flag
+  DF044    WARN     correctness,maintainability        Avoid zypper dist-upgrade in Dockerfiles
+  DF045    INFO     performance                        Run zypper clean after zypper install
+  DF046    WARN     performance                        Run dnf clean all after dnf install
+  DF047    WARN     performance                        Run yum clean all after yum install
+  DF048    ERROR    correctness,reliability            COPY with multiple sources requires destination to end with /
+  DF049    WARN     correctness,reliability            COPY --from must reference a previously defined stage
+  DF050    ERROR    correctness,reliability            COPY --from cannot reference the current stage
+  DF051    WARN     reproducibility,supply-chain       Pin versions in pip install
+  DF052    WARN     reproducibility,supply-chain       Pin versions in apk add
+  DF053    WARN     reproducibility,supply-chain       Pin versions in gem install
+  DF054    WARN     reproducibility,supply-chain       Pin versions in go install with @version
+  DF055    INFO     performance                        Run yarn cache clean after yarn install
+  DF056    INFO     maintainability,performance        Use wget --progress=dot:giga to avoid bloated build logs
+  DF057    WARN     reliability,security               Set -o pipefail before RUN commands that use pipes
+  DF058    WARN     maintainability,performance        Use either wget or curl consistently, not both
+  DF059    WARN     correctness,maintainability        Use apt-get or apt-cache instead of apt in scripts
+  DF060    INFO     maintainability,reliability        Avoid running pointless interactive commands inside containers
+  DF061    WARN     correctness,maintainability        Do not use --platform in FROM unless required
+  DF062    ERROR    correctness,reproducibility        ENV variable must not reference itself in the same statement
+  DF063    WARN     correctness,maintainability        COPY to relative destination requires WORKDIR to be set first
+  DF064    WARN     performance                        useradd without -l flag may create excessively large images
+  DF065    WARN     reproducibility,supply-chain       FROM uses an unrecognised image registry
+  DF066    WARN     reliability,security               Bash-specific syntax used without a SHELL instruction
+  DF067    INFO     maintainability,performance        COPY of a local archive — ADD auto-extracts tarballs
+  DF068    ERROR    correctness,reliability            FROM, ONBUILD, and MAINTAINER are forbidden as ONBUILD triggers
+  DF069    WARN     correctness,reproducibility        Avoid apt-get upgrade / dist-upgrade — makes builds non-reproducible
+  DF070    WARN     performance                        Avoid broad COPY before package install — invalidates Docker layer cache
+  DF071    ERROR    correctness,reliability            Dockerfile syntax must be valid
+  DF072    ERROR    correctness,security               Suppression directives must satisfy policy
+  DF073    ERROR    reproducibility,supply-chain       Base images must satisfy the approved image policy
+  DF074    ERROR    correctness,security               Image labels must satisfy the configured schema
 
   Use --skip DF001,DF002 to suppress specific rules.
   Use --min-severity warning to hide INFO findings.

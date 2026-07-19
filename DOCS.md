@@ -273,6 +273,9 @@ printf 'FROM alpine:latest\n' | droast -
 | Option | Purpose |
 |---|---|
 | `--config PATH` | Load an explicit TOML configuration |
+| `--preset NAME` | Apply `minimal`, `security`, `performance`, `production`, or `strict` |
+| `--category NAMES` | Run comma-separated rule categories |
+| `--skip-category NAMES` | Skip comma-separated rule categories |
 | `-f, --format FORMAT` | Select `terminal`, `json`, `github`, `compact`, or `sarif` |
 | `-s, --min-severity LEVEL` | Select `info`, `warning`, or `error` |
 | `--skip IDS` | Skip comma-separated rule IDs |
@@ -428,24 +431,79 @@ Configuration is optional. The file name is `droast.toml`.
 ### Complete example
 
 ```toml
-skip = ["DF012", "DF022"]
-min-severity = "warning"
+preset = "production"
 no-roast = true
-no-fail = false
-format = "terminal"
+
+require-suppression-reason = true
+suppression-reason-pattern = "^(SEC|PLAT)-[0-9]+ .+$"
+require-suppression-expiration = true
+max-suppression-days = 90
+report-unused-suppressions = true
+
+approved-registries = ["docker.io", "ghcr.io", "registry.example.com"]
+approved-base-images = ["alpine:3.*", "registry.example.com/platform/*@sha256:*"]
+
+[severity-overrides]
+DF001 = "error"
+DF020 = "error"
+DF065 = "error"
+
+[required-labels]
+"org.opencontainers.image.source" = "url"
+"org.opencontainers.image.version" = "semver"
+"org.opencontainers.image.revision" = "hash"
+"org.opencontainers.image.licenses" = "spdx"
+
+[[overrides]]
+paths = ["**/Dockerfile.dev", "**/Dockerfile.test"]
+skip = ["DF012", "DF022"]
 ```
+
+See [`examples/droast-enterprise.toml`](examples/droast-enterprise.toml) for a complete copy-paste starting point.
 
 ### Configuration keys
 
 | Key | Type | Values |
 |---|---|---|
 | `skip` | array of strings | Rule IDs such as `DF012` |
+| `extends` | string or array | Local configuration files to inherit |
+| `preset` | string | Built-in preset name |
 | `min-severity` | string | `info`, `warning`, `error` |
+| `categories` | array | Run matching rule categories |
+| `skip-categories` | array | Skip matching rule categories |
+| `severity-overrides` | table | Change individual rule severities |
+| `inline-suppressions` | boolean | Allow governed suppression comments |
+| `require-suppression-reason` | boolean | Require a non-empty reason |
+| `suppression-reason-pattern` | string | Validate reasons with a regular expression |
+| `require-suppression-expiration` | boolean | Require `expires=YYYY-MM-DD` |
+| `max-suppression-days` | integer | Limit exception lifetime |
+| `report-unused-suppressions` | boolean | Report stale exceptions |
+| `approved-registries` | array | Registry allowlist with glob support |
+| `extend-approved-registries` | array | Add to the inherited registry allowlist |
+| `approved-base-images` | array | Base-image allowlist with glob support |
+| `extend-approved-base-images` | array | Add to the inherited image allowlist |
+| `required-labels` | table | Required label names and formats |
+| `strict-labels` | boolean | Reject labels outside the schema |
+| `overrides` | array of tables | Apply settings to matching paths |
 | `no-roast` | boolean | `true`, `false` |
 | `no-fail` | boolean | `true`, `false` |
 | `format` | string | `terminal`, `json`, `github`, `compact`, `sarif` |
 
 Unknown keys are rejected. This catches misspelled configuration early.
+
+Unknown rule IDs, categories, severities, presets, label formats, regular expressions, inheritance cycles, and glob patterns are also rejected. CI does not silently continue with a broken policy.
+
+### Editor schema
+
+TOML editors that support schema directives can validate keys and values while you type:
+
+```toml
+#:schema https://raw.githubusercontent.com/immanuwell/dockerfile-roast/main/schemas/droast.schema.json
+
+preset = "production"
+```
+
+The schema is stored at [`schemas/droast.schema.json`](schemas/droast.schema.json). Runtime validation remains authoritative and also checks registered rule IDs, inheritance, and regular expressions.
 
 ### Discovery and precedence
 
@@ -473,134 +531,394 @@ droast --skip DF022 .
 
 ### Explicit configuration
 
-Use a project-specific or preset file:
+Use a project-specific file:
 
 ```bash
-droast --config .droast/strict.toml .
+droast --config .droast/team.toml .
 ```
 
 ### CLI-only controls
 
 `--only` and `--check-dockerignore` are CLI-only. They are not TOML keys.
 
-## Copy-paste presets
+### Per-rule severity overrides
 
-These presets are practical recipes, not special built-in preset names. Store them under `.droast/` and call them explicitly.
+Turn a recommendation into a release blocker without changing the rule itself:
+
+```toml
+[severity-overrides]
+DF001 = "error"
+DF020 = "error"
+DF033 = "warning"
+DF065 = "error"
+```
+
+Overrides are applied before `min-severity`. For example, an info rule promoted to warning remains visible when `min-severity = "warning"`.
+
+### Rule categories
+
+Every rule has one or more categories:
+
+- `correctness`
+- `maintainability`
+- `performance`
+- `reliability`
+- `reproducibility`
+- `security`
+- `supply-chain`
+
+Inspect categories:
+
+```bash
+droast --list-rules
+droast --list-rules --format json | jq '.[] | {id, categories}'
+```
+
+Run only security and supply-chain rules:
+
+```toml
+categories = ["security", "supply-chain"]
+```
+
+Or use the CLI:
+
+```bash
+droast --category security,supply-chain .
+```
+
+Skip a category while keeping the rest:
+
+```toml
+skip-categories = ["maintainability"]
+```
+
+`--only` is the most specific selector. When it is present, category selection does not hide the requested rule IDs. Explicit `skip` values still apply.
+
+`DF071` syntax validation and `DF072` suppression-policy validation run with every selected category unless they are explicitly skipped. Other rules cannot be trusted when the source or its exceptions are invalid.
+
+### Inline suppressions
+
+Suppress one rule for the next Dockerfile instruction:
+
+```dockerfile
+# droast ignore=DF001 reason="PLAT-142 legacy vendor image" expires=2026-09-30
+FROM vendor.example.com/runtime:latest
+```
+
+Suppress multiple rules:
+
+```dockerfile
+# droast ignore=DF001,DF065 reason="SEC-819 reviewed migration image" expires=2026-09-30
+FROM migration.example.net/runtime:latest
+```
+
+Use a file-wide suppression before the first instruction:
+
+```dockerfile
+# droast global ignore=DF020 reason="PLAT-88 runtime injects numeric user" expires=2026-09-30
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY app /app
+ENTRYPOINT ["/app"]
+```
+
+The normal directive applies only to the next logical instruction. Blank lines and ordinary comments between the directive and instruction are safe. A directive inside a `RUN` heredoc is shell content and is not treated as a Dockerfile suppression.
+
+`DF072` reports invalid, expired, disabled, misplaced, or stale directives. `DF072` itself cannot be suppressed inline.
+
+Replace example expiration dates with a current, policy-compliant date when copying a directive.
+
+### Suppression governance
+
+Keep defaults lightweight:
+
+```toml
+inline-suppressions = true
+require-suppression-reason = false
+require-suppression-expiration = false
+report-unused-suppressions = false
+```
+
+Use a governed enterprise policy:
+
+```toml
+inline-suppressions = true
+require-suppression-reason = true
+suppression-reason-pattern = "^(SEC|PLAT)-[0-9]+ .+$"
+require-suppression-expiration = true
+max-suppression-days = 90
+report-unused-suppressions = true
+```
+
+Behavior:
+
+- a missing reason rejects the suppression
+- a reason that does not match the configured pattern rejects it
+- an invalid or past date rejects it
+- a date beyond `max-suppression-days` rejects it
+- a rejected suppression never hides the original finding
+- an unused suppression is reported when enabled
+- expiration uses UTC and remains valid through the named date
+
+Disable all inline exceptions in a centrally controlled repository:
+
+```toml
+inline-suppressions = false
+```
+
+### Approved registries
+
+Configure `DF065` as an explicit registry allowlist:
+
+```toml
+approved-registries = [
+  "docker.io",
+  "ghcr.io",
+  "*.gcr.io",
+  "registry.example.com",
+  "registry.example.com:5000",
+]
+```
+
+Short image names such as `alpine:3.20` resolve to `docker.io`. Glob patterns are case-insensitive. When this setting is absent, droast keeps its built-in trusted-registry behavior.
+
+Add a repository exception without replacing an inherited list:
+
+```toml
+extend-approved-registries = ["mirror.example.com"]
+```
+
+### Approved base images
+
+Restrict full external `FROM` references with `DF073`:
+
+```toml
+approved-base-images = [
+  "alpine:3.*",
+  "debian:12.*",
+  "ghcr.io/example/runtime@sha256:*",
+  "registry.example.com/platform/*@sha256:*",
+]
+```
+
+Patterns match the full image reference. Internal multi-stage aliases are exempt. `scratch` is exempt. An empty configured list rejects every external base image.
+
+Add to an inherited image list explicitly:
+
+```toml
+extend-approved-base-images = ["registry.example.com/team/runtime@sha256:*"]
+```
+
+For release images, prefer digest patterns from a controlled registry:
+
+```toml
+approved-base-images = ["registry.example.com/platform/*@sha256:*"]
+```
+
+### Required image labels
+
+`DF074` validates labels on the final image stage:
+
+```toml
+[required-labels]
+"org.opencontainers.image.source" = "url"
+"org.opencontainers.image.created" = "rfc3339"
+"org.opencontainers.image.version" = "semver"
+"org.opencontainers.image.revision" = "hash"
+"org.opencontainers.image.licenses" = "spdx"
+"com.example.owner" = "email"
+"com.example.cost-center" = "regex:^CC-[0-9]{4}$"
+```
+
+Supported formats:
+
+| Format | Accepted value |
+|---|---|
+| `text` | Any non-empty text, including build-time variables |
+| `url` | A valid URL |
+| `semver` | A semantic version, optionally prefixed with `v` |
+| `hash` | 7 through 64 hexadecimal characters |
+| `rfc3339` | An RFC 3339 timestamp |
+| `spdx` | A valid SPDX expression |
+| `email` | A basic email address |
+| `regex:<pattern>` | A value matching the custom regular expression |
+
+Dynamic values such as `${VERSION}` can only satisfy `text`, because their final value is unknown during linting.
+
+Reject undeclared labels:
+
+```toml
+strict-labels = true
+
+[required-labels]
+"org.opencontainers.image.source" = "url"
+"org.opencontainers.image.version" = "semver"
+```
+
+### Path-specific configuration
+
+Use ordered overrides for monorepos:
+
+```toml
+preset = "production"
+
+[[overrides]]
+paths = ["services/**/Dockerfile", "services/**/*.Dockerfile"]
+min-severity = "error"
+
+[overrides.severity-overrides]
+DF020 = "error"
+
+[[overrides]]
+paths = ["**/Dockerfile.dev", "**/Dockerfile.test"]
+skip = ["DF012", "DF022"]
+
+[[overrides]]
+paths = ["docker/release.Dockerfile"]
+preset = "strict"
+approved-base-images = ["registry.example.com/platform/*@sha256:*"]
+```
+
+Patterns are resolved relative to the configuration that declares them. Every matching block is applied in file order. Later scalar values win. Additive lists such as `skip` are combined.
+
+Output `format` remains scan-wide because one repository run emits one document. Set it at the top level or on the CLI. Other path settings, including severity, presets, policy, `no-roast`, and `no-fail`, apply per Dockerfile.
+
+### Inherited organization configuration
+
+Inherit one or more policy files:
+
+```toml
+extends = [
+  ".droast/organization.toml",
+  ".droast/language-team.toml",
+]
+
+# Repository-specific additions follow.
+extend-approved-base-images = ["registry.example.com/platform/java@sha256:*"]
+```
+
+Relative paths start at the file containing `extends`. Absolute paths are supported. Inheritance cycles and missing files fail clearly.
+
+Merge behavior:
+
+- parents are loaded from left to right
+- the repository file is applied last
+- scalar values use the nearest explicit value
+- `skip` and `skip-categories` are additive
+- `approved-registries` and `approved-base-images` replace inherited lists
+- `extend-approved-registries` and `extend-approved-base-images` add entries explicitly
+- severity overrides use the nearest value for each rule
+- parent required-label formats cannot be weakened by a child
+- required reason, required expiration, unused checks, strict labels, and disabled inline suppressions cannot be weakened by a child
+- the shortest configured `max-suppression-days` wins
+- path overrides are appended and evaluated in inherited order
+
+Remote URLs are not fetched automatically. This keeps linting deterministic, offline-capable, and free from hidden network policy changes.
+
+For an organization policy stored elsewhere, download a pinned revision in CI, verify it, then inherit the local file:
 
 ```bash
 mkdir -p .droast
+curl -fsSL \
+  https://raw.githubusercontent.com/example/platform/0123456789abcdef/droast.toml \
+  -o .droast/organization.toml
+echo 'EXPECTED_SHA256  .droast/organization.toml' | sha256sum --check
+droast .
 ```
+
+Repository `droast.toml`:
+
+```toml
+extends = ".droast/organization.toml"
+```
+
+See [`examples/droast-organization.toml`](examples/droast-organization.toml) and [`examples/droast-repository.toml`](examples/droast-repository.toml).
+
+### Why these controls exist
+
+These patterns are established in mature tooling:
+
+- [Hadolint configuration](https://github.com/hadolint/hadolint/blob/master/README.md) provides severity overrides, trusted registries, label schemas, and inline ignores.
+- [Ruff configuration](https://docs.astral.sh/ruff/configuration/) uses explicit inheritance and per-file configuration for large repositories.
+- [ESLint bulk suppressions](https://eslint.org/docs/latest/use/suppressions) treats committed suppressions and stale-suppression reporting as migration controls.
+- [GitHub organization security configuration](https://docs.github.com/en/code-security/how-tos/secure-at-scale/configure-organization-security) demonstrates centrally managed policy across repositories.
+
+This is evidence of established team workflows, not a claim about private configuration inside any named company. Exact internal policies are rarely public.
+
+droast keeps all of this optional. With no `droast.toml`, no policy-specific rule activates and existing lint defaults remain unchanged.
+
+## Copy-paste presets
+
+Presets are built in. Select one in `droast.toml` or with `--preset`. Explicit settings can refine a preset.
 
 ### Minimal
 
 Use this for an existing repository that needs a low-noise first step.
 
-`.droast/minimal.toml`:
-
 ```toml
-min-severity = "error"
-no-roast = true
-no-fail = false
-format = "terminal"
+preset = "minimal"
 ```
-
-Run it:
 
 ```bash
-droast --config .droast/minimal.toml .
+droast --preset minimal .
 ```
+
+This reports error-severity findings and uses technical messages.
 
 ### Security
 
 Use this focused set for unsafe users, leaked secrets, unsafe downloads, permissions, shell pipelines, and malformed input.
 
-`.droast/security.toml`:
-
 ```toml
-min-severity = "warning"
-no-roast = true
-no-fail = false
-format = "terminal"
+preset = "security"
 ```
-
-Run it:
 
 ```bash
-droast --config .droast/security.toml \
-  --only DF002,DF013,DF014,DF020,DF021,DF025,DF034,DF057,DF065,DF071 .
+droast --preset security .
 ```
 
-Reusable script `scripts/lint-docker-security.sh`:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-droast --config .droast/security.toml \
-  --only DF002,DF013,DF014,DF020,DF021,DF025,DF034,DF057,DF065,DF071 .
-```
+This selects `security` and `supply-chain` categories at warning severity.
 
 ### Performance
 
 Use this for layer count, package caches, build context size, and cache invalidation.
 
-`.droast/performance.toml`:
-
 ```toml
-min-severity = "info"
-no-roast = true
-no-fail = false
-format = "terminal"
+preset = "performance"
 ```
-
-Run it:
 
 ```bash
-droast --config .droast/performance.toml \
-  --only DF003,DF004,DF007,DF011,DF028,DF030,DF031,DF045,DF046,DF047,DF055,DF064,DF070 .
+droast --preset performance .
 ```
+
+This selects the `performance` category and includes info findings.
 
 ### Production
 
 Use this as a balanced default for a team repository.
 
-`.droast/production.toml`:
-
 ```toml
-skip = []
-min-severity = "warning"
-no-roast = true
-no-fail = false
-format = "terminal"
+preset = "production"
 ```
-
-Run it:
 
 ```bash
-droast --config .droast/production.toml .
+droast --preset production .
 ```
 
-Add only reviewed, documented exceptions to `skip`.
+This runs all categories at warning severity with technical messages. Add only reviewed exceptions to `skip`.
 
 ### Strict
 
 Use this for new projects, release images, or a cleanup target.
 
-`.droast/strict.toml`:
-
 ```toml
-skip = []
-min-severity = "info"
-no-roast = true
-no-fail = false
-format = "terminal"
+preset = "strict"
 ```
-
-Run every rule and require an effective `.dockerignore`:
 
 ```bash
-droast --config .droast/strict.toml --check-dockerignore true .
+droast --preset strict --check-dockerignore true .
 ```
+
+This runs every rule, requires reasons and expiration dates for suppressions, and reports unused suppressions.
 
 ### Makefile shortcuts
 
@@ -608,16 +926,16 @@ droast --config .droast/strict.toml --check-dockerignore true .
 .PHONY: lint-docker lint-docker-security lint-docker-performance lint-docker-strict
 
 lint-docker:
-	droast --config .droast/production.toml .
+	droast --preset production .
 
 lint-docker-security:
-	droast --config .droast/security.toml --only DF002,DF013,DF014,DF020,DF021,DF025,DF034,DF057,DF065,DF071 .
+	droast --preset security .
 
 lint-docker-performance:
-	droast --config .droast/performance.toml --only DF003,DF004,DF007,DF011,DF028,DF030,DF031,DF045,DF046,DF047,DF055,DF064,DF070 .
+	droast --preset performance .
 
 lint-docker-strict:
-	droast --config .droast/strict.toml --check-dockerignore true .
+	droast --preset strict --check-dockerignore true .
 ```
 
 ## Control rules and severity
@@ -664,7 +982,14 @@ droast --skip df012 .
 
 ### Inline suppression
 
-droast does not currently support line-level suppression comments. Keep project exceptions visible in `droast.toml`, or use `--skip` for one run.
+Use a governed exception directly above the affected instruction:
+
+```dockerfile
+# droast ignore=DF001 reason="PLAT-142 migration" expires=2026-09-30
+FROM alpine:latest
+```
+
+See [Inline suppressions](#inline-suppressions) for global directives and policy controls.
 
 ## Output formats
 
@@ -787,11 +1112,24 @@ Action inputs:
 | Input | Default | Purpose |
 |---|---|---|
 | `files` | `Dockerfile` | Space-separated paths or glob patterns |
-| `min-severity` | `info` | Minimum reported severity |
+| `min-severity` | config or `info` | Minimum reported severity |
+| `preset` | empty | Select a built-in preset |
+| `category` | empty | Comma-separated categories to run |
+| `skip-category` | empty | Comma-separated categories to skip |
 | `skip` | empty | Comma-separated rule IDs to skip |
 | `no-roast` | `false` | Use technical messages only |
 | `no-fail` | `false` | Keep the workflow step non-blocking |
 | `image-tag` | `latest` | Select the container version used by the action |
+
+Preset example:
+
+```yaml
+- uses: immanuwell/dockerfile-roast@1.4.2
+  with:
+    files: .
+    preset: security
+    image-tag: 1.4.2
+```
 
 Non-blocking rollout:
 
@@ -959,7 +1297,7 @@ pre-commit run droast --all-files
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-droast --config .droast/production.toml .
+droast --preset production .
 ```
 
 Enable it:
@@ -1090,6 +1428,7 @@ fn main() {
         only_rules: vec![],
         min_severity: Severity::Info,
         check_dockerignore: false,
+        ..LintOptions::default()
     };
 
     let result = lint_content(source, "Dockerfile", &options);
@@ -1115,6 +1454,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         only_rules: vec![],
         min_severity: Severity::Warning,
         check_dockerignore: true,
+        ..LintOptions::default()
     };
 
     let result = lint_file(Path::new("Dockerfile"), &options)?;
@@ -1131,6 +1471,7 @@ let options = LintOptions {
     only_rules: vec!["DF013".into(), "DF014".into(), "DF021".into()],
     min_severity: Severity::Warning,
     check_dockerignore: false,
+    ..LintOptions::default()
 };
 ```
 
@@ -1191,7 +1532,7 @@ let instructions = parse("FROM alpine:3.20\n");
 
 ## Rule catalog
 
-Run `droast --list-rules` for the installed version. This catalog describes all 71 rules in version 1.4.2.
+Run `droast --list-rules` for the authoritative list in the installed version. This catalog describes all 74 current rules.
 
 ### Base images, stages, and reproducibility
 
@@ -1206,6 +1547,7 @@ Run `droast --list-rules` for the installed version. This catalog describes all 
 | DF061 | warning | Avoid fixed `--platform` in `FROM` unless required |
 | DF065 | warning | Review images from unrecognized registries |
 | DF069 | warning | Avoid package upgrades that make builds non-repeatable |
+| DF073 | error | Require base images approved by configured policy |
 
 ### Users, secrets, and command safety
 
@@ -1291,6 +1633,7 @@ Run `droast --list-rules` for the installed version. This catalog describes all 
 | DF062 | error | Do not self-reference an `ENV` variable in one statement |
 | DF064 | warning | Use `useradd -l` to avoid oversized user metadata layers |
 | DF068 | error | Do not use forbidden instructions as `ONBUILD` triggers |
+| DF074 | error | Require final-stage labels to match configured policy |
 
 ### Syntax
 
@@ -1298,6 +1641,7 @@ Run `droast --list-rules` for the installed version. This catalog describes all 
 |---|---|---|
 | DF037 | error | Begin with `FROM`, global `ARG`, or a comment |
 | DF071 | error | Keep Dockerfile syntax valid |
+| DF072 | error | Require valid and governed suppression directives |
 
 ## Adoption recipes
 
@@ -1326,7 +1670,7 @@ Then:
 Use strict checks from the first commit:
 
 ```bash
-droast --config .droast/strict.toml --check-dockerignore true .
+droast --preset strict --check-dockerignore true .
 ```
 
 Run the same command locally, in pre-commit, and in CI.
@@ -1338,7 +1682,7 @@ Use two CI jobs:
 ```bash
 # Blocking security gate
 droast --no-roast \
-  --only DF002,DF013,DF014,DF020,DF021,DF025,DF034,DF057,DF065,DF071 .
+  --preset security .
 
 # Full advisory report
 droast --no-roast --no-fail --min-severity info .
@@ -1349,7 +1693,7 @@ droast --no-roast --no-fail --min-severity info .
 Lint the actual release Dockerfile and its context through the repository entry point:
 
 ```bash
-droast --config .droast/strict.toml .
+droast --preset strict .
 docker build -f docker/release.Dockerfile .
 ```
 
@@ -1494,7 +1838,7 @@ Use `minimal` for a mature repository with existing debt. Use `production` for a
 
 ### Are presets built in?
 
-No. The examples in this guide are copy-paste configurations and commands. This keeps every rule choice visible in the repository.
+Yes. Use `preset = "production"` in `droast.toml` or `droast --preset production .`. Explicit configuration can refine the selected preset.
 
 ### Can droast scan a monorepo?
 
