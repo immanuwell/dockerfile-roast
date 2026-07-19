@@ -417,9 +417,7 @@ MIT. do whatever.
 
 ## comparison with other tools
 
-![droast and Hadolint full-corpus scan-time comparison](media/comparison-speed.svg)
-
-![droast and Hadolint Linux x86-64 binary-size comparison](media/comparison-size.svg)
+![droast and Hadolint scan-time and binary-size comparison](media/comparison.svg)
 
 <details>
 <summary>benchmark methodology and detailed results</summary>
