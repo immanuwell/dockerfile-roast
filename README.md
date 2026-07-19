@@ -468,7 +468,7 @@ Both tools scanned the same lexically sorted set of 321 real-world Dockerfiles c
 | p95 full-corpus scan | 1,085 ms | 4,615 ms |
 | files per second | 326.1 | 83.5 |
 | lines per second | 50,343 | 12,894 |
-| Linux x86-64 binary | 7,513,704 bytes | 54,727,336 bytes |
+| Linux x86-64 binary | 7.51 MB | 54.73 MB |
 
 The benchmark measures execution speed and binary size, not detection quality. Finding totals are not directly comparable because the tools have different rule sets, severities, shell-analysis coverage, and parser behavior.
 
