@@ -31,6 +31,12 @@ struct JsonFinding {
     rule: String,
     severity: String,
     line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    column: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    end_line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    end_column: Option<usize>,
     message: String,
     roast: String,
 }
@@ -83,7 +89,12 @@ fn print_terminal(file: &str, findings: &[Finding], no_roast: bool) {
 
     for f in findings {
         let line_info = if f.line > 0 {
-            format!("{}:{}", file, f.line).dimmed().to_string()
+            let location = if f.column > 0 {
+                format!("{}:{}:{}", file, f.line, f.column)
+            } else {
+                format!("{}:{}", file, f.line)
+            };
+            location.dimmed().to_string()
         } else {
             file.dimmed().to_string()
         };
@@ -179,6 +190,9 @@ fn json_output(file: &str, findings: &[Finding]) -> JsonOutput {
                 rule: f.rule.to_string(),
                 severity: f.severity.to_string(),
                 line: f.line,
+                column: (f.column > 0).then_some(f.column),
+                end_line: (f.end_line > 0).then_some(f.end_line),
+                end_column: (f.end_column > 0).then_some(f.end_column),
                 message: f.message.clone(),
                 roast: f.roast.clone(),
             })
@@ -207,14 +221,23 @@ fn print_github(file: &str, findings: &[Finding]) {
             Severity::Warning => "warning",
             Severity::Info => "notice",
         };
-        let line_part = if f.line > 0 {
+        let mut location = if f.line > 0 {
             format!(",line={}", f.line)
         } else {
             String::new()
         };
+        if f.column > 0 {
+            location.push_str(&format!(",col={}", f.column));
+        }
+        if f.end_line > 0 {
+            location.push_str(&format!(",endLine={}", f.end_line));
+        }
+        if f.end_column > 0 {
+            location.push_str(&format!(",endColumn={}", f.end_column));
+        }
         println!(
             "::{} file={}{},title=[{}] {}::{}",
-            level, file, line_part, f.rule, f.message, f.roast
+            level, file, location, f.rule, f.message, f.roast
         );
     }
 }
@@ -222,7 +245,11 @@ fn print_github(file: &str, findings: &[Finding]) {
 fn print_compact(file: &str, findings: &[Finding]) {
     for f in findings {
         let line_info = if f.line > 0 {
-            format!(":{}", f.line)
+            if f.column > 0 {
+                format!(":{}:{}", f.line, f.column)
+            } else {
+                format!(":{}", f.line)
+            }
         } else {
             String::new()
         };
@@ -260,23 +287,23 @@ fn build_sarif(results: &[(&str, &[Finding])]) -> String {
     let mut seen_ids = std::collections::BTreeSet::new();
     for (_, findings) in results {
         for f in *findings {
-            seen_ids.insert(f.rule);
+            seen_ids.insert(f.rule.clone());
         }
     }
-    let rule_ids: Vec<&str> = seen_ids.into_iter().collect();
+    let rule_ids: Vec<String> = seen_ids.into_iter().collect();
 
     // ruleId → index in the rules array (ruleIndex in results must match).
-    let rule_index: HashMap<&str, usize> = rule_ids
+    let rule_index: HashMap<String, usize> = rule_ids
         .iter()
         .enumerate()
-        .map(|(i, &id)| (id, i))
+        .map(|(i, id)| (id.clone(), i))
         .collect();
 
     // Highest severity seen per rule — used for defaultConfiguration.level.
-    let mut rule_max_sev: HashMap<&str, Severity> = HashMap::new();
+    let mut rule_max_sev: HashMap<String, Severity> = HashMap::new();
     for (_, findings) in results {
         for f in *findings {
-            let entry = rule_max_sev.entry(f.rule).or_insert(Severity::Info);
+            let entry = rule_max_sev.entry(f.rule.clone()).or_insert(Severity::Info);
             if f.severity > *entry {
                 *entry = f.severity;
             }
@@ -286,10 +313,13 @@ fn build_sarif(results: &[(&str, &[Finding])]) -> String {
     // Build tool.driver.rules
     let sarif_rules: Vec<serde_json::Value> = rule_ids
         .iter()
-        .map(|&id| {
-            let desc = rule_desc.get(id).copied().unwrap_or(id);
+        .map(|id| {
+            let desc = rule_desc.get(id.as_str()).copied().unwrap_or(id.as_str());
             let level = sarif_level(rule_max_sev.get(id).unwrap_or(&Severity::Info));
-            let categories = rule_categories.get(id).copied().unwrap_or_default();
+            let categories = rule_categories
+                .get(id.as_str())
+                .copied()
+                .unwrap_or_default();
             serde_json::json!({
                 "id": id,
                 "name": id,
@@ -306,7 +336,7 @@ fn build_sarif(results: &[(&str, &[Finding])]) -> String {
     for (file, findings) in results {
         let uri = normalize_uri(file);
         for f in *findings {
-            let idx = *rule_index.get(f.rule).unwrap_or(&0);
+            let idx = *rule_index.get(&f.rule).unwrap_or(&0);
             let mut result = serde_json::json!({
                 "ruleId": f.rule,
                 "ruleIndex": idx,
@@ -325,6 +355,18 @@ fn build_sarif(results: &[(&str, &[Finding])]) -> String {
             if f.line > 0 {
                 result["locations"][0]["physicalLocation"]["region"] =
                     serde_json::json!({ "startLine": f.line });
+                if f.column > 0 {
+                    result["locations"][0]["physicalLocation"]["region"]["startColumn"] =
+                        serde_json::json!(f.column);
+                }
+                if f.end_line > 0 {
+                    result["locations"][0]["physicalLocation"]["region"]["endLine"] =
+                        serde_json::json!(f.end_line);
+                }
+                if f.end_column > 0 {
+                    result["locations"][0]["physicalLocation"]["region"]["endColumn"] =
+                        serde_json::json!(f.end_column);
+                }
             }
             sarif_results.push(result);
         }
@@ -403,4 +445,40 @@ pub fn print_summary_header() {
         .bold()
         .red()
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_sarif, json_output};
+    use crate::rules::{Finding, Severity};
+
+    fn shellcheck_finding() -> Finding {
+        Finding {
+            rule: "SC2086".into(),
+            severity: Severity::Warning,
+            line: 4,
+            column: 9,
+            end_line: 4,
+            end_column: 14,
+            message: "Double quote to prevent globbing".into(),
+            roast: "ShellCheck found a shell-script problem inside this RUN instruction.".into(),
+        }
+    }
+
+    #[test]
+    fn json_and_sarif_preserve_shellcheck_ids_and_ranges() {
+        let finding = shellcheck_finding();
+        let json = serde_json::to_value(json_output("Dockerfile", &[finding.clone()])).unwrap();
+        assert_eq!(json["findings"][0]["rule"], "SC2086");
+        assert_eq!(json["findings"][0]["column"], 9);
+
+        let sarif: serde_json::Value =
+            serde_json::from_str(&build_sarif(&[("Dockerfile", &[finding])])).unwrap();
+        assert_eq!(sarif["runs"][0]["results"][0]["ruleId"], "SC2086");
+        assert_eq!(
+            sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"]
+                ["startColumn"],
+            9
+        );
+    }
 }

@@ -35,6 +35,16 @@ pub struct PolicySettings {
     pub strict_labels: Option<bool>,
 }
 
+/// Optional external ShellCheck integration. It is deliberately separate from
+/// policy settings because it applies to the complete Dockerfile scan.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct ShellcheckSettings {
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub exclude: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct PathOverride {
@@ -54,6 +64,8 @@ pub struct DroastConfig {
     pub preset: Option<String>,
     #[serde(flatten)]
     pub settings: PolicySettings,
+    #[serde(default)]
+    pub shellcheck: ShellcheckSettings,
     #[serde(default)]
     pub overrides: Vec<PathOverride>,
     #[serde(skip)]
@@ -255,6 +267,17 @@ impl DroastConfig {
         let mut layer = preset_settings(local.preset.as_deref())?;
         layer.overlay_preset(local.settings);
         merged.settings.merge(layer);
+        replace(&mut merged.shellcheck.mode, local.shellcheck.mode);
+        for code in local.shellcheck.exclude {
+            if !merged
+                .shellcheck
+                .exclude
+                .iter()
+                .any(|current| current.eq_ignore_ascii_case(&code))
+            {
+                merged.shellcheck.exclude.push(code);
+            }
+        }
         merged.overrides.extend(local.overrides);
         merged.source_path = Some(path);
         stack.pop();
@@ -263,6 +286,17 @@ impl DroastConfig {
 
     fn merge(&mut self, child: DroastConfig) {
         self.settings.merge(child.settings);
+        replace(&mut self.shellcheck.mode, child.shellcheck.mode);
+        for code in child.shellcheck.exclude {
+            if !self
+                .shellcheck
+                .exclude
+                .iter()
+                .any(|current| current.eq_ignore_ascii_case(&code))
+            {
+                self.shellcheck.exclude.push(code);
+            }
+        }
         self.overrides.extend(child.overrides);
         if child.source_path.is_some() {
             self.source_path = child.source_path;
@@ -285,6 +319,22 @@ impl DroastConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         preset_settings(self.preset.as_deref())?;
         validate_settings(&self.settings, "configuration")?;
+        if let Some(mode) = &self.shellcheck.mode {
+            if !matches!(
+                mode.to_ascii_lowercase().as_str(),
+                "off" | "auto" | "required"
+            ) {
+                bail!("Unknown ShellCheck mode '{mode}'; expected off, auto, or required");
+            }
+        }
+        for code in &self.shellcheck.exclude {
+            if !regex::Regex::new(r"^SC[0-9]{4}$")
+                .expect("valid static expression")
+                .is_match(&code.to_ascii_uppercase())
+            {
+                bail!("Invalid ShellCheck exclusion '{code}'; expected an SC#### rule ID");
+            }
+        }
         for path_override in &self.overrides {
             if path_override.paths.is_empty() {
                 bail!("Every [[overrides]] block must contain at least one path pattern");
@@ -670,6 +720,31 @@ require-suppression-expiration = true
         );
         assert_eq!(config.settings.require_suppression_reason, Some(true));
         assert_eq!(config.settings.require_suppression_expiration, Some(true));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn shellcheck_settings_are_inherited_and_validated() {
+        let root = fixture("shellcheck");
+        let parent = root.join("organization.toml");
+        let child = root.join("droast.toml");
+        std::fs::write(
+            &parent,
+            "[shellcheck]\nmode = \"auto\"\nexclude = [\"SC2086\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &child,
+            "extends = \"organization.toml\"\n[shellcheck]\nmode = \"required\"\nexclude = [\"SC2046\"]\n",
+        )
+        .unwrap();
+
+        let config = DroastConfig::load_from(&child).unwrap();
+        assert_eq!(config.shellcheck.mode.as_deref(), Some("required"));
+        assert_eq!(config.shellcheck.exclude, ["SC2086", "SC2046"]);
+
+        std::fs::write(&child, "[shellcheck]\nexclude = [\"not-a-rule\"]\n").unwrap();
+        assert!(DroastConfig::load_from(&child).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 

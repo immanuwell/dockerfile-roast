@@ -123,9 +123,15 @@ no-roast     = true
 
 [severity-overrides]
 DF020 = "error"
+
+[shellcheck]
+mode = "auto" # off (default) | auto | required
+exclude = ["SC2086"]
 ```
 
 droast searches for `droast.toml` starting from the current directory, walking up to the nearest `.git` root. CLI flags always take precedence over the file — the file just sets the defaults so you don't repeat yourself.
+
+When ShellCheck is installed, `mode = "auto"` also analyzes shell-form `RUN` instructions and script heredocs, reporting native `SC####` IDs with Dockerfile source locations. The default is `off`; `required` makes a missing or failed ShellCheck executable an `SC0000` error. You can also select the mode for one invocation with `--shellcheck auto`.
 
 To keep lint configuration elsewhere, pass its path explicitly:
 

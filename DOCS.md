@@ -301,6 +301,7 @@ printf 'FROM alpine:latest\n' | droast -
 | Option | Purpose |
 |---|---|
 | `--config PATH` | Load an explicit TOML configuration |
+| `--shellcheck MODE` | ShellCheck bridge: `off`, `auto`, or `required` |
 | `--preset NAME` | Apply `minimal`, `security`, `performance`, `production`, or `strict` |
 | `--category NAMES` | Run comma-separated rule categories |
 | `--skip-category NAMES` | Skip comma-separated rule categories |
@@ -489,6 +490,10 @@ DF001 = "error"
 DF020 = "error"
 DF065 = "error"
 
+[shellcheck]
+mode = "auto"
+exclude = ["SC2086"]
+
 [required-labels]
 "org.opencontainers.image.source" = "url"
 "org.opencontainers.image.version" = "semver"
@@ -525,6 +530,8 @@ See [`examples/droast-enterprise.toml`](examples/droast-enterprise.toml) for a c
 | `extend-approved-base-images` | array | Add to the inherited image allowlist |
 | `required-labels` | table | Required label names and formats |
 | `strict-labels` | boolean | Reject labels outside the schema |
+| `shellcheck.mode` | string | `off` (default), `auto`, `required` |
+| `shellcheck.exclude` | array | ShellCheck IDs to suppress, such as `SC2086` |
 | `overrides` | array of tables | Apply settings to matching paths |
 | `no-roast` | boolean | `true`, `false` |
 | `no-fail` | boolean | `true`, `false` |
@@ -533,6 +540,12 @@ See [`examples/droast-enterprise.toml`](examples/droast-enterprise.toml) for a c
 Unknown keys are rejected. This catches misspelled configuration early.
 
 Unknown rule IDs, categories, severities, presets, label formats, regular expressions, inheritance cycles, and glob patterns are also rejected. CI does not silently continue with a broken policy.
+
+### ShellCheck bridge
+
+Droast can delegate shell analysis to an installed `shellcheck` executable. It runs ShellCheck independently for each shell-form `RUN`, honors `SHELL` instructions that select `sh`, `ash`, `bash`, `dash`, or `ksh`, and analyzes BuildKit script heredocs. Findings retain their native `SC####` IDs in terminal, JSON, and SARIF output and are mapped back to Dockerfile locations.
+
+`off` is the default and makes no external call. `auto` runs ShellCheck only when it is available on `PATH`; `required` reports `SC0000` when it cannot start or returns an invalid result. This lets a repository adopt shell analysis without making the default binary depend on a bundled ShellCheck distribution.
 
 ### Editor schema
 

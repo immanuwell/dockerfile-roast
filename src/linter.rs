@@ -7,6 +7,7 @@ use std::path::Path;
 use crate::parser;
 use crate::repository::{self, DockerignoreProblem};
 use crate::rules::{self, Finding, Severity};
+use crate::shellcheck;
 
 pub struct LintOptions {
     pub skip_rules: Vec<String>,
@@ -27,6 +28,8 @@ pub struct LintOptions {
     pub approved_base_images: Option<Vec<String>>,
     pub required_labels: BTreeMap<String, String>,
     pub strict_labels: bool,
+    pub shellcheck_mode: shellcheck::Mode,
+    pub shellcheck_exclude: Vec<String>,
 }
 
 impl Default for LintOptions {
@@ -49,6 +52,8 @@ impl Default for LintOptions {
             approved_base_images: None,
             required_labels: BTreeMap::new(),
             strict_labels: false,
+            shellcheck_mode: shellcheck::Mode::Off,
+            shellcheck_exclude: Vec::new(),
         }
     }
 }
@@ -89,6 +94,14 @@ fn lint_content_without_context(content: &str, filename: &str, opts: &LintOption
     }
 
     findings.extend(crate::policy::configured_findings(&instructions, opts));
+    if opts.only_rules.is_empty() {
+        findings.extend(shellcheck::lint(
+            content,
+            &instructions,
+            opts.shellcheck_mode,
+            &opts.shellcheck_exclude,
+        ));
+    }
 
     LintResult {
         file: filename.to_string(),
@@ -158,7 +171,7 @@ pub(crate) fn rule_id_enabled(opts: &LintOptions, id: &str) -> bool {
 fn finalize_findings(content: &str, findings: &mut Vec<Finding>, opts: &LintOptions) {
     crate::policy::apply_inline_suppressions(content, findings, opts);
     for finding in findings.iter_mut() {
-        if let Some(severity) = opts.severity_overrides.get(finding.rule) {
+        if let Some(severity) = opts.severity_overrides.get(&finding.rule) {
             finding.severity = *severity;
         }
     }
@@ -179,7 +192,10 @@ fn add_dockerignore_finding(
         Ok(problem) => problem,
         Err(error) => {
             result.findings.push(Finding {
-                rule: "DF033",
+                column: 0,
+                end_line: 0,
+                end_column: 0,
+                rule: "DF033".into(),
                 severity: Severity::Info,
                 line: 0,
                 message: format!("Cannot read the effective .dockerignore: {error}"),
@@ -203,7 +219,10 @@ fn add_dockerignore_finding(
         ),
     };
     result.findings.push(Finding {
-        rule: "DF033",
+        column: 0,
+        end_line: 0,
+        end_column: 0,
+        rule: "DF033".into(),
         severity: Severity::Info,
         line: 0,
         message,

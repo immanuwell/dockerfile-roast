@@ -1,4 +1,4 @@
-use dockerfile_roast::{config, hadolint, linter, output, repository, rules};
+use dockerfile_roast::{config, hadolint, linter, output, repository, rules, shellcheck};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process;
@@ -56,6 +56,23 @@ enum ShellArg {
     Bash,
     Fish,
     Zsh,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ShellcheckModeArg {
+    Off,
+    Auto,
+    Required,
+}
+
+impl From<ShellcheckModeArg> for shellcheck::Mode {
+    fn from(mode: ShellcheckModeArg) -> Self {
+        match mode {
+            ShellcheckModeArg::Off => Self::Off,
+            ShellcheckModeArg::Auto => Self::Auto,
+            ShellcheckModeArg::Required => Self::Required,
+        }
+    }
 }
 
 impl From<ShellArg> for Shell {
@@ -153,6 +170,10 @@ struct Cli {
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     check_dockerignore: bool,
 
+    /// ShellCheck integration: off, auto, or required
+    #[arg(long, value_enum)]
+    shellcheck: Option<ShellcheckModeArg>,
+
     /// Always exit successfully after linting
     #[arg(long)]
     no_fail: bool,
@@ -199,6 +220,10 @@ fn main() -> Result<()> {
         Some(path) => DroastConfig::load_from(path)?,
         None => DroastConfig::try_load()?,
     };
+    let shellcheck_mode = cli
+        .shellcheck
+        .map(Into::into)
+        .unwrap_or(shellcheck::Mode::parse(cfg.shellcheck.mode.as_deref())?);
 
     let mut global_settings = cfg.settings.clone();
     if cli.preset.is_some() {
@@ -243,7 +268,7 @@ fn main() -> Result<()> {
         let mut all_results: Vec<linter::LintResult> = Vec::new();
         for file in &files {
             let settings = effective_settings(&cfg, &cli, &file.dockerfile)?;
-            let opts = lint_options(&settings, &cli)?;
+            let opts = lint_options(&settings, &cli, shellcheck_mode, &cfg.shellcheck.exclude)?;
             let file_no_fail = cli.no_fail || settings.no_fail.unwrap_or(no_fail);
             match lint_one(file, &opts) {
                 Ok(result) => {
@@ -270,7 +295,7 @@ fn main() -> Result<()> {
     } else {
         for file in &files {
             let settings = effective_settings(&cfg, &cli, &file.dockerfile)?;
-            let opts = lint_options(&settings, &cli)?;
+            let opts = lint_options(&settings, &cli, shellcheck_mode, &cfg.shellcheck.exclude)?;
             let file_no_roast = cli.no_roast || settings.no_roast.unwrap_or(no_roast);
             let file_no_fail = cli.no_fail || settings.no_fail.unwrap_or(no_fail);
             match lint_one(file, &opts) {
@@ -331,7 +356,12 @@ fn effective_settings(
     Ok(settings)
 }
 
-fn lint_options(settings: &PolicySettings, cli: &Cli) -> anyhow::Result<LintOptions> {
+fn lint_options(
+    settings: &PolicySettings,
+    cli: &Cli,
+    shellcheck_mode: shellcheck::Mode,
+    shellcheck_exclude: &[String],
+) -> anyhow::Result<LintOptions> {
     let known_rules = rules::all_rules()
         .into_iter()
         .map(|rule| rule.id)
@@ -387,6 +417,11 @@ fn lint_options(settings: &PolicySettings, cli: &Cli) -> anyhow::Result<LintOpti
         approved_base_images: settings.approved_base_images.clone(),
         required_labels: settings.required_labels.clone(),
         strict_labels: settings.strict_labels.unwrap_or(false),
+        shellcheck_mode,
+        shellcheck_exclude: shellcheck_exclude
+            .iter()
+            .map(|code| code.to_ascii_uppercase())
+            .collect(),
     })
 }
 
@@ -450,6 +485,12 @@ const CONFIG_TEMPLATE: &str = r#"# droast.toml - optional project and organizati
 # min-severity = "info"
 # categories = ["security", "supply-chain"]
 # skip-categories = ["maintainability"]
+
+# Optional ShellCheck bridge. `auto` runs an installed `shellcheck` when it is
+# available; `required` turns a missing or failed executable into SC0000.
+# [shellcheck]
+# mode = "auto" # off | auto | required
+# exclude = ["SC2086"]
 
 # Governed inline suppressions
 # Syntax:

@@ -15,6 +15,7 @@
       ]
     },
     "preset": { "$ref": "#/$defs/preset" },
+    "shellcheck": { "$ref": "#/$defs/shellcheck" },
     "overrides": {
       "type": "array",
       "items": { "$ref": "#/$defs/pathOverride" }
@@ -114,6 +115,18 @@
         },
         "strict-labels": { "type": "boolean" }
       }
+    },
+    "shellcheck": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["off", "auto", "required"] },
+        "exclude": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^SC[0-9]{4}$" },
+          "uniqueItems": true
+        }
+      },
+      "unevaluatedProperties": false
     },
     "pathOverride": {
       "type": "object",

@@ -30,7 +30,10 @@ fn registry_findings(instructions: &[Instruction], opts: &LintOptions) -> Vec<Fi
         .filter_map(|(instruction, image)| {
             let registry = image_registry(image);
             (!matches_any(registry, approved)).then(|| Finding {
-                rule: "DF065",
+            column: 0,
+            end_line: 0,
+            end_column: 0,
+                rule: "DF065".into(),
                 severity: Severity::Warning,
                 line: instruction.line,
                 message: format!(
@@ -52,7 +55,10 @@ fn base_image_findings(instructions: &[Instruction], opts: &LintOptions) -> Vec<
         .into_iter()
         .filter(|(_, image)| !matches_any(image, approved))
         .map(|(instruction, image)| Finding {
-            rule: "DF073",
+            column: 0,
+            end_line: 0,
+            end_column: 0,
+            rule: "DF073".into(),
             severity: Severity::Error,
             line: instruction.line,
             message: format!("Base image '{}' is not approved", image),
@@ -124,14 +130,20 @@ fn label_findings(instructions: &[Instruction], opts: &LintOptions) -> Vec<Findi
     for (name, format) in &opts.required_labels {
         match labels.get(name) {
             None => findings.push(Finding {
-                rule: "DF074",
+            column: 0,
+            end_line: 0,
+            end_column: 0,
+                rule: "DF074".into(),
                 severity: Severity::Error,
                 line,
                 message: format!("Required image label '{}' is missing", name),
                 roast: "The image arrived without the metadata needed to identify, trace, or govern it.".to_string(),
             }),
             Some((value, label_line)) if !label_value_matches(value, format) => findings.push(Finding {
-                rule: "DF074",
+            column: 0,
+            end_line: 0,
+            end_column: 0,
+                rule: "DF074".into(),
                 severity: Severity::Error,
                 line: *label_line,
                 message: format!(
@@ -148,7 +160,10 @@ fn label_findings(instructions: &[Instruction], opts: &LintOptions) -> Vec<Findi
         for (name, (_, label_line)) in &labels {
             if !opts.required_labels.contains_key(name) {
                 findings.push(Finding {
-                    rule: "DF074",
+                    column: 0,
+                    end_line: 0,
+                    end_column: 0,
+                    rule: "DF074".into(),
                     severity: Severity::Error,
                     line: *label_line,
                     message: format!("Image label '{}' is not allowed by the strict schema", name),
@@ -244,7 +259,7 @@ pub fn apply_inline_suppressions(content: &str, findings: &mut Vec<Finding>, opt
             let matches_rule = suppression
                 .rules
                 .iter()
-                .any(|rule| rule.eq_ignore_ascii_case(finding.rule));
+                .any(|rule| rule.eq_ignore_ascii_case(&finding.rule));
             let matches_location = suppression.global
                 || suppression.target.is_some_and(|(start, end)| {
                     finding.line > 0 && finding.line >= start && finding.line <= end
@@ -260,7 +275,10 @@ pub fn apply_inline_suppressions(content: &str, findings: &mut Vec<Finding>, opt
     if opts.report_unused_suppressions && rule_id_enabled(opts, "DF072") {
         for suppression in suppressions.iter().filter(|item| !item.used) {
             policy_findings.push(Finding {
-                rule: "DF072",
+            column: 0,
+            end_line: 0,
+            end_column: 0,
+                rule: "DF072".into(),
                 severity: Severity::Warning,
                 line: suppression.line,
                 message: format!(
@@ -528,7 +546,10 @@ fn parse_date(value: &str) -> Result<Date, String> {
 
 fn suppression_finding(line: usize, message: String) -> Finding {
     Finding {
-        rule: "DF072",
+            column: 0,
+            end_line: 0,
+            end_column: 0,
+        rule: "DF072".into(),
         severity: Severity::Error,
         line,
         message,
@@ -549,7 +570,7 @@ mod tests {
         }
     }
 
-    fn rules(source: &str, options: &LintOptions) -> Vec<&'static str> {
+    fn rules(source: &str, options: &LintOptions) -> Vec<String> {
         lint_content(source, "Dockerfile", options)
             .findings
             .into_iter()
@@ -754,7 +775,7 @@ LABEL org.opencontainers.image.version="not-semver"
         options.categories = vec!["security".into()];
 
         let found = rules(source, &options);
-        assert!(found.contains(&"DF002"));
-        assert!(!found.contains(&"DF003"));
+        assert!(found.iter().any(|rule| rule == "DF002"));
+        assert!(!found.iter().any(|rule| rule == "DF003"));
     }
 }
