@@ -565,6 +565,35 @@ fn podman_discovers_quadlet_and_kube_local_builds() {
 }
 
 #[test]
+fn podman_reports_cpp_preprocessed_containerfiles() {
+    let root = std::env::temp_dir().join(format!("droast-containerfile-in-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("Containerfile.in");
+    std::fs::write(&file, "#define BASE alpine:3.20\nFROM BASE\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            file.to_str().unwrap(),
+            "--engine",
+            "podman",
+            "--format",
+            "json",
+            "--only",
+            "DF075",
+            "--no-fail",
+            "--check-ignorefile=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["findings"][0]["rule"], "DF075");
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn dockerfile_specific_ignore_works_without_a_context_root_ignore() {
     let fixture = repository_fixture();
     let sarif = run_sarif(&[

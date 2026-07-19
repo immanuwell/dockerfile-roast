@@ -83,6 +83,7 @@ pub fn categories_for(id: &str) -> &'static [&'static str] {
             &["reproducibility", "supply-chain"]
         }
         "DF072" | "DF074" => &["correctness", "security"],
+        "DF075" => &["correctness", "reliability"],
         _ => &[],
     }
 }
@@ -531,6 +532,12 @@ pub fn all_rules() -> Vec<Rule> {
             id: "DF074",
             severity: Severity::Error,
             description: "Image labels must satisfy the configured schema",
+            func: rule_configured_policy,
+        },
+        Rule {
+            id: "DF075",
+            severity: Severity::Info,
+            description: "Containerfile.in must be linted after Podman CPP preprocessing",
             func: rule_configured_policy,
         },
     ]

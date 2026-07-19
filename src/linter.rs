@@ -96,6 +96,7 @@ fn lint_content_without_context(content: &str, filename: &str, opts: &LintOption
     }
 
     findings.extend(crate::policy::configured_findings(&instructions, opts));
+    findings.extend(podman_workflow_findings(filename, opts));
     if opts.only_rules.is_empty() {
         findings.extend(shellcheck::lint(
             content,
@@ -109,6 +110,28 @@ fn lint_content_without_context(content: &str, filename: &str, opts: &LintOption
         file: filename.to_string(),
         findings,
     }
+}
+
+fn podman_workflow_findings(filename: &str, opts: &LintOptions) -> Vec<Finding> {
+    if opts.engine != ContainerEngine::Podman || !rule_id_enabled(opts, "DF075") {
+        return Vec::new();
+    }
+    let is_preprocessed = Path::new(filename)
+        .file_name()
+        .is_some_and(|name| name == "Containerfile.in");
+    if !is_preprocessed {
+        return Vec::new();
+    }
+    vec![Finding {
+        rule: "DF075".into(),
+        severity: Severity::Info,
+        line: 1,
+        column: 1,
+        end_line: 1,
+        end_column: 1,
+        message: "Containerfile.in is preprocessed by Podman with CPP; lint the generated Containerfile too".into(),
+        roast: "CPP gets the last word here. Make sure the file Podman actually builds gets roasted too.".into(),
+    }]
 }
 
 /// Read `path` from disk and lint it. Thin wrapper around `lint_content`.

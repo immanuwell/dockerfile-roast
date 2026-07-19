@@ -276,6 +276,8 @@ podman run --rm \
 engine = "podman"
 ```
 
+Podman preprocesses `Containerfile.in` with CPP. Droast reports `DF075` as an informational reminder to lint the generated Containerfile as part of that build workflow.
+
 ## wasmer
 
 droast is also published as a WASI package in the [Wasmer Registry](https://wasmer.io/immanuwell/droast). It uses the same CLI and rule engine as the native binary.
@@ -312,11 +314,11 @@ droast completion fish | source
 
 ## what it catches
 
-<p data-droast-rule-count>74 rules, ngl thats a lot. run <code>droast --list-rules</code> for the full breakdown.</p>
+<p data-droast-rule-count>75 rules, ngl thats a lot. run <code>droast --list-rules</code> for the full breakdown.</p>
 
 <!-- BEGIN RULES -->
 <details>
-<summary data-droast-rule-count>all 74 rules</summary>
+<summary data-droast-rule-count>all 75 rules</summary>
 
 ```
 
@@ -398,6 +400,7 @@ droast completion fish | source
   DF072    ERROR    correctness,security               Suppression directives must satisfy policy
   DF073    ERROR    reproducibility,supply-chain       Base images must satisfy the approved image policy
   DF074    ERROR    correctness,security               Image labels must satisfy the configured schema
+  DF075    INFO     correctness,reliability            Containerfile.in must be linted after Podman CPP preprocessing
 
   Use --skip DF001,DF002 to suppress specific rules.
   Use --min-severity warning to hide INFO findings.

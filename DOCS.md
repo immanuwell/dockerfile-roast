@@ -1912,7 +1912,7 @@ let instructions = parse("FROM alpine:3.20\n");
 
 ## Rule catalog
 
-Run `droast --list-rules` for the authoritative list in the installed version. This catalog describes all 74 current rules.
+Run `droast --list-rules` for the authoritative list in the installed version. This catalog describes all 75 current rules.
 
 ### Base images, stages, and reproducibility
 
@@ -2014,6 +2014,7 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 | DF064 | warning | Use `useradd -l` to avoid oversized user metadata layers |
 | DF068 | error | Do not use forbidden instructions as `ONBUILD` triggers |
 | DF074 | error | Require final-stage labels to match configured policy |
+| DF075 | info | Lint `Containerfile.in` after Podman CPP preprocessing |
 
 ### Syntax
 
