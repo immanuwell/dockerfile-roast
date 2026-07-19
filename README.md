@@ -196,6 +196,24 @@ example with options:
 
 <!-- droast:action-version:end -->
 
+## pre-commit
+
+roast Dockerfiles before they even reach CI, via [pre-commit](https://pre-commit.com):
+
+```yaml
+- repo: https://github.com/immanuwell/dockerfile-roast
+  rev: 1.4.4
+  hooks:
+    - id: droast
+```
+
+the hook runs on `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `Containerfile`, and `Containerfile.*`, while excluding Dockerfile-specific `.dockerignore` files. pass flags through `args` as usual:
+
+```yaml
+    - id: droast
+      args: [--min-severity, warning, --skip, DF012]
+```
+
 ## docker
 
 pull from ghcr and use immediately, no install needed:

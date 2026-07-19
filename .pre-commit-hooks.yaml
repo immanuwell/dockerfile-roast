@@ -1,0 +1,7 @@
+- id: droast
+  name: droast
+  description: Roast Dockerfiles for security, layer hygiene, and best-practice violations.
+  entry: droast
+  language: rust
+  files: '(^|/)((Dockerfile|Containerfile)(\.[^/]+)?|[^/]+\.Dockerfile)$'
+  exclude: '\.dockerignore$'
