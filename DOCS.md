@@ -1215,8 +1215,14 @@ jobs:
 
 ### GitLab CI
 
+GitLab can run droast directly as the job image. Clear the image entrypoint so
+GitLab can execute the job script.
+
+#### GitLab - lint every supported Dockerfile
+
 ```yaml
 droast:
+  stage: test
   image:
     name: ghcr.io/immanuwell/droast:1.4.3
     entrypoint: [""]
@@ -1232,6 +1238,136 @@ droast:
         - "**/compose*.yaml"
         - "**/docker-bake.*"
 ```
+
+The `changes` rule avoids starting this job when a commit cannot affect a
+Docker build. Remove `rules` if Compose or Bake files use non-standard names.
+
+#### GitLab - strict merge requests and the default branch
+
+```yaml
+droast-strict:
+  stage: test
+  image:
+    name: ghcr.io/immanuwell/droast:1.4.3
+    entrypoint: [""]
+  script:
+    - droast --preset strict --no-roast .
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+```
+
+This blocks merge-request and default-branch pipelines when the strict preset
+finds a failing issue.
+
+#### GitLab - keep a non-blocking JSON report
+
+```yaml
+droast-report:
+  stage: test
+  image:
+    name: ghcr.io/immanuwell/droast:1.4.3
+    entrypoint: [""]
+  script:
+    - mkdir -p reports
+    - droast --format json --no-roast --no-fail . > reports/droast.json
+  artifacts:
+    when: always
+    name: "droast-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - reports/droast.json
+    expire_in: 1 week
+```
+
+`--no-fail` keeps the rollout advisory. Remove it when the team is ready to
+enforce the configured severity threshold.
+
+See the [GitLab CI/CD YAML reference](https://docs.gitlab.com/ci/yaml/) for
+runner-specific options.
+
+### Bitbucket Pipelines
+
+Bitbucket Pipelines can use the public droast image as a build environment.
+
+#### Bitbucket - lint every branch
+
+`bitbucket-pipelines.yml`:
+
+```yaml
+image: ghcr.io/immanuwell/droast:1.4.3
+
+pipelines:
+  default:
+    - step:
+        name: Lint Dockerfiles
+        script:
+          - droast --no-roast --min-severity warning .
+```
+
+#### Bitbucket - production preset on pull requests
+
+```yaml
+image: ghcr.io/immanuwell/droast:1.4.3
+
+pipelines:
+  pull-requests:
+    '**':
+      - step:
+          name: Lint Dockerfiles
+          script:
+            - droast --preset production --no-roast .
+```
+
+Bitbucket pull-request pipelines run in addition to matching `default` or
+branch pipelines. Use only the trigger sections you need to avoid duplicate
+runs.
+
+#### Bitbucket - keep a non-blocking JSON report
+
+```yaml
+image: ghcr.io/immanuwell/droast:1.4.3
+
+pipelines:
+  custom:
+    droast-report:
+      - step:
+          name: Create droast report
+          script:
+            - mkdir -p reports
+            - droast --format json --no-roast --no-fail . > reports/droast.json
+          artifacts:
+            - reports/droast.json
+```
+
+The `custom` pipeline is available for manual and scheduled runs.
+
+#### Bitbucket - keep an existing build image
+
+Use the Docker service when the step needs a different build image:
+
+```yaml
+image: atlassian/default-image:5
+
+pipelines:
+  default:
+    - step:
+        name: Lint Dockerfiles
+        services:
+          - docker
+        script:
+          - >-
+            docker run --rm
+            -v "$BITBUCKET_CLONE_DIR:/workspace:ro"
+            -w /workspace
+            ghcr.io/immanuwell/droast:1.4.3
+            --no-roast --min-severity warning .
+```
+
+The clone directory is within Bitbucket's permitted bind-mount area. The
+read-only mount is sufficient for linting.
+
+See the [Bitbucket Pipelines configuration reference](https://support.atlassian.com/bitbucket-cloud/docs/bitbucket-pipelines-configuration-reference/)
+for build images, triggers, services, and artifacts.
 
 ### CircleCI
 
@@ -1261,6 +1397,10 @@ workflows:
 
 ### Jenkins
 
+These examples use Declarative Pipeline syntax.
+
+#### Jenkins - use Docker from an existing agent
+
 ```groovy
 pipeline {
   agent any
@@ -1280,19 +1420,163 @@ pipeline {
 }
 ```
 
+The selected Jenkins agent must have Docker installed and permission to use
+the Docker daemon.
+
+#### Jenkins - use droast as the stage agent
+
+This variant requires the Jenkins Docker Pipeline plugin:
+
+```groovy
+pipeline {
+  agent none
+  stages {
+    stage('Lint Dockerfiles') {
+      agent {
+        docker {
+          image 'ghcr.io/immanuwell/droast:1.4.3'
+          args '--entrypoint='
+          reuseNode true
+        }
+      }
+      steps {
+        sh 'droast --preset production --no-roast .'
+      }
+    }
+  }
+}
+```
+
+Clearing the image entrypoint lets Jenkins start its normal agent command.
+`reuseNode true` mounts the current workspace into the container.
+
+#### Jenkins - keep a non-blocking JSON report
+
+```groovy
+pipeline {
+  agent any
+  stages {
+    stage('Dockerfile report') {
+      steps {
+        sh '''
+          mkdir -p reports
+          docker run --rm \
+            -v "$WORKSPACE:/workspace:ro" \
+            -w /workspace \
+            ghcr.io/immanuwell/droast:1.4.3 \
+            --format json --no-roast --no-fail . > reports/droast.json
+        '''
+      }
+    }
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: 'reports/droast.json', fingerprint: true
+    }
+  }
+}
+```
+
+`archiveArtifacts` keeps the report with the Jenkins build. Remove
+`--no-fail` to make findings block the pipeline.
+
+See the Jenkins references for [Pipeline syntax](https://www.jenkins.io/doc/book/pipeline/syntax/)
+and [Docker agents](https://www.jenkins.io/doc/book/pipeline/docker/).
+
 ### Azure Pipelines
 
+Microsoft-hosted Ubuntu agents include Docker. Self-hosted agents need a
+running Docker daemon.
+
+#### Azure - lint pushes and pull requests
+
 ```yaml
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
 steps:
   - checkout: self
-  - script: |
+  - bash: |
       docker run --rm \
-        -v "$(Build.SourcesDirectory):/workspace" \
+        -v "$(Build.SourcesDirectory):/workspace:ro" \
         -w /workspace \
         ghcr.io/immanuwell/droast:1.4.3 \
         --no-roast --min-severity warning .
     displayName: Lint Dockerfiles
 ```
+
+The YAML `pr` trigger works with GitHub and Bitbucket Cloud repositories.
+Azure Repos Git uses a build-validation branch policy for pull requests.
+
+#### Azure - strict pull-request policy
+
+```yaml
+trigger: none
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - bash: |
+      docker run --rm \
+        -v "$(Build.SourcesDirectory):/workspace:ro" \
+        -w /workspace \
+        ghcr.io/immanuwell/droast:1.4.3 \
+        --preset strict --no-roast .
+    displayName: Enforce strict Dockerfile policy
+```
+
+Add this pipeline to the target branch's build validation policy when Azure
+Repos should require it before merging. For GitHub and Bitbucket Cloud, the
+YAML `pr` trigger starts it directly.
+
+#### Azure - keep a non-blocking JSON report
+
+```yaml
+trigger:
+  - main
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - bash: |
+      mkdir -p "$(Build.ArtifactStagingDirectory)/droast"
+      docker run --rm \
+        -v "$(Build.SourcesDirectory):/workspace:ro" \
+        -w /workspace \
+        ghcr.io/immanuwell/droast:1.4.3 \
+        --format json --no-roast --no-fail . \
+        > "$(Build.ArtifactStagingDirectory)/droast/droast.json"
+    displayName: Create droast report
+  - publish: $(Build.ArtifactStagingDirectory)/droast
+    artifact: droast
+    condition: always()
+    displayName: Publish droast report
+```
+
+The `publish` shortcut creates a pipeline artifact in Azure DevOps Services.
+Azure DevOps Server users should use `PublishBuildArtifacts@1` instead.
+
+See the Azure references for [Docker on hosted agents](https://learn.microsoft.com/azure/devops/pipelines/ecosystems/containers/build-image)
+and [pipeline artifacts](https://learn.microsoft.com/azure/devops/pipelines/artifacts/pipeline-artifacts).
 
 ## Local development workflows
 
