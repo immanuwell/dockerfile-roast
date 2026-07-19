@@ -469,10 +469,6 @@ Both tools scanned the same lexically sorted set of 321 real-world Dockerfiles c
 | files per second | 326.1 | 83.5 |
 | lines per second | 50,343 | 12,894 |
 | Linux x86-64 binary | 7,513,704 bytes | 54,727,336 bytes |
-| findings | 18,516 | 1,435 |
-| errors | 14,774 | 100 |
-| warnings | 2,872 | 875 |
-| notes | 870 | 460 |
 
 The benchmark measures execution speed and binary size, not detection quality. Finding totals are not directly comparable because the tools have different rule sets, severities, shell-analysis coverage, and parser behavior.
 
