@@ -65,6 +65,14 @@ pub fn print_findings(file: &str, findings: &[Finding], format: OutputFormat, no
     }
 }
 
+pub fn print_no_new_findings(file: &str) {
+    println!(
+        "\n  {} {}\n",
+        "✓".green().bold(),
+        format!("{} has no new findings since the baseline.", file).green()
+    );
+}
+
 fn severity_color(s: &Severity) -> ColoredString {
     match s {
         Severity::Error => "ERROR".red().bold(),

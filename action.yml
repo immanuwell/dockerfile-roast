@@ -41,6 +41,14 @@ inputs:
     description: 'Exit 0 even when errors are found (non-blocking / advisory mode)'
     required: false
     default: 'false'
+  baseline:
+    description: 'Path in the repository to a droast baseline JSON file'
+    required: false
+    default: ''
+  only-new:
+    description: 'Report only findings absent from baseline (requires baseline)'
+    required: false
+    default: 'false'
   engine:
     description: 'Build-context conventions: docker or podman'
     required: false
@@ -86,6 +94,18 @@ runs:
 
         if [[ "${{ inputs.no-fail }}" == "true" ]]; then
           ARGS+=(--no-fail)
+        fi
+
+        if [[ -n "${{ inputs.baseline }}" ]]; then
+          ARGS+=(--baseline "${{ inputs.baseline }}")
+        fi
+
+        if [[ "${{ inputs.only-new }}" == "true" ]]; then
+          if [[ -z "${{ inputs.baseline }}" ]]; then
+            echo "::error title=droast configuration::'only-new' requires the 'baseline' input."
+            exit 2
+          fi
+          ARGS+=(--only-new)
         fi
 
         if [[ -n "${{ inputs.engine }}" ]]; then

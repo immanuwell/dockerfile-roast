@@ -1158,6 +1158,17 @@ only errors absent from the baseline make Droast return a non-zero status:
 droast --baseline droast-baseline.json .
 ```
 
+For a quiet gradual rollout, show only findings introduced after the baseline.
+This filters accepted findings from every output format, while new error findings
+continue to fail the command:
+
+```bash
+droast --baseline droast-baseline.json --only-new .
+```
+
+`--only-new` requires `--baseline` and cannot be combined with
+`--write-baseline`; write or refresh the baseline in a separate command.
+
 `--no-fail` lets the report upload step run even when droast finds errors.
 
 ### Quiet advisory runs
@@ -1211,6 +1222,8 @@ Action inputs:
 | `skip` | empty | Comma-separated rule IDs to skip |
 | `no-roast` | `false` | Use technical messages only |
 | `no-fail` | `false` | Keep the workflow step non-blocking |
+| `baseline` | empty | Repository path to the baseline JSON file |
+| `only-new` | `false` | Report only findings absent from `baseline` |
 | `engine` | config or `docker` | Build-context conventions: `docker` or `podman` |
 | `image-tag` | `latest` | Select the container version used by the action |
 
@@ -1233,6 +1246,8 @@ Non-blocking rollout:
     min-severity: info
     no-roast: true
     no-fail: true
+    baseline: .droast-baseline.json
+    only-new: true
     image-tag: 1.4.3
 ```
 

@@ -130,6 +130,104 @@ fn baseline_fingerprints_are_emitted_and_suppress_existing_errors() {
         .as_str()
         .unwrap()
         .starts_with("sha256:"));
+
+    let terminal_only_new = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--only", "DF002",
+            "--baseline", baseline.to_str().unwrap(),
+            "--only-new",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(terminal_only_new.status.success(), "{}", String::from_utf8_lossy(&terminal_only_new.stderr));
+    assert!(String::from_utf8_lossy(&terminal_only_new.stdout).contains("no new findings since the baseline"));
+
+    std::fs::write(
+        &dockerfile,
+        "FROM alpine:3.20\nUSER root\nRUN chmod 777 /tmp/cache\n",
+    )
+    .unwrap();
+    let only_new = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--only",
+            "DF002,DF034",
+            "--baseline",
+            baseline.to_str().unwrap(),
+            "--only-new",
+            "--format",
+            "json",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        only_new.status.success(),
+        "{}",
+        String::from_utf8_lossy(&only_new.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&only_new.stdout).unwrap();
+    assert_eq!(json["total"], 1);
+    assert_eq!(json["findings"][0]["rule"], "DF034");
+
+    let only_new_sarif = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--only", "DF002,DF034",
+            "--baseline", baseline.to_str().unwrap(),
+            "--only-new",
+            "--format", "sarif",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(only_new_sarif.status.success(), "{}", String::from_utf8_lossy(&only_new_sarif.stderr));
+    let sarif: serde_json::Value = serde_json::from_slice(&only_new_sarif.stdout).unwrap();
+    assert_eq!(sarif["runs"][0]["results"].as_array().unwrap().len(), 1);
+    assert_eq!(sarif["runs"][0]["results"][0]["ruleId"], "DF034");
+
+    let only_new_fails_for_new_errors = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--only",
+            "DF002,DF034",
+            "--baseline",
+            baseline.to_str().unwrap(),
+            "--only-new",
+            "--format",
+            "compact",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(!only_new_fails_for_new_errors.status.success());
+    let compact = String::from_utf8_lossy(&only_new_fails_for_new_errors.stdout);
+    assert!(compact.contains("[DF034]"));
+    assert!(!compact.contains("[DF002]"));
+
+    let missing_baseline = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([dockerfile.to_str().unwrap(), "--only-new"])
+        .output()
+        .unwrap();
+    assert!(!missing_baseline.status.success());
+    assert!(String::from_utf8_lossy(&missing_baseline.stderr).contains("--baseline"));
+
+    let write_and_filter = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--baseline", baseline.to_str().unwrap(),
+            "--write-baseline",
+            "--only-new",
+        ])
+        .output()
+        .unwrap();
+    assert!(!write_and_filter.status.success());
+    assert!(String::from_utf8_lossy(&write_and_filter.stderr).contains("cannot be used with"));
     std::fs::remove_dir_all(root).unwrap();
 }
 

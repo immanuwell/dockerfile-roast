@@ -219,6 +219,8 @@ available inputs (all optional):
 | `skip` | — | comma-separated rule IDs to ignore |
 | `no-roast` | `false` | technical output only, no jokes |
 | `no-fail` | `false` | advisory mode — never blocks the build |
+| `baseline` | — | repository path to a baseline JSON file |
+| `only-new` | `false` | report only findings not present in `baseline` |
 | `engine` | config or `docker` | build-context conventions: `docker` or `podman` |
 | `image-tag` | `latest` | pin to a specific droast release, e.g. `1.4.4` |
 
@@ -231,6 +233,8 @@ example with options:
     preset: production
     skip: DF012,DF022
     no-fail: true        # report findings but don't block the PR
+    baseline: .droast-baseline.json
+    only-new: true       # hide accepted findings; requires baseline
 ```
 
 <!-- droast:action-version:end -->

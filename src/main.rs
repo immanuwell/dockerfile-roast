@@ -205,6 +205,10 @@ struct Cli {
     #[arg(long, requires = "baseline")]
     write_baseline: bool,
 
+    /// Report only findings absent from --baseline
+    #[arg(long, requires = "baseline", conflicts_with = "write_baseline")]
+    only_new: bool,
+
     /// List rule IDs, severities, categories, and descriptions
     #[arg(long)]
     list_rules: bool,
@@ -309,13 +313,18 @@ fn main() -> Result<()> {
             let opts = lint_options(&settings, &cli, shellcheck_mode, &cfg.shellcheck.exclude, engine)?;
             let file_no_fail = cli.no_fail || settings.no_fail.unwrap_or(no_fail);
             match lint_one(file, &opts) {
-                Ok(result) => {
+                Ok(mut result) => {
                     let has_blocking_error = result.findings.iter().any(|finding| {
                         finding.severity == Severity::Error
-                            && !baseline.as_ref().is_some_and(|known| dockerfile_roast::baseline::contains(known, &result.file, finding))
+                            && is_new_finding(baseline.as_ref(), &result.file, finding)
                     });
                     if has_blocking_error && !file_no_fail {
                         any_error = true;
+                    }
+                    if cli.only_new {
+                        result.findings.retain(|finding| {
+                            is_new_finding(baseline.as_ref(), &result.file, finding)
+                        });
                     }
                     all_results.push(result);
                 }
@@ -344,16 +353,26 @@ fn main() -> Result<()> {
             let file_no_roast = cli.no_roast || settings.no_roast.unwrap_or(no_roast);
             let file_no_fail = cli.no_fail || settings.no_fail.unwrap_or(no_fail);
             match lint_one(file, &opts) {
-                Ok(result) => {
-                    total_findings += result.findings.len();
+                Ok(mut result) => {
+                    let finding_count_before_filtering = result.findings.len();
                     let has_blocking_error = result.findings.iter().any(|finding| {
                         finding.severity == Severity::Error
-                            && !baseline.as_ref().is_some_and(|known| dockerfile_roast::baseline::contains(known, &result.file, finding))
+                            && is_new_finding(baseline.as_ref(), &result.file, finding)
                     });
                     if has_blocking_error && !file_no_fail {
                         any_error = true;
                     }
-                    print_findings(&result.file, &result.findings, format, file_no_roast);
+                    if cli.only_new {
+                        result.findings.retain(|finding| {
+                            is_new_finding(baseline.as_ref(), &result.file, finding)
+                        });
+                    }
+                    total_findings += result.findings.len();
+                    if cli.only_new && finding_count_before_filtering > 0 && result.findings.is_empty() && format == OutputFormat::Terminal {
+                        output::print_no_new_findings(&result.file);
+                    } else {
+                        print_findings(&result.file, &result.findings, format, file_no_roast);
+                    }
                 }
                 Err(e) => {
                     eprintln!("{} {}", "x".red().bold(), e);
@@ -388,6 +407,14 @@ fn main() -> Result<()> {
         exit(1);
     }
     Ok(())
+}
+
+fn is_new_finding(
+    baseline: Option<&std::collections::BTreeSet<String>>,
+    file: &str,
+    finding: &rules::Finding,
+) -> bool {
+    !baseline.is_some_and(|known| dockerfile_roast::baseline::contains(known, file, finding))
 }
 
 fn effective_settings(
