@@ -6,6 +6,20 @@ on:
     branches: [main]
 
 jobs:
+  github-action:
+    name: GitHub Action smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Exercise the client-facing composite action on every PR and main push.
+      # The action is Docker-based, so it has no Node runtime of its own.
+      - name: Run droast GitHub Action
+        uses: ./
+        with:
+          image-tag: latest
+          no-fail: true
+
   container-workflow:
     runs-on: ubuntu-latest
     steps:
