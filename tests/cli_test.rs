@@ -1,4 +1,5 @@
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 use dockerfile_roast::rules::all_rules;
 use dockerfile_roast::repository;
@@ -27,6 +28,32 @@ fn policy_fixture(name: &str) -> std::path::PathBuf {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     root
+}
+
+#[test]
+fn stdin_lint_uses_the_process_working_directory_for_the_ignorefile() {
+    let root = policy_fixture("stdin-ignorefile");
+    std::fs::write(root.join(".dockerignore"), ".git\n").unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .current_dir(&root)
+        .args(["--only", "DF033", "--format", "json", "--no-fail", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("droast should run");
+    child
+        .stdin
+        .take()
+        .expect("stdin should be available")
+        .write_all(b"FROM alpine:3.20\n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(result["findings"].as_array().unwrap().is_empty());
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
+import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -95,7 +96,10 @@ function runLint(doc: vscode.TextDocument): void {
     let stdout = '';
     let stderr = '';
 
-    const proc = cp.spawn(exe, args);
+    // stdin has no path for droast to use when resolving the effective
+    // .dockerignore. Run it from the document's workspace context instead of
+    // the extension host's working directory.
+    const proc = cp.spawn(exe, args, { cwd: lintWorkingDirectory(doc) });
     procs.set(key, proc);
 
     proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
@@ -182,7 +186,11 @@ function isDockerfile(doc: vscode.TextDocument): boolean {
  * Priority: explicit config → bundled binary in extension/bin/ → system PATH.
  */
 function resolveExecutable(configured: string): string {
-    if (configured) { return configured; }
+    if (configured) {
+        return configured
+            .replace(/\$\{userHome\}/g, os.homedir())
+            .replace(/^~(?=$|[\\/])/, os.homedir());
+    }
 
     const ext  = process.platform === 'win32' ? '.exe' : '';
     const arch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
@@ -194,6 +202,12 @@ function resolveExecutable(configured: string): string {
     if (fs.existsSync(bundled)) { return bundled; }
 
     return 'droast';   // fall back to system PATH
+}
+
+function lintWorkingDirectory(doc: vscode.TextDocument): string | undefined {
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(doc.uri);
+    if (workspaceFolder) { return workspaceFolder.uri.fsPath; }
+    return doc.uri.scheme === 'file' ? path.dirname(doc.uri.fsPath) : undefined;
 }
 
 function clearTimer(key: string): void {

@@ -1838,7 +1838,7 @@ scripts/test-neovim-extension.sh
 | Setting | Purpose |
 |---|---|
 | `droast.enable` | Enable or disable linting |
-| `droast.executablePath` | Use a specific executable path |
+| `droast.executablePath` | Use a specific executable path; `~` and `${userHome}` are supported |
 | `droast.minSeverity` | Select `info`, `warning`, or `error` |
 | `droast.skipRules` | Suppress rule IDs |
 | `droast.noRoast` | Show technical text only |
@@ -2252,11 +2252,11 @@ CLI values override scalar configuration values. `skip` values are combined. `--
 
 ### VS Code cannot find droast
 
-Set an absolute executable path:
+Set an absolute executable path, or use `~` / `${userHome}` for your home directory:
 
 ```json
 {
-  "droast.executablePath": "/usr/local/bin/droast"
+  "droast.executablePath": "${userHome}/.local/bin/droast"
 }
 ```
 
