@@ -1050,6 +1050,34 @@ fn df057_clear_on_pipe_with_pipefail() {
     assert!(no_rule(&lint(df), "DF057"));
 }
 
+#[test]
+fn df057_clear_when_shell_instruction_enables_pipefail() {
+    let df = "FROM ubuntu:24.04\nSHELL [\"/bin/bash\", \"-o\", \"pipefail\", \"-c\"]\nRUN cat /etc/os-release | grep ID\n";
+    assert!(no_rule(&lint(df), "DF057"));
+}
+
+#[test]
+fn df057_shell_pipefail_resets_at_next_stage() {
+    let df = "FROM ubuntu:24.04 AS build\nSHELL [\"/bin/bash\", \"-o\", \"pipefail\", \"-c\"]\nRUN cat /etc/os-release | grep ID\nFROM ubuntu:24.04\nRUN cat /etc/os-release | grep ID\n";
+    let findings: Vec<_> = lint(df)
+        .into_iter()
+        .filter(|finding| finding.rule == "DF057")
+        .collect();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].line, 5);
+}
+
+#[test]
+fn df057_later_shell_without_pipefail_overrides_prior_shell() {
+    let df = "FROM ubuntu:24.04\nSHELL [\"/bin/bash\", \"-o\", \"pipefail\", \"-c\"]\nRUN cat /etc/os-release | grep ID\nSHELL [\"/bin/sh\", \"-c\"]\nRUN cat /etc/os-release | grep ID\n";
+    let findings: Vec<_> = lint(df)
+        .into_iter()
+        .filter(|finding| finding.rule == "DF057")
+        .collect();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].line, 5);
+}
+
 // ─── DF058: wget and curl both used ──────────────────────────────────────────
 
 #[test]
