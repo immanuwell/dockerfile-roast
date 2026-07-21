@@ -990,6 +990,18 @@ fn df054_clear_on_go_install_with_version() {
     assert!(no_rule(&lint(df), "DF054"));
 }
 
+#[test]
+fn df054_clear_on_cargo_install() {
+    let df = "FROM rust:1.80\nRUN cargo install --locked --path .\n";
+    assert!(no_rule(&lint(df), "DF054"));
+}
+
+#[test]
+fn df054_fires_on_go_install_after_a_shell_operator() {
+    let df = "FROM golang:1.21\nRUN echo building && go install github.com/user/tool\n";
+    assert!(has_rule(&lint(df), "DF054"));
+}
+
 // ─── DF055: yarn cache not cleaned ───────────────────────────────────────────
 
 #[test]

@@ -2472,8 +2472,28 @@ fn rule_go_install_version(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     instrs_of(instrs, "RUN")
         .into_iter()
         .filter(|i| {
-            let a = &i.arguments;
-            a.contains("go install") && !a.contains("@latest") && !a.contains('@')
+            i.arguments
+                .split(['&', '|', ';'])
+                .any(|segment| {
+                    let mut words = segment.split_whitespace();
+
+                    // Environment assignments may precede the command, but the
+                    // executable itself must be `go`; a substring match would
+                    // mistake `cargo install` for `go install`.
+                    let executable = loop {
+                        match words.next() {
+                            Some(word)
+                                if word.contains('=')
+                                    && !word.starts_with('=')
+                                    && !word.contains('/') => continue,
+                            word => break word,
+                        }
+                    };
+
+                    executable == Some("go")
+                        && words.next() == Some("install")
+                        && !segment.contains('@')
+                })
         })
         .map(|i| Finding {
             column: 0,
