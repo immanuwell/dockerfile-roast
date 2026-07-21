@@ -29,11 +29,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Generate public metadata
-        run: ./scripts/update-public-metadata.sh
+        run: ./scripts/update-public-metadata.sh --version "$(git describe --tags --abbrev=0)"
 
       - name: Validate generated changes
         run: git diff --check

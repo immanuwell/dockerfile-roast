@@ -71,6 +71,8 @@ diagnostics. Override defaults with `require("droast").setup({ args = { "--prese
 
 don't want to install anything? pick one:
 
+<!-- droast:release-version:start -->
+
 **Docker**:
 
 ```bash
@@ -210,8 +212,6 @@ See the **[complete configuration guide](DOCS.md#configuration)** and the copy-p
 
 ## github action
 
-<!-- droast:action-version:start -->
-
 add droast to any repo in 5 lines:
 
 ```yaml
@@ -265,8 +265,6 @@ example with options:
     only-new: true       # hide accepted findings; requires baseline
 ```
 
-<!-- droast:action-version:end -->
-
 ## pre-commit
 
 roast Dockerfiles before they even reach CI, via [pre-commit](https://pre-commit.com):
@@ -284,6 +282,8 @@ the hook runs on `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `Containerfile`, 
     - id: droast
       args: [--min-severity, warning, --skip, DF012]
 ```
+
+<!-- droast:release-version:end -->
 
 ## docker
 

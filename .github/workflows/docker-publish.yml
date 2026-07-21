@@ -16,22 +16,7 @@ env:
   WASMER_NAMESPACE: ${{ vars.WASMER_NAMESPACE || github.repository_owner }}
 
 jobs:
-  metadata:
-    name: Public metadata
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref }}
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Reject stale image metadata
-        run: ./scripts/update-public-metadata.sh --check
-
   build-and-push:
-    needs: metadata
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -82,7 +67,6 @@ jobs:
 
   publish-wasmer:
     name: Publish Wasmer package
-    needs: metadata
     runs-on: ubuntu-latest
     permissions:
       contents: read

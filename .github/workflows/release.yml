@@ -9,13 +9,51 @@ jobs:
   metadata:
     name: Public metadata
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Reject a stale release tag
-        run: ./scripts/update-public-metadata.sh --check
+      - name: Validate release tag version
+        shell: bash
+        run: |
+          crate_version=$(cargo metadata --no-deps --format-version 1 | jq -r \
+            '.packages[] | select(.name == "dockerfile-roast") | .version')
+          if [[ "$crate_version" != "$GITHUB_REF_NAME" ]]; then
+            echo "Cargo.toml version $crate_version does not match tag $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+      - name: Checkout main for public metadata
+        uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Synchronize release examples with the tag
+        run: ./scripts/update-public-metadata.sh --version "$GITHUB_REF_NAME"
+
+      - name: Commit synchronized metadata
+        shell: bash
+        env:
+          GIT_AUTHOR_NAME: ${{ secrets.GIT_AUTHOR_NAME }}
+          GIT_AUTHOR_EMAIL: ${{ secrets.GIT_AUTHOR_EMAIL }}
+          GIT_COMMITTER_NAME: ${{ secrets.GIT_COMMITTER_NAME }}
+          GIT_COMMITTER_EMAIL: ${{ secrets.GIT_COMMITTER_EMAIL }}
+        run: |
+          git add README.md docs/index.html action.yml wasmer.toml
+          if git diff --staged --quiet; then
+            echo "Public metadata is already synchronized."
+            exit 0
+          fi
+
+          : "${GIT_AUTHOR_NAME:?missing GIT_AUTHOR_NAME secret}"
+          : "${GIT_AUTHOR_EMAIL:?missing GIT_AUTHOR_EMAIL secret}"
+          : "${GIT_COMMITTER_NAME:?missing GIT_COMMITTER_NAME secret}"
+          : "${GIT_COMMITTER_EMAIL:?missing GIT_COMMITTER_EMAIL secret}"
+          git commit -m "docs: sync public metadata for $GITHUB_REF_NAME"
+          git push
 
   build:
     name: ${{ matrix.asset_name }}

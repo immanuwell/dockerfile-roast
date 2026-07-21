@@ -9,13 +9,28 @@ SITE="$REPO_ROOT/docs/index.html"
 ACTION="$REPO_ROOT/action.yml"
 WASMER="$REPO_ROOT/wasmer.toml"
 CHECK=false
+VERSION_OVERRIDE=""
 
-if [[ "${1:-}" == "--check" ]]; then
-    CHECK=true
-elif [[ $# -ne 0 ]]; then
-    echo "usage: $0 [--check]" >&2
-    exit 2
-fi
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --check)
+            CHECK=true
+            ;;
+        --version)
+            [[ $# -ge 2 ]] || {
+                echo "--version requires a semantic version" >&2
+                exit 2
+            }
+            VERSION_OVERRIDE="$2"
+            shift
+            ;;
+        *)
+            echo "usage: $0 [--check] [--version <major.minor.patch>]" >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
 
 for command in cargo jq perl awk; do
     command -v "$command" >/dev/null 2>&1 || {
@@ -54,8 +69,8 @@ DUPLICATE_IDS="$(jq -r '.[].id' <<<"$RULES_JSON" | sort | uniq -d)"
     exit 1
 }
 
-VERSION="$(cargo metadata --no-deps --format-version 1 --manifest-path "$REPO_ROOT/Cargo.toml" \
-    | jq -r '.packages[] | select(.name == "dockerfile-roast") | .version')"
+VERSION="${VERSION_OVERRIDE:-$(cargo metadata --no-deps --format-version 1 --manifest-path "$REPO_ROOT/Cargo.toml" \
+    | jq -r '.packages[] | select(.name == "dockerfile-roast") | .version')}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
     echo "invalid dockerfile-roast version: $VERSION" >&2
     exit 1
@@ -117,16 +132,22 @@ perl -0pi -e 's/\b\d+ ([Rr]ules)\b/$ENV{DROAST_PUBLIC_RULE_COUNT} $1/g' \
 export DROAST_PUBLIC_VERSION="$VERSION"
 perl -0pi -e '
     $regions = s{
-        (<!--\ droast:action-version:start\ -->)
+        (<!--\ droast:release-version:start\ -->)
         (.*?)
-        (<!--\ droast:action-version:end\ -->)
+        (<!--\ droast:release-version:end\ -->)
     }{
         $start = $1; $body = $2; $end = $3;
-        $versions = ($body =~ s/\b\d+\.\d+\.\d+\b/$ENV{DROAST_PUBLIC_VERSION}/g);
-        die "expected four release versions in README action examples\n" unless $versions == 4;
+        $versions = ($body =~ s{
+            (ghcr\.io/immanuwell/droast:|
+             immanuwell/dockerfile-roast\@|
+             specific\ droast\ release,\ e\.g\.\ `?|
+             ^\s*rev:\s*)
+            \d+\.\d+\.\d+
+        }{$1$ENV{DROAST_PUBLIC_VERSION}}gmx);
+        die "expected seven release versions in README examples\n" unless $versions == 7;
         "$start$body$end";
     }gsex;
-    die "expected one generated action-version region in README\n" unless $regions == 1;
+    die "expected one generated release-version region in README\n" unless $regions == 1;
 ' "$README"
 
 perl -pi -e '
