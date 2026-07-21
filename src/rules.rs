@@ -1,4 +1,6 @@
-use crate::parser::{parse_document, DiagnosticSeverity, Instruction, SourceSpan};
+use crate::parser::{
+    parse_document, DiagnosticSeverity, Instruction, InstructionForm, SourceSpan,
+};
 use regex::Regex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1821,7 +1823,7 @@ fn rule_hardcoded_secrets(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 }
 
 fn rule_curl_pipe_sh(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let re = Regex::new(r"(curl|wget)[^|]*\|\s*(bash|sh|ash|zsh|fish)").unwrap();
+    let re = Regex::new(r"(curl|wget)[^|]*\|\s*(bash|sh|ash|zsh|fish)\b").unwrap();
     instrs_of(instrs, "RUN")
         .into_iter()
         .filter(|i| re.is_match(&i.arguments))
@@ -2249,35 +2251,56 @@ fn rule_untrusted_registry(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 }
 
 fn rule_pipefail_missing(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    instrs_of(instrs, "RUN")
-        .into_iter()
-        .filter(|i| {
-            let a = &i.arguments;
-            // has a pipe that isn't curl|sh (that's covered separately) and isn't pipefail already set
-            a.contains(" | ")
-                && !a.contains("pipefail")
-                && !a.contains("set -o pipefail")
-                && !a.contains("set -eo pipefail")
-                && !a.contains("set -euo pipefail")
-                // only flag if it's not a trivial pipe to tee/grep/wc for log filtering
-                && !a.trim_start().starts_with("set ")
-        })
-        .map(|i| Finding {
-            column: 0,
-            end_line: 0,
-            end_column: 0,
-            rule: "DF057".into(),
-            severity: Severity::Warning,
-            line: i.line,
-            message:
-                "RUN with pipe but no pipefail — failed commands in the pipe are silently ignored"
-                    .to_string(),
-            roast: "A pipe in RUN without `set -o pipefail`. If the left side of that pipe fails, \
-                    bash shrugs and moves on. The exit code is whatever the last command returns. \
-                    Add `set -o pipefail` at the start of the RUN."
-                .to_string(),
-        })
-        .collect()
+    let mut shell_has_pipefail = false;
+    let mut findings = Vec::new();
+
+    for instruction in instrs {
+        match instruction.instruction.as_str() {
+            "FROM" => shell_has_pipefail = false,
+            "SHELL" => {
+                shell_has_pipefail = match &instruction.form {
+                    InstructionForm::Json(arguments) => {
+                        arguments
+                            .windows(2)
+                            .any(|pair| pair[0] == "-o" && pair[1] == "pipefail")
+                            || arguments.iter().any(|argument| argument == "-opipefail")
+                    }
+                    _ => false,
+                };
+            }
+            "RUN" => {
+                let a = &instruction.arguments;
+                // has a pipe that isn't curl|sh (that's covered separately) and isn't pipefail already set
+                if a.contains(" | ")
+                    && !shell_has_pipefail
+                    && !a.contains("pipefail")
+                    && !a.contains("set -o pipefail")
+                    && !a.contains("set -eo pipefail")
+                    && !a.contains("set -euo pipefail")
+                    // only flag if it's not a trivial pipe to tee/grep/wc for log filtering
+                    && !a.trim_start().starts_with("set ")
+                {
+                    findings.push(Finding {
+                        column: 0,
+                        end_line: 0,
+                        end_column: 0,
+                        rule: "DF057".into(),
+                        severity: Severity::Warning,
+                        line: instruction.line,
+                        message: "RUN with pipe but no pipefail — failed commands in the pipe are silently ignored"
+                            .to_string(),
+                        roast: "A pipe in RUN without `set -o pipefail`. If the left side of that pipe fails, \
+                                bash shrugs and moves on. The exit code is whatever the last command returns. \
+                                Add `set -o pipefail` at the start of the RUN."
+                            .to_string(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    findings
 }
 
 fn rule_wget_and_curl(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
