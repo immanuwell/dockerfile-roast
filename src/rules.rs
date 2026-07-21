@@ -1821,7 +1821,7 @@ fn rule_hardcoded_secrets(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 }
 
 fn rule_curl_pipe_sh(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let re = Regex::new(r"(curl|wget)[^|]*\|\s*(bash|sh|ash|zsh|fish)").unwrap();
+    let re = Regex::new(r"(curl|wget)[^|]*\|\s*(bash|sh|ash|zsh|fish)\b").unwrap();
     instrs_of(instrs, "RUN")
         .into_iter()
         .filter(|i| re.is_match(&i.arguments))

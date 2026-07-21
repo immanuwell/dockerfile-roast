@@ -305,6 +305,12 @@ fn df021_fires_on_wget_pipe_bash() {
     assert!(has_rule(&lint(df), "DF021"));
 }
 
+#[test]
+fn df021_clear_when_checksum_output_is_piped_to_sha256sum() {
+    let df = "FROM ubuntu:24.04\nRUN curl -fsSLo /tmp/tool https://example.com/tool \\\n+        && printf '%s  %s\\n' \"$TOOL_SHA256\" /tmp/tool | sha256sum -c -\n";
+    assert!(no_rule(&lint(df), "DF021"));
+}
+
 // ─── DF025: shell form CMD ───────────────────────────────────────────────────
 
 #[test]
