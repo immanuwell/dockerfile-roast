@@ -42,6 +42,11 @@ jobs:
 
       - name: Commit synchronized metadata
         shell: bash
+        env:
+          GIT_AUTHOR_NAME: ${{ secrets.GIT_AUTHOR_NAME }}
+          GIT_AUTHOR_EMAIL: ${{ secrets.GIT_AUTHOR_EMAIL }}
+          GIT_COMMITTER_NAME: ${{ secrets.GIT_COMMITTER_NAME }}
+          GIT_COMMITTER_EMAIL: ${{ secrets.GIT_COMMITTER_EMAIL }}
         run: |
           git add README.md docs/index.html action.yml wasmer.toml
           if git diff --staged --quiet; then
@@ -49,7 +54,9 @@ jobs:
             exit 0
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          : "${GIT_AUTHOR_NAME:?missing GIT_AUTHOR_NAME secret}"
+          : "${GIT_AUTHOR_EMAIL:?missing GIT_AUTHOR_EMAIL secret}"
+          : "${GIT_COMMITTER_NAME:?missing GIT_COMMITTER_NAME secret}"
+          : "${GIT_COMMITTER_EMAIL:?missing GIT_COMMITTER_EMAIL secret}"
           git commit -m "docs: sync public metadata"
           git push
