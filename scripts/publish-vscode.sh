@@ -2,8 +2,8 @@
 # Manually build and publish platform-specific VS Code extension VSIXs.
 #
 # Usage:
-#   ./scripts/publish-vscode.sh 1.4.3              # publish to Marketplace
-#   ./scripts/publish-vscode.sh 1.4.3 --dry-run    # package only, no publish
+#   ./scripts/publish-vscode.sh 1.4.5              # publish to Marketplace
+#   ./scripts/publish-vscode.sh 1.4.5 --dry-run    # package only, no publish
 #
 # Requirements:
 #   - gh    (GitHub CLI, authenticated)
@@ -19,7 +19,7 @@ DRY_RUN=false
 for arg in "$@"; do [[ "$arg" == "--dry-run" ]] && DRY_RUN=true; done
 
 if [[ -z "$VERSION" ]]; then
-    echo "Usage: $0 <version> [--dry-run]  (e.g. $0 1.4.3)" >&2
+    echo "Usage: $0 <version> [--dry-run]  (e.g. $0 1.4.5)" >&2
     exit 1
 fi
 
