@@ -840,9 +840,9 @@ fn rule_latest_tag(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 
 fn rule_running_as_root(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
-    for u in instrs_of(instrs, "USER") {
-        let val = u.arguments.trim().to_lowercase();
-        if val == "root" || val == "0" || val == "0:0" || val == "root:root" {
+    let mut effective_user: Option<&Instruction> = None;
+    let mut report_root_user = |user: Option<&Instruction>| {
+        if let Some(u) = user.filter(|user| is_root_user(&user.arguments)) {
             findings.push(Finding {
                 column: 0,
                 end_line: 0,
@@ -857,8 +857,23 @@ fn rule_running_as_root(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     .to_string(),
             });
         }
+    };
+    for instruction in instrs {
+        match instruction.instruction.as_str() {
+            "FROM" => {
+                report_root_user(effective_user);
+                effective_user = None;
+            }
+            "USER" => effective_user = Some(instruction),
+            _ => {}
+        }
     }
+    report_root_user(effective_user);
     findings
+}
+
+fn is_root_user(value: &str) -> bool {
+    matches!(value.trim().to_lowercase().as_str(), "root" | "0" | "0:0" | "root:root")
 }
 
 fn rule_no_multistage(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -1234,8 +1249,12 @@ fn rule_pip_no_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .into_iter()
         .filter(|i| {
             let a = &i.arguments;
-            (a.contains("pip install") || a.contains("pip3 install"))
-                && !a.contains("--no-cache-dir")
+            if is_uv_pip_install(a) {
+                !a.contains("--no-cache")
+            } else {
+                (a.contains("pip install") || a.contains("pip3 install"))
+                    && !a.contains("--no-cache-dir")
+            }
         })
         .map(|i| Finding {
             column: 0,
@@ -1244,14 +1263,23 @@ fn rule_pip_no_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             rule: "DF030".into(),
             severity: Severity::Info,
             line: i.line,
-            message: "pip install without --no-cache-dir wastes space in the image layer"
-                .to_string(),
+            message: if is_uv_pip_install(&i.arguments) {
+                "uv pip install without --no-cache wastes space in the image layer".to_string()
+            } else {
+                "pip install without --no-cache-dir wastes space in the image layer".to_string()
+            },
             roast: "pip install without --no-cache-dir? You're carrying around a pip cache in \
                     your production image like a tourist with a suitcase full of hotel shampoos. \
-                    You don't need those. Add --no-cache-dir."
+                    You don't need those. Add the installer-specific no-cache flag."
                 .to_string(),
         })
         .collect()
+}
+
+fn is_uv_pip_install(command: &str) -> bool {
+    Regex::new(r"(?:^|\s)uv\s+pip\s+install(?:\s|$)")
+        .expect("valid uv pip install regex")
+        .is_match(command)
 }
 
 fn rule_npm_install(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -1906,11 +1934,25 @@ fn rule_from_platform_flag(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 fn rule_env_self_reference(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let re = Regex::new(r"(\w+)=\s*[\x22\x27]?\$\{?(\w+)\}?").unwrap();
     let mut findings = Vec::new();
-    for i in instrs_of(instrs, "ENV") {
+    let mut stage_args = std::collections::HashSet::new();
+    for i in instrs {
+        if i.instruction == "FROM" {
+            stage_args.clear();
+            continue;
+        }
+        if i.instruction == "ARG" {
+            if let Some(name) = i.arguments.split('=').next().and_then(|arg| arg.split_whitespace().next()) {
+                stage_args.insert(name.to_string());
+            }
+            continue;
+        }
+        if i.instruction != "ENV" {
+            continue;
+        }
         for cap in re.captures_iter(&i.arguments) {
             let defined = &cap[1];
             let referenced = &cap[2];
-            if defined == referenced {
+            if defined == referenced && !stage_args.contains(referenced) {
                 findings.push(Finding {
                     column: 0,
                     end_line: 0,
@@ -2329,6 +2371,7 @@ fn rule_pip_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
                 && !a.contains("<=")
                 && !a.contains("~=")
                 && !a.contains(".txt")
+                && !is_local_pip_install(a)
         })
         .map(|i| Finding {
             column: 0,
@@ -2346,6 +2389,21 @@ fn rule_pip_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
                 .to_string(),
         })
         .collect()
+}
+
+fn is_local_pip_install(command: &str) -> bool {
+    let Some(install) = command.find("pip install") else {
+        return false;
+    };
+    command[install + "pip install".len()..]
+        .split_whitespace()
+        .filter(|argument| !argument.starts_with('-'))
+        .any(|argument| {
+            matches!(argument, "." | "./")
+                || argument.starts_with("./")
+                || argument.starts_with("../")
+                || argument.starts_with("file:")
+        })
 }
 
 fn rule_apk_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -2779,26 +2837,36 @@ fn rule_invalid_instruction_order(instrs: &[Instruction], _raw: &str) -> Vec<Fin
 }
 
 fn rule_multiple_cmd(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let cmds: Vec<_> = instrs_of(instrs, "CMD");
-    if cmds.len() <= 1 {
-        return vec![];
+    let mut findings = Vec::new();
+    let mut cmds = Vec::new();
+    let mut report_duplicates = |cmds: &mut Vec<&Instruction>| {
+        if cmds.len() > 1 {
+            findings.extend(cmds.iter().skip(1).map(|i| Finding {
+                column: 0,
+                end_line: 0,
+                end_column: 0,
+                rule: "DF038".into(),
+                severity: Severity::Warning,
+                line: i.line,
+                message: "Multiple CMD instructions — only the last one takes effect".to_string(),
+                roast:
+                    "Multiple CMDs and only the last one counts. The others are ghosts haunting your \
+                    Dockerfile, contributing nothing except confusion. Pick one."
+                        .to_string(),
+            }));
+        }
+        cmds.clear();
+    };
+    for instruction in instrs {
+        if instruction.instruction == "FROM" {
+            report_duplicates(&mut cmds);
+        }
+        if instruction.instruction == "CMD" {
+            cmds.push(instruction);
+        }
     }
-    cmds[1..]
-        .iter()
-        .map(|i| Finding {
-            column: 0,
-            end_line: 0,
-            end_column: 0,
-            rule: "DF038".into(),
-            severity: Severity::Warning,
-            line: i.line,
-            message: "Multiple CMD instructions — only the last one takes effect".to_string(),
-            roast:
-                "Multiple CMDs and only the last one counts. The others are ghosts haunting your \
-                Dockerfile, contributing nothing except confusion. Pick one."
-                    .to_string(),
-        })
-        .collect()
+    report_duplicates(&mut cmds);
+    findings
 }
 
 fn rule_multiple_entrypoint(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -2900,7 +2968,9 @@ fn rule_copy_before_install(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
             }
             "RUN" => {
                 if let Some(copy_line) = broad_copy_line {
-                    if PKG_CMDS.iter().any(|cmd| i.arguments.contains(cmd)) {
+                    if PKG_CMDS.iter().any(|cmd| i.arguments.contains(cmd))
+                        && !is_local_pip_install(&i.arguments)
+                    {
                         findings.push(Finding {
             column: 0,
             end_line: 0,

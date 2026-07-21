@@ -91,6 +91,12 @@ fn df002_clear_on_non_root_user() {
     assert!(no_rule(&lint(df), "DF002"));
 }
 
+#[test]
+fn df002_clear_when_root_is_only_used_for_setup() {
+    let df = "FROM alpine:3.19\nUSER root\nRUN apk add --no-cache curl\nUSER appuser\nCMD [\"/bin/sh\"]\n";
+    assert!(no_rule(&lint(df), "DF002"));
+}
+
 // ─── DF003: many RUN layers ──────────────────────────────────────────────────
 
 #[test]
@@ -353,6 +359,14 @@ fn df030_fires_without_no_cache() {
 fn df030_clear_with_no_cache() {
     let df = "FROM python:3.12\nRUN pip install --no-cache-dir flask\nCMD [\"python\", \"app.py\"]\n";
     assert!(no_rule(&lint(df), "DF030"));
+}
+
+#[test]
+fn df030_uses_uv_no_cache_flag() {
+    let flagged = lint("FROM python:3.12\nRUN uv pip install flask\n");
+    assert!(has_rule(&flagged, "DF030"));
+    assert!(flagged.iter().any(|finding| finding.rule == "DF030" && finding.message.contains("--no-cache")));
+    assert!(no_rule(&lint("FROM python:3.12\nRUN uv pip install --no-cache flask\n"), "DF030"));
 }
 
 // ─── DF005: unpinned package versions ────────────────────────────────────────
@@ -711,6 +725,12 @@ fn df038_fires_on_multiple_cmd() {
 }
 
 #[test]
+fn df038_clear_on_one_cmd_per_stage() {
+    let df = "FROM alpine:3.19 AS debug\nCMD [\"debug\"]\nFROM alpine:3.19 AS final\nCMD [\"app\"]\n";
+    assert!(no_rule(&lint(df), "DF038"));
+}
+
+#[test]
 fn df038_clear_on_single_cmd() {
     let df = "FROM alpine:3.19\nCMD [\"only\"]\n";
     assert!(no_rule(&lint(df), "DF038"));
@@ -922,6 +942,12 @@ fn df051_clear_on_pip_requirements_file() {
     assert!(no_rule(&lint(df), "DF051"));
 }
 
+#[test]
+fn df051_clear_on_local_pip_package() {
+    let df = "FROM python:3.12\nRUN uv pip install --no-deps .\nCMD [\"python\", \"app.py\"]\n";
+    assert!(no_rule(&lint(df), "DF051"));
+}
+
 // ─── DF052: apk version pinning ──────────────────────────────────────────────
 
 #[test]
@@ -1123,6 +1149,18 @@ fn df062_clear_on_normal_assignment() {
     assert!(no_rule(&lint(df), "DF062"));
 }
 
+#[test]
+fn df062_clear_on_arg_to_env_promotion() {
+    let df = "FROM alpine:3.19\nARG MY_VARIABLE\nENV MY_VARIABLE=${MY_VARIABLE}\n";
+    assert!(no_rule(&lint(df), "DF062"));
+}
+
+#[test]
+fn df062_does_not_treat_global_arg_as_stage_scoped() {
+    let df = "ARG MY_VARIABLE\nFROM alpine:3.19\nENV MY_VARIABLE=${MY_VARIABLE}\n";
+    assert!(has_rule(&lint(df), "DF062"));
+}
+
 // ─── DF063: COPY relative dest without WORKDIR ───────────────────────────────
 
 #[test]
@@ -1310,6 +1348,12 @@ fn df070_clear_on_copy_dot_after_install() {
 #[test]
 fn df070_clear_on_specific_copy_before_install() {
     let df = "FROM node:20\nWORKDIR /app\nCOPY package.json package-lock.json ./\nRUN npm ci\nCOPY src ./src\n";
+    assert!(no_rule(&lint(df), "DF070"));
+}
+
+#[test]
+fn df070_clear_on_copy_before_local_pip_install() {
+    let df = "FROM python:3.12\nWORKDIR /app\nCOPY . /app\nRUN uv pip install --no-deps .\n";
     assert!(no_rule(&lint(df), "DF070"));
 }
 

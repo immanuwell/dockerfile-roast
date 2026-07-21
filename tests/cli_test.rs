@@ -507,6 +507,30 @@ fn directory_json_output_is_one_valid_document() {
 }
 
 #[test]
+fn directory_discovery_skips_dockerfile_specific_ignore_files() {
+    let root = policy_fixture("dockerfile-specific-ignore-discovery");
+    std::fs::write(root.join("Dockerfile"), "FROM alpine:3.20\nCMD [\"true\"]\n").unwrap();
+    std::fs::write(root.join("Dockerfile.dockerignore"), ".git\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            root.to_str().unwrap(),
+            "--only",
+            "DF071",
+            "--format",
+            "json",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(document["file"].as_str().unwrap().ends_with("Dockerfile"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn single_file_json_output_remains_an_object() {
     let dockerfile = repository_fixture().join("Dockerfile");
     let output = Command::new(env!("CARGO_BIN_EXE_droast"))

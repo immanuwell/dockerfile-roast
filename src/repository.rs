@@ -914,6 +914,11 @@ fn is_dockerfile_name(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(OsStr::to_str) else {
         return false;
     };
+    // Dockerfile-specific ignore files share the Dockerfile name prefix, but
+    // are build-context metadata rather than Dockerfiles.
+    if name.ends_with(".dockerignore") {
+        return false;
+    }
     name == "Dockerfile"
         || name == "Containerfile"
         || name
@@ -1129,6 +1134,8 @@ mod tests {
             "Dockerfile.",
             ".Dockerfile",
             "myContainerfile",
+            "Dockerfile.dockerignore",
+            "Containerfile.release.dockerignore",
         ] {
             assert!(!is_dockerfile_name(Path::new(name)), "{name}");
         }
