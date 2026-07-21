@@ -1915,9 +1915,25 @@ fn rule_useless_commands(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 }
 
 fn rule_from_platform_flag(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    instrs_of(instrs, "FROM")
+    let froms = instrs_of(instrs, "FROM");
+    let final_stage = froms.len().saturating_sub(1);
+
+    froms
         .into_iter()
-        .filter(|i| i.arguments.contains("--platform"))
+        .enumerate()
+        .filter(|(index, instruction)| {
+            let has_platform_flag = instruction
+                .flags
+                .iter()
+                .any(|flag| flag.name.eq_ignore_ascii_case("platform"));
+            let is_native_builder = *index < final_stage
+                && instruction.flags.iter().any(|flag| {
+                    flag.name.eq_ignore_ascii_case("platform")
+                        && matches!(flag.value.as_deref(), Some("$BUILDPLATFORM" | "${BUILDPLATFORM}"))
+                });
+            has_platform_flag && !is_native_builder
+        })
+        .map(|(_, i)| i)
         .map(|i| Finding {
             column: 0,
             end_line: 0,
