@@ -69,6 +69,24 @@ diagnostics. Override defaults with `require("droast").setup({ args = { "--prese
 
 ## install
 
+don't want to install anything? pick one:
+
+**Docker**:
+
+```bash
+docker run --rm \
+  -v "$PWD:/workspace:ro" \
+  -w /workspace \
+  ghcr.io/immanuwell/droast:1.4.4 \
+  --no-roast .
+```
+
+replace `.` with `Dockerfile` to lint one file.
+
+**Web**: use the **[droast web linter](https://ewry.net/droast-dockerfile-linter/)**. it runs in your browser.
+
+**Binary**: download your platform binary from the **[latest release](https://github.com/immanuwell/dockerfile-roast/releases/latest)**.
+
 **one-liner** (macOS and Linux, detects Homebrew automatically):
 
 ```bash
@@ -100,7 +118,17 @@ To scan files or a repository, explicitly mount the directory into the sandbox:
 wasmer run --volume "$PWD:/workspace" immanuwell/droast -- /workspace
 ```
 
-or grab a prebuilt binary from the releases page if you'd rather not wait for the rust compiler to do its thing.
+**VS Code**: use the [extension](#vs-code-extension). the binary is included.
+
+**Neovim**: use the [plugin](#neovim-extension). it needs `droast` on `PATH`.
+
+**GitHub Actions**:
+
+```yaml
+- uses: immanuwell/dockerfile-roast@1.4.4
+```
+
+see the [GitHub Action section](#github-action) for inputs.
 
 ## usage
 
