@@ -1057,6 +1057,42 @@ fn df057_clear_on_pipe_with_pipefail() {
 }
 
 #[test]
+fn df057_fires_when_set_options_omit_pipefail() {
+    let df = "FROM debian:trixie\nRUN set -ex; \\\n+    grep ^root: /etc/passwd | \\\n+    cut -d: -f7\nRUN set -ex; \\\n+    grep ^root: /etc/passwd | cut -d: -f7\n";
+    let findings: Vec<_> = lint(df)
+        .into_iter()
+        .filter(|finding| finding.rule == "DF057")
+        .collect();
+    assert_eq!(findings.len(), 2);
+    assert_eq!(findings[0].line, 2);
+    assert_eq!(findings[1].line, 5);
+}
+
+#[test]
+fn df057_fires_on_pipelines_without_spaces_or_with_pipefail_text() {
+    let df = "FROM alpine:3.19\nRUN printf pipefail|cat\n";
+    assert!(has_rule(&lint(df), "DF057"));
+}
+
+#[test]
+fn df057_ignores_logical_or_and_literal_pipes() {
+    let df = "FROM alpine:3.19\nRUN test -f /missing || echo 'not a | pipeline'\n";
+    assert!(no_rule(&lint(df), "DF057"));
+}
+
+#[test]
+fn df057_respects_combined_pipefail_options_and_later_disabling() {
+    let protected = "FROM alpine:3.19\nRUN set -euo pipefail; printf ok|cat\n";
+    assert!(no_rule(&lint(protected), "DF057"));
+
+    let disabled = "FROM alpine:3.19\nRUN set -o pipefail; set +o pipefail; printf ok|cat\n";
+    assert!(has_rule(&lint(disabled), "DF057"));
+
+    let shell_disabled = "FROM alpine:3.19\nSHELL [\"/bin/bash\", \"-o\", \"pipefail\", \"-c\"]\nRUN set +o pipefail; printf ok|cat\n";
+    assert!(has_rule(&lint(shell_disabled), "DF057"));
+}
+
+#[test]
 fn df057_clear_when_shell_instruction_enables_pipefail() {
     let df = "FROM ubuntu:24.04\nSHELL [\"/bin/bash\", \"-o\", \"pipefail\", \"-c\"]\nRUN cat /etc/os-release | grep ID\n";
     assert!(no_rule(&lint(df), "DF057"));

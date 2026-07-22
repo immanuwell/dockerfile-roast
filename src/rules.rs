@@ -2284,39 +2284,126 @@ fn rule_pipefail_missing(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     _ => false,
                 };
             }
-            "RUN" => {
-                let a = &instruction.arguments;
-                // has a pipe that isn't curl|sh (that's covered separately) and isn't pipefail already set
-                if a.contains(" | ")
-                    && !shell_has_pipefail
-                    && !a.contains("pipefail")
-                    && !a.contains("set -o pipefail")
-                    && !a.contains("set -eo pipefail")
-                    && !a.contains("set -euo pipefail")
-                    // only flag if it's not a trivial pipe to tee/grep/wc for log filtering
-                    && !a.trim_start().starts_with("set ")
-                {
-                    findings.push(Finding {
-                        column: 0,
-                        end_line: 0,
-                        end_column: 0,
-                        rule: "DF057".into(),
-                        severity: Severity::Warning,
-                        line: instruction.line,
-                        message: "RUN with pipe but no pipefail — failed commands in the pipe are silently ignored"
-                            .to_string(),
-                        roast: "A pipe in RUN without `set -o pipefail`. If the left side of that pipe fails, \
-                                bash shrugs and moves on. The exit code is whatever the last command returns. \
-                                Add `set -o pipefail` at the start of the RUN."
-                            .to_string(),
-                    });
-                }
+            "RUN" if run_has_unprotected_pipeline(&instruction.arguments, shell_has_pipefail) => {
+                findings.push(Finding {
+                    column: 0,
+                    end_line: 0,
+                    end_column: 0,
+                    rule: "DF057".into(),
+                    severity: Severity::Warning,
+                    line: instruction.line,
+                    message: "RUN with pipe but no pipefail — failed commands in the pipe are silently ignored"
+                        .to_string(),
+                    roast: "A pipe in RUN without `set -o pipefail`. If the left side of that pipe fails, \
+                            bash shrugs and moves on. The exit code is whatever the last command returns. \
+                            Add `set -o pipefail` at the start of the RUN."
+                        .to_string(),
+                });
             }
             _ => {}
         }
     }
 
     findings
+}
+
+/// Return whether a shell-form RUN has a pipeline while pipefail is disabled.
+///
+/// This is intentionally a small shell lexer rather than a substring match: it
+/// distinguishes `|` from `||` and quoted or escaped literal pipes, and follows
+/// `set` commands in their execution order. It is not a full shell parser, but
+/// covers the syntax relevant to enabling and disabling pipefail.
+fn run_has_unprotected_pipeline(script: &str, initial_pipefail_enabled: bool) -> bool {
+    let mut pipefail_enabled = initial_pipefail_enabled;
+    let mut words = Vec::new();
+    let mut current_word = String::new();
+    let mut quote = None;
+    let mut chars = script.chars().peekable();
+
+    while let Some(character) = chars.next() {
+        if let Some(active_quote) = quote {
+            if character == active_quote {
+                quote = None;
+            } else if character == '\\' && active_quote == '"' {
+                if let Some(escaped) = chars.next() {
+                    current_word.push(escaped);
+                }
+            } else {
+                current_word.push(character);
+            }
+            continue;
+        }
+
+        match character {
+            '\\' => {
+                if let Some(escaped) = chars.next() {
+                    current_word.push(escaped);
+                }
+            }
+            '\'' | '"' => quote = Some(character),
+            character if character.is_whitespace() => flush_shell_word(&mut current_word, &mut words),
+            '#' if current_word.is_empty() => break,
+            ';' => finish_shell_command(&mut current_word, &mut words, &mut pipefail_enabled),
+            '&' => {
+                if chars.peek() == Some(&'&') {
+                    chars.next();
+                }
+                finish_shell_command(&mut current_word, &mut words, &mut pipefail_enabled);
+            }
+            '|' => {
+                if chars.peek() == Some(&'|') {
+                    chars.next();
+                    finish_shell_command(&mut current_word, &mut words, &mut pipefail_enabled);
+                } else {
+                    // `set -o pipefail | command` runs `set` in a pipeline
+                    // subshell, so it does not protect this pipeline.
+                    if !pipefail_enabled {
+                        return true;
+                    }
+                    current_word.clear();
+                    words.clear();
+                }
+            }
+            _ => current_word.push(character),
+        }
+    }
+
+    false
+}
+
+fn flush_shell_word(current_word: &mut String, words: &mut Vec<String>) {
+    if !current_word.is_empty() {
+        words.push(std::mem::take(current_word));
+    }
+}
+
+fn finish_shell_command(
+    current_word: &mut String,
+    words: &mut Vec<String>,
+    pipefail_enabled: &mut bool,
+) {
+    flush_shell_word(current_word, words);
+    if words.first().is_some_and(|word| word == "set") {
+        let mut arguments = words[1..].iter();
+        while let Some(argument) = arguments.next() {
+            if (argument == "-o" || argument == "+o")
+                && arguments.next().is_some_and(|value| value == "pipefail")
+            {
+                *pipefail_enabled = argument == "-o";
+                words.clear();
+                return;
+            }
+            if argument.starts_with('-')
+                && argument[1..].contains('o')
+                && arguments.next().is_some_and(|value| value == "pipefail")
+            {
+                *pipefail_enabled = true;
+                words.clear();
+                return;
+            }
+        }
+    }
+    words.clear();
 }
 
 fn rule_wget_and_curl(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
