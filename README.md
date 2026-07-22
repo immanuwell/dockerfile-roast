@@ -98,8 +98,7 @@ curl -fsL ewry.net/droast/install.sh | sh
 **Homebrew** (macOS and Linux):
 
 ```bash
-brew tap immanuwell/droast https://github.com/immanuwell/homebrew-droast.git
-brew install immanuwell/droast/droast
+brew install droast
 ```
 
 **Cargo** ([crates.io](https://crates.io/crates/dockerfile-roast), builds from source):

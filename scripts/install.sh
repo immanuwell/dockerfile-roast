@@ -38,8 +38,7 @@ esac
 
 if command -v brew >/dev/null 2>&1; then
     say "Homebrew detected — installing via brew"
-    brew tap immanuwell/droast https://github.com/immanuwell/homebrew-droast.git
-    brew install immanuwell/droast/droast
+    brew install droast
     ok "droast installed via Homebrew"
     droast --version
     exit 0
