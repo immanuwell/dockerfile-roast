@@ -25,7 +25,7 @@ pub fn configured_findings(instructions: &[Instruction], opts: &LintOptions) -> 
 
 fn registry_findings(instructions: &[Instruction], opts: &LintOptions) -> Vec<Finding> {
     let approved = opts.approved_registries.as_deref().unwrap_or_default();
-    external_base_images(instructions)
+    external_images(instructions)
         .into_iter()
         .filter_map(|(instruction, image)| {
             let registry = image_registry(image);
@@ -51,7 +51,7 @@ fn registry_findings(instructions: &[Instruction], opts: &LintOptions) -> Vec<Fi
 
 fn base_image_findings(instructions: &[Instruction], opts: &LintOptions) -> Vec<Finding> {
     let approved = opts.approved_base_images.as_deref().unwrap_or_default();
-    external_base_images(instructions)
+    external_images(instructions)
         .into_iter()
         .filter(|(_, image)| !matches_any(image, approved))
         .map(|(instruction, image)| Finding {
@@ -61,36 +61,48 @@ fn base_image_findings(instructions: &[Instruction], opts: &LintOptions) -> Vec<
             rule: "DF073".into(),
             severity: Severity::Error,
             line: instruction.line,
-            message: format!("Base image '{}' is not approved", image),
-            roast: "That base image is not on the approved menu. Use a reviewed image or update the policy with a reason.".to_string(),
+            message: format!("External image '{}' is not approved", image),
+            roast: "That external image is not on the approved menu. Use a reviewed image or update the policy with a reason.".to_string(),
         })
         .collect()
 }
 
-fn external_base_images(instructions: &[Instruction]) -> Vec<(&Instruction, &str)> {
+fn external_images(instructions: &[Instruction]) -> Vec<(&Instruction, &str)> {
     let mut aliases = HashSet::new();
     let mut images = Vec::new();
-    for instruction in instructions
-        .iter()
-        .filter(|item| item.instruction == "FROM")
-    {
-        let mut tokens = instruction
-            .arguments
-            .split_whitespace()
-            .filter(|token| !token.starts_with("--"));
-        let Some(image) = tokens.next() else {
-            continue;
-        };
-        if !image.eq_ignore_ascii_case("scratch") && !aliases.contains(&image.to_ascii_lowercase())
-        {
-            images.push((instruction, image));
-        }
-        if tokens
-            .next()
-            .is_some_and(|token| token.eq_ignore_ascii_case("as"))
-        {
-            if let Some(alias) = tokens.next() {
-                aliases.insert(alias.to_ascii_lowercase());
+    for instruction in instructions {
+        if instruction.instruction == "FROM" {
+            let mut tokens = instruction
+                .arguments
+                .split_whitespace()
+                .filter(|token| !token.starts_with("--"));
+            let Some(image) = tokens.next() else {
+                continue;
+            };
+            if !image.eq_ignore_ascii_case("scratch")
+                && !aliases.contains(&image.to_ascii_lowercase())
+            {
+                images.push((instruction, image));
+            }
+            if tokens
+                .next()
+                .is_some_and(|token| token.eq_ignore_ascii_case("as"))
+            {
+                if let Some(alias) = tokens.next() {
+                    aliases.insert(alias.to_ascii_lowercase());
+                }
+            }
+        } else if instruction.instruction == "COPY" {
+            let Some(image) = instruction
+                .flags
+                .iter()
+                .find(|flag| flag.name.eq_ignore_ascii_case("from"))
+                .and_then(|flag| flag.value.as_deref())
+            else {
+                continue;
+            };
+            if image.parse::<usize>().is_err() && !aliases.contains(&image.to_ascii_lowercase()) {
+                images.push((instruction, image));
             }
         }
     }
@@ -709,6 +721,22 @@ SCRIPT
         let mut options = options(&["DF073"]);
         options.approved_base_images = Some(vec!["rust:1.*".into()]);
 
+        assert!(rules(source, &options).is_empty());
+    }
+
+    #[test]
+    fn approved_base_images_apply_to_external_copy_sources() {
+        let source = "FROM alpine:3.20\nCOPY --from=ghcr.io/acme/tools:1 /tool /tool\n";
+        let mut options = options(&["DF073"]);
+        options.approved_base_images = Some(vec!["alpine:3.*".into()]);
+
+        assert_eq!(rules(source, &options), ["DF073"]);
+
+        options
+            .approved_base_images
+            .as_mut()
+            .unwrap()
+            .push("ghcr.io/acme/tools:*".into());
         assert!(rules(source, &options).is_empty());
     }
 

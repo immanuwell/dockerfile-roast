@@ -897,9 +897,9 @@ fn df048_clear_on_two_arg_copy() {
 // ─── DF049: COPY --from undefined stage ──────────────────────────────────────
 
 #[test]
-fn df049_fires_on_copy_from_undefined() {
+fn df049_does_not_treat_external_images_as_undefined_stages() {
     let df = "FROM alpine:3.19\nCOPY --from=nonexistent /app /app\nCMD [\"/app\"]\n";
-    assert!(has_rule(&lint(df), "DF049"));
+    assert!(no_rule(&lint(df), "DF049"));
 }
 
 #[test]

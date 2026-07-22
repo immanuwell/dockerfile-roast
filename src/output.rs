@@ -57,7 +57,7 @@ pub fn print_findings(file: &str, findings: &[Finding], format: OutputFormat, no
     match format {
         OutputFormat::Terminal => print_terminal(file, findings, no_roast),
         OutputFormat::Json => print_json(file, findings),
-        OutputFormat::Github => print_github(file, findings),
+        OutputFormat::Github => print_github(file, findings, no_roast),
         OutputFormat::Compact => print_compact(file, findings),
         OutputFormat::Sarif => {
             unreachable!("SARIF output is handled via print_sarif, not print_findings")
@@ -234,32 +234,45 @@ pub fn print_json_results(results: &[(&str, &[Finding])]) {
     println!("{}", serde_json::to_string_pretty(&output).unwrap());
 }
 
-fn print_github(file: &str, findings: &[Finding]) {
+fn print_github(file: &str, findings: &[Finding], no_roast: bool) {
     for f in findings {
-        let level = match f.severity {
-            Severity::Error => "error",
-            Severity::Warning => "warning",
-            Severity::Info => "notice",
-        };
-        let mut location = if f.line > 0 {
-            format!(",line={}", f.line)
-        } else {
-            String::new()
-        };
-        if f.column > 0 {
-            location.push_str(&format!(",col={}", f.column));
-        }
-        if f.end_line > 0 {
-            location.push_str(&format!(",endLine={}", f.end_line));
-        }
-        if f.end_column > 0 {
-            location.push_str(&format!(",endColumn={}", f.end_column));
-        }
-        println!(
-            "::{} file={}{},title=[{}] {}::{}",
-            level, file, location, f.rule, f.message, f.roast
-        );
+        println!("{}", github_annotation(file, f, no_roast));
     }
+}
+
+fn github_annotation(file: &str, finding: &Finding, no_roast: bool) -> String {
+    let level = match finding.severity {
+        Severity::Error => "error",
+        Severity::Warning => "warning",
+        Severity::Info => "notice",
+    };
+    let mut location = if finding.line > 0 {
+        format!(",line={}", finding.line)
+    } else {
+        String::new()
+    };
+    if finding.column > 0 {
+        location.push_str(&format!(",col={}", finding.column));
+    }
+    if finding.end_line > 0 {
+        location.push_str(&format!(",endLine={}", finding.end_line));
+    }
+    if finding.end_column > 0 {
+        location.push_str(&format!(",endColumn={}", finding.end_column));
+    }
+    format!(
+        "::{} file={}{},title=[{}] {}::{}",
+        level,
+        file,
+        location,
+        finding.rule,
+        finding.message,
+        if no_roast {
+            &finding.message
+        } else {
+            &finding.roast
+        }
+    )
 }
 
 fn print_compact(file: &str, findings: &[Finding]) {
@@ -470,7 +483,7 @@ pub fn print_summary_header() {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_sarif, finding_fingerprint, json_output};
+    use super::{build_sarif, finding_fingerprint, github_annotation, json_output};
     use crate::rules::{Finding, Severity};
 
     fn shellcheck_finding() -> Finding {
@@ -505,5 +518,13 @@ mod tests {
             finding_fingerprint("Dockerfile", &finding),
             finding_fingerprint("Dockerfile", &Finding { line: 99, ..finding })
         );
+    }
+
+    #[test]
+    fn github_output_honors_no_roast() {
+        let finding = shellcheck_finding();
+        let rendered = github_annotation("Dockerfile", &finding, true);
+        assert!(rendered.ends_with(&finding.message));
+        assert!(!rendered.contains(&finding.roast));
     }
 }

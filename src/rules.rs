@@ -387,7 +387,7 @@ pub fn all_rules() -> Vec<Rule> {
         Rule {
             id: "DF049",
             severity: Severity::Warning,
-            description: "COPY --from must reference a previously defined stage",
+            description: "Reserved for invalid COPY --from references",
             func: rule_copy_from_undefined_stage,
         },
         Rule {
@@ -2583,45 +2583,11 @@ fn rule_copy_multi_arg_slash(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
         .collect()
 }
 
-fn rule_copy_from_undefined_stage(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let mut defined_aliases: Vec<String> = Vec::new();
-    let mut findings = Vec::new();
-    let re_from = Regex::new(r"(?i)--from=(\S+)").unwrap();
-    for i in instrs {
-        if i.instruction == "FROM" {
-            if let Some(alias) = parse_from_arguments(&i.arguments).and_then(|from| from.alias) {
-                defined_aliases.push(alias.to_lowercase());
-            }
-        } else if i.instruction == "COPY" {
-            if let Some(cap) = re_from.captures(&i.arguments) {
-                let from_ref = cap[1].to_lowercase();
-                // skip numeric references like --from=0
-                if from_ref.parse::<usize>().is_ok() {
-                    continue;
-                }
-                if !defined_aliases.contains(&from_ref) {
-                    findings.push(Finding {
-                        column: 0,
-                        end_line: 0,
-                        end_column: 0,
-                        rule: "DF049".into(),
-                        severity: Severity::Warning,
-                        line: i.line,
-                        message: format!(
-                            "COPY --from={} references an undefined build stage",
-                            &cap[1]
-                        ),
-                        roast: format!(
-                            "COPY --from={} and there's no FROM ... AS {} anywhere above. \
-                             Copying from thin air. Docker will reject this.",
-                            &cap[1], &cap[1]
-                        ),
-                    });
-                }
-            }
-        }
-    }
-    findings
+fn rule_copy_from_undefined_stage(_instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    // An unresolved non-numeric reference is a valid external image (or a
+    // BuildKit named context), so it cannot be diagnosed as an undefined
+    // stage. Image allowlists are enforced by DF073 instead.
+    Vec::new()
 }
 
 fn rule_copy_from_self(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {

@@ -761,7 +761,7 @@ extend-approved-registries = ["mirror.example.com"]
 
 ### Approved base images
 
-Restrict full external `FROM` references with `DF073`:
+Restrict full external `FROM` references and `COPY --from=<image>` sources with `DF073`:
 
 ```toml
 approved-base-images = [
@@ -772,7 +772,7 @@ approved-base-images = [
 ]
 ```
 
-Patterns match the full image reference. Internal multi-stage aliases are exempt. `scratch` is exempt. An empty configured list rejects every external base image.
+Patterns match the full image reference. Internal multi-stage aliases and numeric stage indexes are exempt. `scratch` is exempt. An empty configured list rejects every external image.
 
 Add to an inherited image list explicitly:
 
@@ -2000,7 +2000,7 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 | DF061 | warning | Avoid fixed `--platform` in `FROM` unless required |
 | DF065 | warning | Review images from unrecognized registries |
 | DF069 | warning | Avoid package upgrades that make builds non-repeatable |
-| DF073 | error | Require base images approved by configured policy |
+| DF073 | error | Require external images approved by configured policy |
 
 ### Users, secrets, and command safety
 
@@ -2028,7 +2028,7 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 | DF026 | warning | Avoid recursive copies from filesystem root |
 | DF033 | info | Use an effective `.dockerignore` for each build context |
 | DF048 | error | End multi-source `COPY` destinations with `/` |
-| DF049 | warning | Copy only from an earlier, defined stage |
+| DF049 | warning | Reserved for invalid `COPY --from` stage references |
 | DF050 | error | Do not copy from the current stage |
 | DF063 | warning | Set `WORKDIR` before a relative `COPY` destination |
 | DF067 | info | Consider `ADD` when local tar auto-extraction is intended |
