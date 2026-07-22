@@ -1158,6 +1158,24 @@ fn df061_clear_without_platform_flag() {
     assert!(no_rule(&lint(df), "DF061"));
 }
 
+#[test]
+fn df061_clear_for_native_build_stage() {
+    let df = "FROM --platform=$BUILDPLATFORM node:22 AS builder\nRUN npm run build\nFROM nginx:1.27\nCOPY --from=builder /app/dist /usr/share/nginx/html\n";
+    assert!(no_rule(&lint(df), "DF061"));
+}
+
+#[test]
+fn df061_clear_for_braced_native_build_stage() {
+    let df = "FROM --platform=${BUILDPLATFORM} node:22 AS builder\nRUN npm run build\nFROM nginx:1.27\nCOPY --from=builder /app/dist /usr/share/nginx/html\n";
+    assert!(no_rule(&lint(df), "DF061"));
+}
+
+#[test]
+fn df061_fires_when_final_stage_uses_buildplatform() {
+    let df = "FROM alpine:3.19 AS helper\nRUN echo helper\nFROM --platform=$BUILDPLATFORM alpine:3.19\nCMD [\"/bin/sh\"]\n";
+    assert!(has_rule(&lint(df), "DF061"));
+}
+
 // ─── DF062: ENV self-reference ────────────────────────────────────────────────
 
 #[test]
