@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
     strategy:
       fail-fast: false
@@ -63,6 +65,11 @@ jobs:
         if: matrix.vsce_target != 'win32-x64'
         run: chmod +x vscode-extension/bin/${{ matrix.asset }}
 
+      - name: Skip Marketplace publication
+        if: env.VSCE_PAT == ''
+        run: echo "VSCE_PAT is not configured; skipping VS Code Marketplace publication."
+
       - name: Publish to VS Code Marketplace
+        if: env.VSCE_PAT != ''
         working-directory: vscode-extension
-        run: vsce publish --target ${{ matrix.vsce_target }} -p ${{ secrets.VSCE_PAT }}
+        run: vsce publish --target ${{ matrix.vsce_target }} -p "$VSCE_PAT"
