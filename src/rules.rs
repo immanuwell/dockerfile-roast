@@ -1176,12 +1176,16 @@ fn rule_no_expose(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 
 fn rule_multiple_from_no_alias(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let froms: Vec<_> = instrs_of(instrs, "FROM");
-    if froms.len() <= 1 {
+    let stage_count = froms.len();
+    if stage_count <= 1 {
         return vec![];
     }
+
+    // A final stage cannot be referenced by a later COPY --from instruction, so
+    // requiring it to have a stage name adds noise without improving safety.
     froms
         .into_iter()
-        .skip(1)
+        .take(stage_count - 1)
         .filter(|i| parse_from_arguments(&i.arguments).is_some_and(|from| from.alias.is_none()))
         .map(|i| Finding {
             column: 0,

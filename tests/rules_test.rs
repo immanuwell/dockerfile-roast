@@ -552,9 +552,17 @@ fn df023_fires_on_from_without_alias() {
 }
 
 #[test]
-fn df023_fires_when_only_later_stage_has_no_alias() {
+fn df023_clear_when_only_final_stage_has_no_alias() {
     let df = "FROM golang:1.21 AS builder\nRUN go build ./...\nFROM alpine:3.19\nCOPY --from=builder /go/bin/app /app\n";
-    assert!(has_rule(&lint(df), "DF023"));
+    assert!(no_rule(&lint(df), "DF023"));
+}
+
+#[test]
+fn df023_fires_when_an_intermediate_stage_has_no_alias() {
+    let df = "FROM golang:1.21 AS builder\nFROM alpine:3.19\nRUN cp /go/bin/app /app\nFROM scratch\nCOPY --from=1 /app /app\n";
+    let findings = lint(df);
+    let finding = finding(&findings, "DF023");
+    assert_eq!(finding.line, 2);
 }
 
 #[test]
