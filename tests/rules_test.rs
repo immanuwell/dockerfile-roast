@@ -368,6 +368,30 @@ fn df030_clear_with_no_cache() {
 }
 
 #[test]
+fn df030_clear_when_pip_no_cache_dir_environment_is_enabled() {
+    for value in ["1", "true", "yes", "on"] {
+        let df = format!("FROM python:3.12\nENV PIP_NO_CACHE_DIR={value}\nRUN python -m pip install flask\n");
+        assert!(no_rule(&lint(&df), "DF030"), "value {value} should disable pip cache");
+    }
+}
+
+#[test]
+fn df030_fires_when_pip_no_cache_dir_environment_is_disabled_or_overridden() {
+    for value in ["0", "false", "no", "off", "${CACHE_SETTING}"] {
+        let df = format!("FROM python:3.12\nENV PIP_NO_CACHE_DIR={value}\nRUN pip install flask\n");
+        assert!(has_rule(&lint(&df), "DF030"), "value {value} must not suppress DF030");
+    }
+    let overridden = "FROM python:3.12 AS build\nENV PIP_NO_CACHE_DIR=1\nENV PIP_NO_CACHE_DIR=0\nRUN pip install flask\n";
+    assert!(has_rule(&lint(overridden), "DF030"));
+}
+
+#[test]
+fn df030_inherits_pip_no_cache_dir_from_named_parent_stage() {
+    let df = "FROM python:3.12 AS base\nENV PIP_NO_CACHE_DIR=1\nFROM base AS runtime\nRUN pip install flask\n";
+    assert!(no_rule(&lint(df), "DF030"));
+}
+
+#[test]
 fn df030_uses_uv_no_cache_flag() {
     let flagged = lint("FROM python:3.12\nRUN uv pip install flask\n");
     assert!(has_rule(&flagged, "DF030"));

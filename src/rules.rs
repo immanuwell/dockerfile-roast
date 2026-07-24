@@ -1251,16 +1251,52 @@ fn rule_copy_root(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 }
 
 fn rule_pip_no_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    instrs_of(instrs, "RUN")
-        .into_iter()
-        .filter(|i| {
-            let a = &i.arguments;
-            if is_uv_pip_install(a) {
-                !a.contains("--no-cache")
-            } else {
-                (a.contains("pip install") || a.contains("pip3 install"))
-                    && !a.contains("--no-cache-dir")
+    let mut stage_cache_settings = std::collections::HashMap::new();
+    let mut current_stage = None;
+    let mut pip_cache_disabled = false;
+
+    instrs
+        .iter()
+        .filter(|instruction| match instruction.instruction.as_str() {
+            "FROM" => {
+                let base = instruction.words.first().map(|word| word.value.as_str());
+                pip_cache_disabled = base
+                    .and_then(|base| stage_cache_settings.get(base))
+                    .copied()
+                    .unwrap_or(false);
+                current_stage = instruction
+                    .words
+                    .iter()
+                    .position(|word| word.value.eq_ignore_ascii_case("as"))
+                    .and_then(|position| instruction.words.get(position + 1))
+                    .map(|word| word.value.clone());
+                if let Some(stage) = &current_stage {
+                    stage_cache_settings.insert(stage.clone(), pip_cache_disabled);
+                }
+                false
             }
+            "ENV" => {
+                for word in &instruction.words {
+                    if let Some(value) = word.value.strip_prefix("PIP_NO_CACHE_DIR=") {
+                        pip_cache_disabled = pip_boolean(value);
+                        if let Some(stage) = &current_stage {
+                            stage_cache_settings.insert(stage.clone(), pip_cache_disabled);
+                        }
+                    }
+                }
+                false
+            }
+            "RUN" => {
+                let arguments = &instruction.arguments;
+                if is_uv_pip_install(arguments) {
+                    !arguments.contains("--no-cache")
+                } else {
+                    (arguments.contains("pip install") || arguments.contains("pip3 install"))
+                        && !arguments.contains("--no-cache-dir")
+                        && !pip_cache_disabled
+                }
+            }
+            _ => false,
         })
         .map(|i| Finding {
             column: 0,
@@ -1280,6 +1316,15 @@ fn rule_pip_no_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                 .to_string(),
         })
         .collect()
+}
+
+/// pip accepts the same truthy spellings as Python's boolean configuration
+/// parser for environment-backed options.
+fn pip_boolean(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 fn is_uv_pip_install(command: &str) -> bool {

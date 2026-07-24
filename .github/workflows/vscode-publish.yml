@@ -31,9 +31,28 @@ jobs:
             asset: droast-windows-x86_64.exe
 
     steps:
+      - name: Require Marketplace token
+        if: env.VSCE_PAT == ''
+        run: |
+          echo "VSCE_PAT is required to publish the VS Code extension." >&2
+          exit 1
+
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: release
+        env:
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          tag="$(git tag --points-at "$RELEASE_SHA" --list '[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n 1)"
+          if [[ -z "$tag" ]]; then
+            echo "No release tag points at $RELEASE_SHA" >&2
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         with:
@@ -50,13 +69,13 @@ jobs:
       # correct version and updates are offered to existing users.
       - name: Set extension version
         working-directory: vscode-extension
-        run: npm pkg set version="${{ github.event.workflow_run.head_branch }}"
+        run: npm pkg set version="${{ steps.release.outputs.version }}"
 
       - name: Download binary from release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download "${{ github.event.workflow_run.head_branch }}" \
+          gh release download "${{ steps.release.outputs.version }}" \
             --pattern "${{ matrix.asset }}" \
             --dir vscode-extension/bin/ \
             --repo "${{ github.repository }}"
@@ -65,11 +84,6 @@ jobs:
         if: matrix.vsce_target != 'win32-x64'
         run: chmod +x vscode-extension/bin/${{ matrix.asset }}
 
-      - name: Skip Marketplace publication
-        if: env.VSCE_PAT == ''
-        run: echo "VSCE_PAT is not configured; skipping VS Code Marketplace publication."
-
       - name: Publish to VS Code Marketplace
-        if: env.VSCE_PAT != ''
         working-directory: vscode-extension
         run: vsce publish --target ${{ matrix.vsce_target }} -p "$VSCE_PAT"

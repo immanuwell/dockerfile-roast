@@ -188,3 +188,52 @@ jobs:
         with:
           files: dist/*
           fail_on_unmatched_files: true
+
+  update-homebrew:
+    name: Update Homebrew tap
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Require tap token
+        if: env.HOMEBREW_TAP_TOKEN == ''
+        run: |
+          echo "HOMEBREW_TAP_TOKEN is required to update immanuwell/homebrew-droast." >&2
+          exit 1
+
+      - uses: actions/checkout@v6
+
+      - name: Download checksums from release
+        run: |
+          curl -fsSL \
+            "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/sha256sums.txt" \
+            -o sha256sums.txt
+
+      - name: Checkout tap repo
+        uses: actions/checkout@v6
+        with:
+          repository: immanuwell/homebrew-droast
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Generate updated formula
+        env:
+          VERSION: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          export BASE="https://github.com/${REPOSITORY}/releases/download/${VERSION}"
+          export SHA_MACOS_ARM="$(awk '/droast-macos-arm64$/{print $1}' sha256sums.txt)"
+          export SHA_MACOS_X86="$(awk '/droast-macos-x86_64$/{print $1}' sha256sums.txt)"
+          export SHA_LINUX_ARM="$(awk '/droast-linux-arm64$/{print $1}' sha256sums.txt)"
+          export SHA_LINUX_X86="$(awk '/droast-linux-x86_64$/{print $1}' sha256sums.txt)"
+          envsubst < homebrew/droast.rb.tmpl > tap/Formula/droast.rb
+
+      - name: Commit and push
+        run: |
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/droast.rb
+          git diff --staged --quiet || git commit -m "chore: update droast to ${{ github.ref_name }}"
+          git push
