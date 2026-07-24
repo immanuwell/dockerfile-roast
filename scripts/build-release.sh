@@ -123,18 +123,37 @@ ok "All done. Artifacts uploaded to: https://github.com/$REPO/releases/tag/$RELE
 
 if $PUSH_DOCKER; then
     GHCR_IMAGE="ghcr.io/$(gh repo view --json owner -q .owner.login)/droast"
+    DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-$(gh repo view --json owner -q .owner.login)}"
+    DOCKERHUB_IMAGE="docker.io/${DOCKERHUB_USERNAME}/droast"
 
     log "Logging in to GHCR..."
     gh auth token | docker login ghcr.io -u "$(gh api user -q .login)" --password-stdin
 
+    if [[ -n "${DOCKER_PAT:-}" ]]; then
+        log "Logging in to Docker Hub..."
+        printf '%s' "$DOCKER_PAT" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
+    else
+        log "DOCKER_PAT is not set; Docker Hub image will not be published"
+    fi
+
     log "Building Docker image..."
-    docker build -t "$GHCR_IMAGE:$RELEASE" -t "$GHCR_IMAGE:latest" "$REPO_ROOT"
+    docker build \
+        -t "$GHCR_IMAGE:$RELEASE" -t "$GHCR_IMAGE:latest" \
+        -t "$DOCKERHUB_IMAGE:$RELEASE" -t "$DOCKERHUB_IMAGE:latest" \
+        "$REPO_ROOT"
 
     log "Pushing Docker image..."
     docker push "$GHCR_IMAGE:$RELEASE"
     docker push "$GHCR_IMAGE:latest"
     ok "$GHCR_IMAGE:$RELEASE"
     ok "$GHCR_IMAGE:latest"
+
+    if [[ -n "${DOCKER_PAT:-}" ]]; then
+        docker push "$DOCKERHUB_IMAGE:$RELEASE"
+        docker push "$DOCKERHUB_IMAGE:latest"
+        ok "$DOCKERHUB_IMAGE:$RELEASE"
+        ok "$DOCKERHUB_IMAGE:latest"
+    fi
 fi
 
 # ── cleanup ───────────────────────────────────────────────────────────────────

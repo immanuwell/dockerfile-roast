@@ -79,11 +79,11 @@ don't want to install anything? pick one:
 docker run --rm \
   -v "$PWD:/workspace:ro" \
   -w /workspace \
-  ghcr.io/immanuwell/droast:1.4.10 \
+  immanuwell/droast:1.4.10 \
   --no-roast .
 ```
 
-replace `.` with `Dockerfile` to lint one file.
+replace `.` with `Dockerfile` to lint one file. The same image is also available from `ghcr.io/immanuwell/droast`.
 
 **Web**: use the **[droast web linter](https://ewry.net/droast-dockerfile-linter/)**. it runs in your browser.
 
@@ -306,17 +306,17 @@ the hook runs on `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `Containerfile`, 
 
 ## docker
 
-pull from ghcr and use immediately, no install needed:
+pull from Docker Hub (or use the identical GHCR image) and use immediately, no install needed:
 
 ```bash
 # lint a Dockerfile in the current directory
-docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile ghcr.io/immanuwell/droast /Dockerfile
+docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile immanuwell/droast /Dockerfile
 
 # lint any file, anywhere
-docker run --rm -v /path/to/your/Dockerfile:/Dockerfile ghcr.io/immanuwell/droast /Dockerfile
+docker run --rm -v /path/to/your/Dockerfile:/Dockerfile immanuwell/droast /Dockerfile
 
 # pass flags as usual
-docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile ghcr.io/immanuwell/droast \
+docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile immanuwell/droast \
     --no-roast --min-severity warning /Dockerfile
 ```
 
@@ -327,7 +327,7 @@ docker build -t droast .
 docker run --rm -v "$(pwd)/Dockerfile":/Dockerfile droast /Dockerfile
 ```
 
-the image is published automatically to `ghcr.io/immanuwell/droast` on every release tag.
+the image is published automatically to Docker Hub as `immanuwell/droast` and to GHCR as `ghcr.io/immanuwell/droast` on every release tag. Both registries receive the same version, major/minor, and `latest` tags.
 
 ## podman
 

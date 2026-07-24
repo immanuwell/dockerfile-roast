@@ -136,10 +136,12 @@ The release includes Linux, macOS, and Windows builds. Put the extracted executa
 ### Container image
 
 ```bash
-docker pull ghcr.io/immanuwell/droast:1.4.5
+docker pull immanuwell/droast:1.4.5
 ```
 
 Use a fixed version in CI. Use `latest` only when automatic upgrades are acceptable.
+
+The identical image is also published to `ghcr.io/immanuwell/droast`; choose the registry that is most convenient for your environment.
 
 The image is OCI-compatible and can also be run with Podman:
 

@@ -138,7 +138,7 @@ perl -0pi -e '
     }{
         $start = $1; $body = $2; $end = $3;
         $versions = ($body =~ s{
-            (ghcr\.io/immanuwell/droast:|
+            (ghcr\.io/immanuwell/droast:|immanuwell/droast:|
              immanuwell/dockerfile-roast\@|
              specific\ droast\ release,\ e\.g\.\ `?|
              ^\s*rev:\s*)
