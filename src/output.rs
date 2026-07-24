@@ -1,4 +1,5 @@
 use crate::rules::{Finding, Severity};
+use crate::messages::{self, MessageMode, MessageOverrides};
 use colored::*;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -53,12 +54,12 @@ struct JsonOutput {
     findings: Vec<JsonFinding>,
 }
 
-pub fn print_findings(file: &str, findings: &[Finding], format: OutputFormat, no_roast: bool) {
+pub fn print_findings(file: &str, findings: &[Finding], format: OutputFormat, no_roast: bool, messages: &MessageOverrides) {
     match format {
-        OutputFormat::Terminal => print_terminal(file, findings, no_roast),
+        OutputFormat::Terminal => print_terminal(file, findings, no_roast, messages),
         OutputFormat::Json => print_json(file, findings),
         OutputFormat::Github => print_github(file, findings, no_roast),
-        OutputFormat::Compact => print_compact(file, findings),
+        OutputFormat::Compact => print_compact(file, findings, messages),
         OutputFormat::Sarif => {
             unreachable!("SARIF output is handled via print_sarif, not print_findings")
         }
@@ -81,7 +82,7 @@ fn severity_color(s: &Severity) -> ColoredString {
     }
 }
 
-fn print_terminal(file: &str, findings: &[Finding], no_roast: bool) {
+fn print_terminal(file: &str, findings: &[Finding], no_roast: bool, messages: &MessageOverrides) {
     if findings.is_empty() {
         println!(
             "\n  {} {}\n",
@@ -116,7 +117,43 @@ fn print_terminal(file: &str, findings: &[Finding], no_roast: bool) {
             f.message.bold()
         );
         println!("  {}      at {}", " ".repeat(5), line_info);
-        if !no_roast {
+        let custom = messages.get(&f.rule).map(|override_| {
+            (
+                messages::render(
+                    &override_.message,
+                    &f.rule,
+                    &f.severity.to_string(),
+                    file,
+                    f.line,
+                    &f.message,
+                ),
+                override_.help.as_deref(),
+            )
+        });
+        if let Some((custom, help)) = custom {
+            if messages.mode == MessageMode::Append && !no_roast {
+                println!(
+                    "  {}      {} {}",
+                    " ".repeat(5),
+                    "💬".dimmed(),
+                    format!("\"{}\"", f.roast).italic().dimmed()
+                );
+            }
+            if messages.mode != MessageMode::Replace && !no_roast {
+                println!(
+                    "  {}      {} {}",
+                    " ".repeat(5),
+                    "💬".dimmed(),
+                    format!("\"{}\"", custom).italic().dimmed()
+                );
+            } else {
+                println!("  {}      {}", " ".repeat(5), custom.italic());
+            }
+            if let Some(help) = help {
+                println!("  {}      {} {}", " ".repeat(5), "Help:".dimmed(), help.dimmed());
+            }
+            println!();
+        } else if !no_roast {
             println!(
                 "  {}      {} {}\n",
                 " ".repeat(5),
@@ -275,7 +312,7 @@ fn github_annotation(file: &str, finding: &Finding, no_roast: bool) -> String {
     )
 }
 
-fn print_compact(file: &str, findings: &[Finding]) {
+fn print_compact(file: &str, findings: &[Finding], messages: &MessageOverrides) {
     for f in findings {
         let line_info = if f.line > 0 {
             if f.column > 0 {
@@ -286,10 +323,17 @@ fn print_compact(file: &str, findings: &[Finding]) {
         } else {
             String::new()
         };
-        println!(
-            "{}{}:{} [{}] {}",
-            file, line_info, f.severity, f.rule, f.message
-        );
+        let custom = messages.get(&f.rule).map(|override_| messages::render(
+            &override_.message, &f.rule, &f.severity.to_string(), file, f.line, &f.message,
+        ));
+        let text = match (messages.mode, custom) {
+            (MessageMode::Replace, Some(custom)) => custom,
+            (MessageMode::Append, Some(custom)) | (MessageMode::Message, Some(custom)) => {
+                format!("{} — {}", f.message, custom)
+            }
+            (_, None) => f.message.clone(),
+        };
+        println!("{}{}:{} [{}] {}", file, line_info, f.severity, f.rule, text);
     }
 }
 

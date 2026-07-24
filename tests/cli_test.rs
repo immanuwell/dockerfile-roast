@@ -31,6 +31,109 @@ fn policy_fixture(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn message_overrides_are_layered_for_terminal_output_and_not_json() {
+    let root = policy_fixture("message-overrides");
+    let user_config = root.join("user-config");
+    let project_messages = root.join(".droast/messages.yaml");
+    let explicit_messages = root.join("team.yaml");
+    let dockerfile = root.join("Dockerfile");
+    std::fs::create_dir_all(project_messages.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(user_config.join("droast")).unwrap();
+    std::fs::write(&dockerfile, "FROM alpine:3.20\nUSER root\n").unwrap();
+    std::fs::write(
+        user_config.join("droast/messages.yaml"),
+        "version: 1\nrules:\n  DF002:\n    message: user message\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &project_messages,
+        "version: 1\nrules:\n  DF002:\n    message: project message\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &explicit_messages,
+        "version: 1\nrules:\n  DF002:\n    message: explicit {rule} at {file}:{line}\n",
+    )
+    .unwrap();
+
+    let terminal = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .current_dir(&root)
+        .env("XDG_CONFIG_HOME", &user_config)
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--messages",
+            explicit_messages.to_str().unwrap(),
+            "--only",
+            "DF002",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(terminal.status.success(), "{}", String::from_utf8_lossy(&terminal.stderr));
+    let terminal = String::from_utf8_lossy(&terminal.stdout);
+    assert!(terminal.contains("explicit DF002 at"));
+    assert!(!terminal.contains("project message"));
+    assert!(!terminal.contains("user message"));
+
+    let json = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .current_dir(&root)
+        .env("XDG_CONFIG_HOME", &user_config)
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--messages",
+            explicit_messages.to_str().unwrap(),
+            "--only",
+            "DF002",
+            "--format",
+            "json",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(json.status.success(), "{}", String::from_utf8_lossy(&json.stderr));
+    assert!(!String::from_utf8_lossy(&json.stdout).contains("explicit DF002"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn messages_commands_create_validate_dump_and_complete() {
+    let root = policy_fixture("messages-commands");
+    let init = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .current_dir(&root)
+        .args(["messages", "init", "--project", "--preset", "friendly"])
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "{}", String::from_utf8_lossy(&init.stderr));
+    let path = root.join(".droast/messages.yaml");
+    assert!(path.exists());
+
+    let validate = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args(["messages", "validate", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(validate.status.success(), "{}", String::from_utf8_lossy(&validate.stderr));
+
+    let dump = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args(["messages", "dump", "--all"])
+        .output()
+        .unwrap();
+    assert!(dump.status.success(), "{}", String::from_utf8_lossy(&dump.stderr));
+    assert!(String::from_utf8_lossy(&dump.stdout).contains("DF013"));
+
+    let completion = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args(["completion", "bash"])
+        .output()
+        .unwrap();
+    assert!(completion.status.success());
+    let completion = String::from_utf8_lossy(&completion.stdout);
+    assert!(completion.contains("messages"));
+    assert!(completion.contains("validate"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn stdin_lint_uses_the_process_working_directory_for_the_ignorefile() {
     let root = policy_fixture("stdin-ignorefile");
     std::fs::write(root.join(".dockerignore"), ".git\n").unwrap();

@@ -215,6 +215,20 @@ FROM alpine:latest
 
 See the **[complete configuration guide](DOCS.md#configuration)** and the copy-paste [`examples/droast-enterprise.toml`](examples/droast-enterprise.toml). None of these controls are required; zero-config behavior stays unchanged.
 
+## custom messages
+
+Optional message overrides add team guidance, migration links, or your own tone to terminal output. They do not change rules, exit codes, or JSON/SARIF/GitHub output.
+
+```bash
+# personal overrides in your OS config directory
+droast messages init
+
+# reviewed, shared overrides for this repository
+droast messages init --project
+```
+
+Edit the generated YAML, then run droast again. It reads the file every time. See [custom messages](DOCS.md#custom-messages) for layering, examples, placeholders, and validation.
+
 ## github action
 
 add droast to any repo in 5 lines:

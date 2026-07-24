@@ -1,4 +1,4 @@
-use dockerfile_roast::{config, hadolint, linter, output, repository, rules, shellcheck};
+use dockerfile_roast::{config, hadolint, linter, messages, output, repository, rules, shellcheck};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process;
@@ -124,6 +124,41 @@ enum Commands {
         #[arg(long, value_name = "PATH", num_args = 0..=1, default_missing_value = ".hadolint.yaml")]
         from_hadolint: Option<PathBuf>,
     },
+
+    /// Customize optional terminal messages for your user account or repository
+    Messages {
+        #[command(subcommand)]
+        command: MessageCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum MessageCommands {
+    /// Create a small, editable message override file
+    Init {
+        /// Create .droast/messages.yaml in the current repository
+        #[arg(long)]
+        project: bool,
+        /// Starter content: friendly or onboarding
+        #[arg(long, value_name = "NAME")]
+        preset: Option<String>,
+    },
+    /// Show the effective message and help link for one rule
+    Show {
+        #[arg(value_name = "RULE")]
+        rule: String,
+    },
+    /// Print a complete YAML reference catalog to stdout
+    Dump {
+        /// Required to avoid accidentally printing a large catalog
+        #[arg(long)]
+        all: bool,
+    },
+    /// Validate a message override YAML file
+    Validate {
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
+    },
 }
 
 #[derive(Parser, Debug)]
@@ -148,6 +183,10 @@ struct Cli {
     /// Load project configuration from this path instead of discovering droast.toml
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
+
+    /// Load optional terminal message overrides from this YAML file
+    #[arg(long, global = true, value_name = "PATH")]
+    messages: Option<PathBuf>,
 
     /// Apply a built-in preset: minimal, security, performance, production, or strict
     #[arg(long, value_name = "NAME")]
@@ -233,6 +272,7 @@ fn main() -> Result<()> {
         Some(Commands::Init { from_hadolint }) => {
             return cmd_init(from_hadolint.as_deref());
         }
+        Some(Commands::Messages { command }) => return cmd_messages(command, cli.messages.as_deref()),
         None => {}
     }
 
@@ -276,6 +316,13 @@ fn main() -> Result<()> {
 
     // --no-fail on CLI always wins; config can also enable it.
     let no_fail = cli.no_fail || global_settings.no_fail.unwrap_or(false);
+    // Message overrides are deliberately presentation-only. Machine formats
+    // remain canonical and never load or render them.
+    let message_overrides = if matches!(format, OutputFormat::Terminal | OutputFormat::Compact) {
+        messages::MessageOverrides::load(cli.messages.as_deref())?
+    } else {
+        messages::MessageOverrides::default()
+    };
     let baseline = if cli.write_baseline {
         None
     } else if let Some(path) = &cli.baseline {
@@ -371,7 +418,7 @@ fn main() -> Result<()> {
                     if cli.only_new && finding_count_before_filtering > 0 && result.findings.is_empty() && format == OutputFormat::Terminal {
                         output::print_no_new_findings(&result.file);
                     } else {
-                        print_findings(&result.file, &result.findings, format, file_no_roast);
+                        print_findings(&result.file, &result.findings, format, file_no_roast, &message_overrides);
                     }
                 }
                 Err(e) => {
@@ -553,6 +600,65 @@ fn cmd_init(from_hadolint: Option<&std::path::Path>) -> Result<()> {
         std::fs::write(path, CONFIG_TEMPLATE)?;
         println!("{} Created droast.toml", "✓".green().bold());
         println!("  All settings are commented out — uncomment what you need.");
+    }
+    Ok(())
+}
+
+fn cmd_messages(command: MessageCommands, explicit: Option<&std::path::Path>) -> Result<()> {
+    match command {
+        MessageCommands::Init { project, preset } => {
+            let path = if project {
+                messages::project_init_path()?
+            } else {
+                messages::user_messages_path()
+            };
+            if path.exists() {
+                anyhow::bail!(
+                    "{} already exists. Edit it, or choose a different location with --messages.",
+                    path.display()
+                );
+            }
+            let template = messages::template(preset.as_deref())?;
+            let parent = path.parent().expect("message path has a parent");
+            std::fs::create_dir_all(parent)?;
+            std::fs::write(&path, template)?;
+            println!("{} Created {}", "✓".green().bold(), path.display());
+            println!("  Edit it, then run droast again. Changes apply on every invocation.");
+        }
+        MessageCommands::Show { rule } => {
+            let id = rule.to_ascii_uppercase();
+            let rule = rules::all_rules()
+                .into_iter()
+                .find(|candidate| candidate.id == id)
+                .ok_or_else(|| anyhow::anyhow!("Unknown rule ID '{}'", rule))?;
+            let overrides = messages::MessageOverrides::load(explicit)?;
+            println!("{} {} — {}", rule.id.bold(), rule.severity, rule.description);
+            println!("Mode: {}", overrides.mode);
+            if let Some(custom) = overrides.get(rule.id) {
+                println!("Message: {}", custom.message);
+                if let Some(help) = &custom.help {
+                    println!("Help: {help}");
+                }
+            } else {
+                println!("No custom message is active for {}.", rule.id);
+            }
+        }
+        MessageCommands::Dump { all } => {
+            if !all {
+                anyhow::bail!("Use `droast messages dump --all` to print the reference catalog.");
+            }
+            print!("{}", messages::reference_yaml());
+        }
+        MessageCommands::Validate { path } => {
+            let overrides = messages::MessageOverrides::load_file(&path)?;
+            println!(
+                "{} {} is valid ({} rule override(s), {} mode).",
+                "✓".green().bold(),
+                path.display(),
+                overrides.rules.len(),
+                overrides.mode
+            );
+        }
     }
     Ok(())
 }

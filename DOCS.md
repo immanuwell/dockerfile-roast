@@ -12,6 +12,7 @@ Use this guide as a quick reference. Every section favors copy-paste examples ov
 - [Command line reference](#command-line-reference)
 - [Repository discovery](#repository-discovery)
 - [Configuration](#configuration)
+- [Custom messages](#custom-messages)
 - [Copy-paste presets](#copy-paste-presets)
 - [Control rules and severity](#control-rules-and-severity)
 - [Output formats](#output-formats)
@@ -310,6 +311,7 @@ printf 'FROM alpine:latest\n' | droast -
 | Option | Purpose |
 |---|---|
 | `--config PATH` | Load an explicit TOML configuration |
+| `--messages PATH` | Load optional terminal message overrides from YAML |
 | `--shellcheck MODE` | ShellCheck bridge: `off`, `auto`, or `required` |
 | `--preset NAME` | Apply `minimal`, `security`, `performance`, `production`, or `strict` |
 | `--category NAMES` | Run comma-separated rule categories |
@@ -917,6 +919,149 @@ These patterns are established in mature tooling:
 This is evidence of established team workflows, not a claim about private configuration inside any named company. Exact internal policies are rarely public.
 
 droast keeps all of this optional. With no `droast.toml`, no policy-specific rule activates and existing lint defaults remain unchanged.
+
+## Custom messages
+
+Custom messages are optional terminal-output additions. Use them for team conventions, links to internal standards, migration guidance, onboarding, or a personal tone.
+
+They never change lint rules, severities, exit codes, baselines, JSON, SARIF, or GitHub annotations. Without a message file, droast output is unchanged.
+
+### Start in one command
+
+Create personal overrides in the standard OS configuration directory:
+
+```bash
+droast messages init
+```
+
+Create reviewed overrides that travel with the current repository:
+
+```bash
+droast messages init --project
+```
+
+The command prints the exact path it created. Edit the YAML and rerun droast. Every invocation reads the files again; there is no reload command or daemon.
+
+Use a small optional starter pack:
+
+```bash
+droast messages init --project --preset friendly
+droast messages init --project --preset onboarding
+```
+
+The generated file is ordinary YAML. Commit a project file when its guidance is part of your engineering convention.
+
+### Write an override
+
+`messages init` creates a short example. Keep only the rules you want to change:
+
+```yaml
+version: 1
+
+defaults:
+  mode: message
+
+rules:
+  DF013:
+    message: >-
+      Secrets in ENV persist in image layers. Use BuildKit secrets instead.
+    help: https://engineering.example.com/container-secrets
+
+  DF021:
+    message: "Piping curl to a shell is not an installation strategy."
+```
+
+For a personal setup, the same file can be playful:
+
+```yaml
+version: 1
+rules:
+  DF013:
+    message: "You put the password in the fossil record again."
+```
+
+`message` is required. `help` is optional and must be an `http` or `https` URL. Rule IDs are case-insensitive in YAML and must name a droast rule.
+
+### Layers and priority
+
+droast merges up to three files on every terminal or compact run:
+
+1. Personal file: the OS configuration directory.
+2. Repository file: `.droast/messages.yaml`, found from the current directory or an ancestor.
+3. Explicit file: `--messages PATH`.
+
+Later layers win for the same rule. An explicit file is useful for a temporary campaign or for testing a shared file before committing it:
+
+```bash
+droast --messages team-messages.yaml Dockerfile
+```
+
+Personal locations are platform-native:
+
+| Platform | Default location |
+|---|---|
+| Linux | `$XDG_CONFIG_HOME/droast/messages.yaml`, normally `~/.config/droast/messages.yaml` |
+| macOS | `~/Library/Application Support/droast/messages.yaml` |
+| Windows | `%APPDATA%\\droast\\messages.yaml` |
+
+The project file is usually the right choice for organization-specific guidance. It is versioned, reviewed, and shared by every developer who runs droast in the repository.
+
+### Choose how messages display
+
+The default `message` mode keeps the normal technical finding visible and adds the custom text. This is the best mode for team guidance.
+
+```yaml
+defaults:
+  mode: message # message | replace | append
+```
+
+- `message`: show the technical finding and the custom message.
+- `replace`: show the custom message instead of droast's normal roast text.
+- `append`: show droast's normal roast text, then the custom message.
+
+`--no-roast` still removes droast's roast text. A configured custom message remains visible so organization-specific remediation is not lost.
+
+### Safe placeholders
+
+Messages can interpolate a small fixed set of values:
+
+```yaml
+version: 1
+rules:
+  DF013:
+    message: "{rule} at {file}:{line}: use BuildKit secrets. Default: {default_message}"
+```
+
+Supported placeholders are `{rule}`, `{severity}`, `{file}`, `{line}`, and `{default_message}`. Unknown or unclosed placeholders fail validation. There is no scripting, shell execution, remote loading, or templating language.
+
+### Inspect and validate
+
+Show the effective override for a rule:
+
+```bash
+droast messages show DF013
+droast messages show DF013 --messages team-messages.yaml
+```
+
+Validate a file before committing it:
+
+```bash
+droast messages validate .droast/messages.yaml
+```
+
+Print the complete reference catalog when you need to browse every rule:
+
+```bash
+droast messages dump --all > droast-messages-reference.yaml
+```
+
+The reference catalog is for discovery. Do not commit it unchanged; copy the few rules your team needs into `.droast/messages.yaml`.
+
+All commands and their arguments are included in generated shell completions:
+
+```bash
+source <(droast completion bash)
+```
 
 ## Copy-paste presets
 
