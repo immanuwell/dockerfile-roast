@@ -107,6 +107,8 @@ brew install droast
 cargo install dockerfile-roast
 ```
 
+Embedding droast in a Rust tool? See the [Rust library docs](DOCS.md#rust-library).
+
 **Wasmer** ([Wasmer Registry](https://wasmer.io/immanuwell/droast), sandboxed WASI command):
 
 ```bash
@@ -131,7 +133,11 @@ wasmer run --volume "$PWD:/workspace" immanuwell/droast -- /workspace
 
 see the [GitHub Action section](#github-action) for inputs.
 
+More commands, CI examples, and output formats: [docs](DOCS.md).
+
 ## usage
+
+Need the Rust API instead of the CLI? See the [Rust library docs](DOCS.md#rust-library).
 
 ```bash
 # the basics

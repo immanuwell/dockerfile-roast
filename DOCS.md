@@ -1855,14 +1855,25 @@ Use the web version for quick experiments. Use the CLI for repository discovery,
 
 ## Rust library
 
-The crate exposes parser, rules, linter, repository, configuration, and output modules.
+`dockerfile-roast` is published on [crates.io](https://crates.io/crates/dockerfile-roast).
+It provides an `rlib` library as well as the `droast` CLI.
 
-Add it:
+Add the crate to an application or integration:
 
 ```toml
 [dependencies]
-dockerfile-roast = "1.4.5"
+dockerfile-roast = "1.4.10"
 ```
+
+The public API includes:
+
+- `linter::lint_content` and `linter::lint_file` for linting
+- `parser::parse_document` for structured Dockerfile data
+- `LintOptions` and `LintResult` for lint configuration and results
+- `Finding`, `Rule`, and `Severity` for working with findings and rules
+
+The main modules are `parser`, `rules`, `linter`, `repository`, `config`, and `output`.
+Use the linting API when you need findings. Use the parser API when you need the Dockerfile structure.
 
 ### Lint text
 
