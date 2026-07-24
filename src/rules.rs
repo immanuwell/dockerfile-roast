@@ -814,6 +814,14 @@ fn rule_latest_tag(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             continue;
         };
         let base = from.image;
+        // A build argument can supply either a tagged image or a digest at
+        // build time. Do not claim it is unpinned when that value is unknown.
+        if base.contains('$') {
+            if let Some(alias) = from.alias {
+                stage_aliases.insert(alias.to_lowercase());
+            }
+            continue;
+        }
         let is_previous_stage = stage_aliases.contains(&base.to_lowercase());
         if !is_previous_stage
             && !base.eq_ignore_ascii_case("scratch")
@@ -1047,7 +1055,10 @@ fn rule_cd_instead_of_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Finding
 fn rule_relative_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     instrs_of(instrs, "WORKDIR")
         .into_iter()
-        .filter(|i| !i.arguments.trim().starts_with('/') && !i.arguments.trim().starts_with('$'))
+        .filter(|i| {
+            let path = i.arguments.trim().trim_matches(['\'', '"']);
+            !path.starts_with('/') && !path.starts_with('$')
+        })
         .map(|i| Finding {
             column: 0,
             end_line: 0,
@@ -2264,6 +2275,7 @@ fn rule_untrusted_registry(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         "public.ecr.aws",
         "registry.k8s.io",
         "k8s.gcr.io",
+        "dhi.io",
     ];
     let mut findings = Vec::new();
     for i in instrs_of(instrs, "FROM") {
@@ -2333,7 +2345,7 @@ fn rule_pipefail_missing(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     _ => false,
                 };
             }
-            "RUN" if run_has_unprotected_pipeline(&instruction.arguments, shell_has_pipefail) => {
+            "RUN" if run_has_unprotected_pipeline(&instruction.command, shell_has_pipefail) => {
                 findings.push(Finding {
                     column: 0,
                     end_line: 0,

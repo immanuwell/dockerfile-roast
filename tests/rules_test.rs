@@ -71,6 +71,18 @@ fn df001_clear_when_previous_stage_is_the_base() {
     assert!(no_rule(&lint(df), "DF001"));
 }
 
+#[test]
+fn df001_clear_when_the_image_reference_is_a_build_argument() {
+    let df = "ARG IMAGE=buildpack-deps:resolute\nFROM ${IMAGE}\n";
+    assert!(no_rule(&lint(df), "DF001"));
+}
+
+#[test]
+fn df001_still_fires_when_only_the_platform_is_a_build_argument() {
+    let df = "FROM --platform=$BUILDPLATFORM alpine:latest\n";
+    assert!(has_rule(&lint(df), "DF001"));
+}
+
 // ─── DF002: explicit root ────────────────────────────────────────────────────
 
 #[test]
@@ -221,6 +233,12 @@ fn df009_fires_on_relative_workdir() {
 #[test]
 fn df009_clear_on_absolute_workdir() {
     let df = "FROM alpine:3.19\nWORKDIR /app\n";
+    assert!(no_rule(&lint(df), "DF009"));
+}
+
+#[test]
+fn df009_clear_on_quoted_absolute_workdir() {
+    let df = "FROM alpine:3.19\nWORKDIR \"/\"\n";
     assert!(no_rule(&lint(df), "DF009"));
 }
 
@@ -1089,6 +1107,12 @@ fn df057_clear_on_pipe_with_pipefail() {
 }
 
 #[test]
+fn df057_clear_when_buildkit_flags_precede_pipefail() {
+    let df = "FROM alpine:3.19\nRUN --mount=type=secret,id=.netrc set -euo pipefail; echo | cat\n";
+    assert!(no_rule(&lint(df), "DF057"));
+}
+
+#[test]
 fn df057_fires_when_set_options_omit_pipefail() {
     let df = "FROM debian:trixie\nRUN set -ex; \\\n+    grep ^root: /etc/passwd | \\\n+    cut -d: -f7\nRUN set -ex; \\\n+    grep ^root: /etc/passwd | cut -d: -f7\n";
     let findings: Vec<_> = lint(df)
@@ -1362,6 +1386,12 @@ fn df065_clear_on_trusted_registry_ghcr() {
 #[test]
 fn df065_clear_on_docker_hub_short_name() {
     let df = "FROM ubuntu:22.04\nCMD [\"/bin/sh\"]\n";
+    assert!(no_rule(&lint(df), "DF065"));
+}
+
+#[test]
+fn df065_clear_on_docker_hardened_images_registry() {
+    let df = "FROM dhi.io/python:3.14\nCMD [\"python\"]\n";
     assert!(no_rule(&lint(df), "DF065"));
 }
 
