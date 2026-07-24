@@ -79,7 +79,7 @@ don't want to install anything? pick one:
 docker run --rm \
   -v "$PWD:/workspace:ro" \
   -w /workspace \
-  ghcr.io/immanuwell/droast:1.4.9 \
+  ghcr.io/immanuwell/droast:1.4.10 \
   --no-roast .
 ```
 
@@ -126,7 +126,7 @@ wasmer run --volume "$PWD:/workspace" immanuwell/droast -- /workspace
 **GitHub Actions**:
 
 ```yaml
-- uses: immanuwell/dockerfile-roast@1.4.9
+- uses: immanuwell/dockerfile-roast@1.4.10
 ```
 
 see the [GitHub Action section](#github-action) for inputs.
@@ -214,7 +214,7 @@ See the **[complete configuration guide](DOCS.md#configuration)** and the copy-p
 add droast to any repo in 5 lines:
 
 ```yaml
-- uses: immanuwell/dockerfile-roast@1.4.9
+- uses: immanuwell/dockerfile-roast@1.4.10
 ```
 
 full example (`.github/workflows/lint.yml`):
@@ -229,7 +229,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: immanuwell/dockerfile-roast@1.4.9
+      - uses: immanuwell/dockerfile-roast@1.4.10
 ```
 
 findings show up as inline annotations on the PR diff. no configuration required.
@@ -249,12 +249,12 @@ available inputs (all optional):
 | `baseline` | — | repository path to a baseline JSON file |
 | `only-new` | `false` | report only findings not present in `baseline` |
 | `engine` | config or `docker` | build-context conventions: `docker` or `podman` |
-| `image-tag` | `latest` | pin to a specific droast release, e.g. `1.4.9` |
+| `image-tag` | `latest` | pin to a specific droast release, e.g. `1.4.10` |
 
 example with options:
 
 ```yaml
-- uses: immanuwell/dockerfile-roast@1.4.9
+- uses: immanuwell/dockerfile-roast@1.4.10
   with:
     files: '**/Dockerfile'
     preset: production
@@ -270,7 +270,7 @@ roast Dockerfiles before they even reach CI, via [pre-commit](https://pre-commit
 
 ```yaml
 - repo: https://github.com/immanuwell/dockerfile-roast
-  rev: 1.4.9
+  rev: 1.4.10
   hooks:
     - id: droast
 ```
