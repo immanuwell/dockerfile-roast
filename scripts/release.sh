@@ -31,7 +31,35 @@ done
 cd "$REPO_ROOT"
 
 [[ "$(git branch --show-current)" == "main" ]] || die "releases must be started from the main branch"
-[[ -z "$(git status --porcelain)" ]] || die "working tree is not clean; commit, stash, or discard changes first"
+
+prepared_release_can_resume() {
+    local changed_path crate_version extension_version wasmer_version
+    while IFS= read -r changed_path; do
+        case "$changed_path" in
+            Cargo.toml|Cargo.lock|README.md|docs/index.html|action.yml|wasmer.toml|vscode-extension/package.json)
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+    done < <(git status --porcelain | awk '{print $2}')
+
+    crate_version="$(cargo metadata --no-deps --format-version 1 | jq -r \
+        '.packages[] | select(.name == "dockerfile-roast") | .version')"
+    extension_version="$(jq -r .version vscode-extension/package.json)"
+    wasmer_version="$(awk -F '"' '/^version = / { print $2; exit }' wasmer.toml)"
+    [[ "$crate_version" == "$VERSION" ]] && \
+        [[ "$extension_version" == "$VERSION" ]] && \
+        [[ "$wasmer_version" == "$VERSION" ]]
+}
+
+if [[ -n "$(git status --porcelain)" ]]; then
+    if prepared_release_can_resume; then
+        echo "Resuming interrupted release preparation for $VERSION."
+    else
+        die "working tree is not clean; commit, stash, or discard changes first"
+    fi
+fi
 
 git fetch origin main --tags
 [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]] || \
@@ -58,6 +86,15 @@ perl -0pi -e '
 npm pkg set --prefix vscode-extension version="$VERSION" >/dev/null
 ./scripts/update-public-metadata.sh --version "$VERSION"
 
+# The release changes public metadata before committing it, so --check would
+# compare those intentional changes with HEAD and always fail. Run the
+# generator again instead and require it to be idempotent.
+metadata_before="$(git hash-object README.md docs/index.html action.yml wasmer.toml)"
+./scripts/update-public-metadata.sh --version "$VERSION"
+metadata_after="$(git hash-object README.md docs/index.html action.yml wasmer.toml)"
+[[ "$metadata_before" == "$metadata_after" ]] || \
+    die "public metadata generation is not idempotent"
+
 crate_version="$(cargo metadata --no-deps --format-version 1 | jq -r \
     '.packages[] | select(.name == "dockerfile-roast") | .version')"
 extension_version="$(jq -r .version vscode-extension/package.json)"
@@ -66,7 +103,6 @@ wasmer_version="$(awk -F '"' '/^version = / { print $2; exit }' wasmer.toml)"
 [[ "$extension_version" == "$VERSION" ]] || die "VS Code extension version is $extension_version, expected $VERSION"
 [[ "$wasmer_version" == "$VERSION" ]] || die "wasmer.toml version is $wasmer_version, expected $VERSION"
 
-./scripts/update-public-metadata.sh --check
 cargo test --locked
 cargo publish --dry-run --locked --allow-dirty
 git diff --check
