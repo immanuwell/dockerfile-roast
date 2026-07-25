@@ -4,14 +4,27 @@ use std::path::PathBuf;
 use std::process;
 
 use anyhow::Result;
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Shell};
 use colored::*;
 
 use config::{DroastConfig, PolicySettings};
 use linter::LintOptions;
-use output::{print_findings, print_summary_header, OutputFormat};
+use output::{print_findings, OutputFormat};
 use rules::Severity;
+
+const HELP_BANNER: &str = concat!(
+    "\n\n",
+    "  ██████╗ ██████╗  ██████╗  █████╗ ███████╗████████╗\n",
+    "  ██╔══██╗██╔══██╗██╔═══██╗██╔══██╗██╔════╝╚══██╔══╝\n",
+    "  ██║  ██║██████╔╝██║   ██║███████║███████╗   ██║\n",
+    "  ██║  ██║██╔══██╗██║   ██║██╔══██║╚════██║   ██║\n",
+    "  ██████╔╝██║  ██║╚██████╔╝██║  ██║███████║   ██║\n",
+    "  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝   ╚═╝\n",
+    "  Dockerfile linter with personality\n",
+);
+const HELP_BANNER_STYLE: &str = "\x1b[1;31m";
+const RESET_STYLE: &str = "\x1b[0m";
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum SeverityArg {
@@ -257,13 +270,15 @@ struct Cli {
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let command = cli_command();
+    let cli = Cli::from_arg_matches(&mut command.get_matches())?;
 
     match cli.command {
         Some(Commands::Completion { shell }) => {
+            let mut completion_command = cli_command();
             generate(
                 Shell::from(shell),
-                &mut Cli::command(),
+                &mut completion_command,
                 "droast",
                 &mut io::stdout(),
             );
@@ -330,11 +345,6 @@ fn main() -> Result<()> {
     } else {
         None
     };
-
-    // SARIF suppresses the ASCII banner — it writes pure JSON to stdout.
-    if format == OutputFormat::Terminal {
-        print_summary_header();
-    }
 
     let discovery = repository::discover(&cli.files, engine);
     for warning in &discovery.warnings {
@@ -454,6 +464,12 @@ fn main() -> Result<()> {
         exit(1);
     }
     Ok(())
+}
+
+fn cli_command() -> clap::Command {
+    Cli::command()
+        .color(clap::ColorChoice::Always)
+        .before_long_help(format!("{HELP_BANNER_STYLE}{HELP_BANNER}{RESET_STYLE}"))
 }
 
 fn is_new_finding(

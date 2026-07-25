@@ -508,23 +508,6 @@ fn normalize_uri(path: &str) -> String {
     relative.to_string_lossy().replace('\\', "/")
 }
 
-pub fn print_summary_header() {
-    println!(
-        "\n{}",
-        r#"
-  ██████╗ ██████╗  ██████╗  █████╗ ███████╗████████╗
-  ██╔══██╗██╔══██╗██╔═══██╗██╔══██╗██╔════╝╚══██╔══╝
-  ██║  ██║██████╔╝██║   ██║███████║███████╗   ██║
-  ██║  ██║██╔══██╗██║   ██║██╔══██║╚════██║   ██║
-  ██████╔╝██║  ██║╚██████╔╝██║  ██║███████║   ██║
-  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝   ╚═╝
-  Dockerfile linter with personality
-"#
-        .bold()
-        .red()
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::{build_sarif, finding_fingerprint, github_annotation, json_output};

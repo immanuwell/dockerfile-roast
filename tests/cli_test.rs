@@ -31,6 +31,30 @@ fn policy_fixture(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn root_long_help_starts_with_the_banner_but_subcommand_help_does_not() {
+    let root_help = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .arg("--help")
+        .output()
+        .expect("droast --help should run");
+    assert!(root_help.status.success());
+    let root_help = String::from_utf8_lossy(&root_help.stdout);
+    assert!(root_help.starts_with("\x1b[1;31m\n\n"));
+    let banner = root_help.find("██████╗ ██████╗").unwrap();
+    let description = root_help
+        .find("A Dockerfile linter that catches bad practices")
+        .unwrap();
+    assert!(banner < description);
+    assert!(root_help.contains("Dockerfile linter with personality"));
+
+    let subcommand_help = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args(["messages", "--help"])
+        .output()
+        .expect("droast messages --help should run");
+    assert!(subcommand_help.status.success());
+    assert!(!String::from_utf8_lossy(&subcommand_help.stdout).contains("██████╗ ██████╗"));
+}
+
+#[test]
 fn message_overrides_are_layered_for_terminal_output_and_not_json() {
     let root = policy_fixture("message-overrides");
     let user_config = root.join("user-config");
@@ -75,6 +99,7 @@ fn message_overrides_are_layered_for_terminal_output_and_not_json() {
     assert!(terminal.contains("explicit DF002 at"));
     assert!(!terminal.contains("project message"));
     assert!(!terminal.contains("user message"));
+    assert!(!terminal.contains("██████╗ ██████╗"));
 
     let json = Command::new(env!("CARGO_BIN_EXE_droast"))
         .current_dir(&root)
