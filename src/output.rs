@@ -92,12 +92,6 @@ fn print_terminal(file: &str, findings: &[Finding], no_roast: bool, messages: &M
         return;
     }
 
-    println!(
-        "\n  {} {}\n",
-        "🔥".bold(),
-        format!("Roasting {}...", file).bold()
-    );
-
     for f in findings {
         let line_info = if f.line > 0 {
             let location = if f.column > 0 {
@@ -186,21 +180,23 @@ fn print_terminal(file: &str, findings: &[Finding], no_roast: bool, messages: &M
         infos.to_string().cyan()
     );
 
-    if errors > 0 {
-        println!(
-            "\n  {} This Dockerfile is a liability. Fix the errors.",
-            "💀".bold()
-        );
-    } else if warnings > 0 {
-        println!(
-            "\n  {} Could be worse. Could also be much better.",
-            "🤔".bold()
-        );
-    } else {
-        println!(
-            "\n  {} Only informational findings. You're almost competent.",
-            "📝".bold()
-        );
+    if !no_roast {
+        if errors > 0 {
+            println!(
+                "\n  {} This Dockerfile is a liability. Fix the errors.",
+                "💀".bold()
+            );
+        } else if warnings > 0 {
+            println!(
+                "\n  {} Could be worse. Could also be much better.",
+                "🤔".bold()
+            );
+        } else {
+            println!(
+                "\n  {} Only informational findings. You're almost competent.",
+                "📝".bold()
+            );
+        }
     }
     println!();
 }
@@ -333,7 +329,12 @@ fn print_compact(file: &str, findings: &[Finding], messages: &MessageOverrides) 
             }
             (_, None) => f.message.clone(),
         };
-        println!("{}{}:{} [{}] {}", file, line_info, f.severity, f.rule, text);
+        let severity_colored = match f.severity {
+            Severity::Error => "ERROR".red().bold(),
+            Severity::Warning => "WARN".yellow().bold(),
+            Severity::Info => "INFO".cyan(),
+        };
+        println!("{}{}:{} [{}] {}", file, line_info, severity_colored, f.rule, text);
     }
 }
 
