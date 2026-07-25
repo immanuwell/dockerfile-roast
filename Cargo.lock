@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "dockerfile-roast"
-version = "1.4.10"
+version = "1.4.11"
 dependencies = [
  "anyhow",
  "clap",
