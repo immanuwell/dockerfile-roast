@@ -1,0 +1,24 @@
+name: Mirror to GitLab and Codeberg
+
+on:
+  push:
+    branches: ['**']
+    tags: ['**']
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    name: Push mirror
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mirror to GitLab and Codeberg
+        run: |
+          git clone --bare https://github.com/immanuwell/dockerfile-roast.git repo
+          cd repo
+          git push --mirror "https://oauth2:${GITLAB_TOKEN}@gitlab.com/immanuwell/dockerfile-roast.git"
+          git push --mirror "https://immanuwell:${CODEBERG_TOKEN}@codeberg.org/immanuwell/dockerfile-roast.git"
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
