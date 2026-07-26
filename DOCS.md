@@ -2491,3 +2491,7 @@ droast --list-rules
 ### Where can I report a problem?
 
 Open an issue in the [dockerfile-roast repository](https://github.com/immanuwell/dockerfile-roast/issues).
+
+### How can I support the project?
+
+[Buy me a coffee](https://buymeacoffee.com/immanuwell).

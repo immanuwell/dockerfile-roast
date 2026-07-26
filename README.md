@@ -523,7 +523,7 @@ rule categories: base images · security · package managers · layer hygiene ·
 
 ## license
 
-MIT. do whatever.
+MIT. enjoy) [☕](https://buymeacoffee.com/immanuwell)
 
 ## comparison with other tools
 
@@ -547,3 +547,7 @@ Both tools scanned the same lexically sorted set of 321 real-world Dockerfiles c
 The benchmark measures execution speed and binary size, not detection quality. Finding totals are not directly comparable because the tools have different rule sets, severities, shell-analysis coverage, and parser behavior.
 
 </details>
+
+---
+
+If droast is useful to you, [buy me a coffee](https://buymeacoffee.com/immanuwell).
