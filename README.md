@@ -18,7 +18,7 @@
 
 ![](media/dockerfile-image.png)
 
-![](media/screenshot-1.png)
+![](media/screenshot-1.jpg)
 
 ![](media/screenshot-2.png)
 
