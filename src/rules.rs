@@ -464,8 +464,8 @@ pub fn all_rules() -> Vec<Rule> {
         },
         Rule {
             id: "DF062",
-            severity: Severity::Error,
-            description: "ENV variable must not reference itself in the same statement",
+            severity: Severity::Info,
+            description: "ENV references may use inherited values",
             func: rule_env_self_reference,
         },
         Rule {
@@ -1350,7 +1350,12 @@ fn rule_npm_install(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .into_iter()
         .filter(|i| {
             let a = &i.arguments;
-            npm_install.is_match(a) && !a.contains("--production") && !a.contains("--omit=dev")
+            npm_install.is_match(a)
+                && !a.contains("--production")
+                && !a.contains("--omit=dev")
+                && !Regex::new(r"(?:^|\s)--global(?:\s|$)|(?:^|\s)-g(?:\s|$)")
+                    .expect("valid npm global-install regex")
+                    .is_match(a)
         })
         .map(|i| Finding {
             column: 0,
@@ -2009,51 +2014,11 @@ fn rule_from_platform_flag(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .collect()
 }
 
-fn rule_env_self_reference(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let re = Regex::new(r"(\w+)=\s*[\x22\x27]?\$\{?(\w+)\}?").unwrap();
-    let mut findings = Vec::new();
-    let mut stage_args = std::collections::HashSet::new();
-    for i in instrs {
-        if i.instruction == "FROM" {
-            stage_args.clear();
-            continue;
-        }
-        if i.instruction == "ARG" {
-            if let Some(name) = i.arguments.split('=').next().and_then(|arg| arg.split_whitespace().next()) {
-                stage_args.insert(name.to_string());
-            }
-            continue;
-        }
-        if i.instruction != "ENV" {
-            continue;
-        }
-        for cap in re.captures_iter(&i.arguments) {
-            let defined = &cap[1];
-            let referenced = &cap[2];
-            if defined == referenced && !stage_args.contains(referenced) {
-                findings.push(Finding {
-                    column: 0,
-                    end_line: 0,
-                    end_column: 0,
-                    rule: "DF062".into(),
-                    severity: Severity::Error,
-                    line: i.line,
-                    message: format!(
-                        "ENV variable '{}' references itself in the same statement",
-                        defined
-                    ),
-                    roast: format!(
-                        "ENV {}=${{{}}} — you're defining a variable using itself. \
-                         It hasn't been set yet at this point in the same ENV instruction. \
-                         The result will be an empty string. Split it into two ENV statements.",
-                        defined, referenced
-                    ),
-                });
-                break;
-            }
-        }
-    }
-    findings
+fn rule_env_self_reference(_instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    // Docker resolves ENV references against the image configuration inherited
+    // from the base image and prior instructions, so this cannot be diagnosed
+    // reliably from a Dockerfile alone.
+    vec![]
 }
 
 fn rule_copy_relative_no_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -2597,19 +2562,17 @@ fn rule_apk_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
     instrs_of(instrs, "RUN")
         .into_iter()
         .filter(|i| {
-            let a = &i.arguments;
+            let a = &i.command;
             if !a.contains("apk add") {
                 return false;
             }
-            // check if any non-flag arg after "add" has no = for version pinning
+            // Check package arguments in this apk invocation only. `command` is
+            // continuation-normalized, and shell operators terminate the call.
             let after_add = match a.find("apk add") {
                 Some(pos) => &a[pos + 7..],
                 None => return false,
             };
-            after_add
-                .split_whitespace()
-                .filter(|t| !t.starts_with('-') && !t.is_empty())
-                .any(|t| !t.contains('=') && !t.contains('>') && !t.contains('<'))
+            apk_add_has_unpinned_package(after_add)
         })
         .map(|i| Finding {
             column: 0,
@@ -2626,6 +2589,30 @@ fn rule_apk_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
                 .to_string(),
         })
         .collect()
+}
+
+fn apk_add_has_unpinned_package(arguments: &str) -> bool {
+    let mut skip_next = false;
+    for token in arguments.split_whitespace() {
+        if matches!(token, "&&" | "||" | ";" | "|") {
+            break;
+        }
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if matches!(token, "--repository" | "-X" | "--virtual" | "-t" | "--arch" | "--root" | "--keys-dir" | "--repositories-file") {
+            skip_next = true;
+            continue;
+        }
+        if token.starts_with('-') || token.is_empty() {
+            continue;
+        }
+        if !token.contains('=') && !token.contains('>') && !token.contains('<') {
+            return true;
+        }
+    }
+    false
 }
 
 fn rule_gem_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {

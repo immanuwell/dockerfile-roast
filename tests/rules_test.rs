@@ -682,6 +682,12 @@ fn df031_clear_on_npm_install_production() {
 }
 
 #[test]
+fn df031_clear_on_npm_global_install() {
+    let df = "FROM node:20\nRUN npm install -g corepack@0.35.0 npm@12.0.1 npm-bundle@3.0.3\n";
+    assert!(no_rule(&lint(df), "DF031"));
+}
+
+#[test]
 fn df031_clear_on_prefixed_package_managers() {
     for command in ["pnpm install --frozen-lockfile", "cnpm install"] {
         let df = format!("FROM node:20\nRUN {command}\nCMD [\"node\", \"app.js\"]\n");
@@ -1018,6 +1024,12 @@ fn df052_clear_on_pinned_apk() {
     assert!(no_rule(&lint(df), "DF052"));
 }
 
+#[test]
+fn df052_clear_on_multiline_pinned_apk_install() {
+    let df = "FROM alpine:3.21\nRUN apk add \\\n    bash=5.3.9-r1 \\\n    curl=8.21.0-r0 && \\\n    echo done\n";
+    assert!(no_rule(&lint(df), "DF052"));
+}
+
 // ─── DF053: gem version pinning ──────────────────────────────────────────────
 
 #[test]
@@ -1268,59 +1280,59 @@ fn df061_fires_when_final_stage_uses_buildplatform() {
     assert!(has_rule(&lint(df), "DF061"));
 }
 
-// ─── DF062: ENV self-reference ────────────────────────────────────────────────
+// ENV references retain values inherited from the base image or earlier layers.
 
 #[test]
-fn df062_fires_on_env_self_reference() {
+fn env_path_append_is_not_reported() {
     // VAR=$VAR:suffix — self-reference at the start of the value
     let df = "FROM alpine:3.19\nENV PATH=$PATH:/usr/local/bin\n";
-    assert!(has_rule(&lint(df), "DF062"));
+    assert!(no_rule(&lint(df), "DF062"));
 }
 
 #[test]
-fn df062_fires_on_direct_self_reference() {
+fn env_self_reference_is_not_reported() {
     // VAR=$VAR — bare self-assignment
     let df = "FROM alpine:3.19\nENV MY_VAR=$MY_VAR\n";
-    assert!(has_rule(&lint(df), "DF062"));
+    assert!(no_rule(&lint(df), "DF062"));
 }
 
 #[test]
-fn df062_fires_on_quoted_self_reference() {
+fn quoted_env_self_reference_is_not_reported() {
     // VAR="$VAR" — quoted self-assignment
     let df = "FROM alpine:3.19\nENV PATH=\"$PATH\"\n";
-    assert!(has_rule(&lint(df), "DF062"));
+    assert!(no_rule(&lint(df), "DF062"));
 }
 
 #[test]
-fn df062_clear_on_no_self_reference() {
+fn env_normal_assignment_is_not_reported() {
     let df = "FROM alpine:3.19\nENV MYAPP_PATH=/usr/local/bin\n";
     assert!(no_rule(&lint(df), "DF062"));
 }
 
 #[test]
-fn df062_clear_on_path_append() {
+fn env_path_append_with_another_variable_is_not_reported() {
     // VAR="prefix:$OTHER_VAR" — extending PATH using a different previously-set variable
     let df = "FROM python:3.13-slim\nENV VENV=/opt/venv/bin\nENV PATH=\"$VENV:$PATH\"\n";
     assert!(no_rule(&lint(df), "DF062"));
 }
 
 #[test]
-fn df062_clear_on_normal_assignment() {
+fn env_reference_to_another_variable_is_not_reported() {
     // BAZ=$FOO — referencing a different variable
     let df = "FROM alpine:3.19\nENV FOO=bar\nENV BAZ=$FOO\n";
     assert!(no_rule(&lint(df), "DF062"));
 }
 
 #[test]
-fn df062_clear_on_arg_to_env_promotion() {
+fn env_arg_promotion_is_not_reported() {
     let df = "FROM alpine:3.19\nARG MY_VARIABLE\nENV MY_VARIABLE=${MY_VARIABLE}\n";
     assert!(no_rule(&lint(df), "DF062"));
 }
 
 #[test]
-fn df062_does_not_treat_global_arg_as_stage_scoped() {
+fn global_arg_env_promotion_is_not_reported() {
     let df = "ARG MY_VARIABLE\nFROM alpine:3.19\nENV MY_VARIABLE=${MY_VARIABLE}\n";
-    assert!(has_rule(&lint(df), "DF062"));
+    assert!(no_rule(&lint(df), "DF062"));
 }
 
 // ─── DF063: COPY relative dest without WORKDIR ───────────────────────────────

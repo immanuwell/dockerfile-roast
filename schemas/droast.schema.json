@@ -60,6 +60,7 @@
       "properties": {
         "skip": { "$ref": "#/$defs/ruleList" },
         "min-severity": { "$ref": "#/$defs/severity" },
+        "fail-on": { "$ref": "#/$defs/severity" },
         "no-roast": { "type": "boolean" },
         "no-fail": { "type": "boolean" },
         "format": {

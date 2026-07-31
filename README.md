@@ -177,6 +177,7 @@ droast works out of the box with zero configuration. for teams that want to comm
 preset       = "production"       # minimal | security | performance | production | strict
 skip         = ["DF012", "DF022"]
 min-severity = "warning"
+fail-on      = "warning"          # optional: make warnings fail CI
 no-roast     = true
 
 [severity-overrides]
@@ -199,6 +200,10 @@ To keep lint configuration elsewhere, pass its path explicitly:
 ```bash
 droast --config .lint/droast.toml Dockerfile
 ```
+
+Shared TOML files are also supported: place the same settings under
+`[tool.droast]` (for example in `pyproject.toml`) and pass that file to
+`--config`.
 
 To migrate a Hadolint policy, generate an equivalent `droast.toml` from its YAML configuration:
 
@@ -262,6 +267,7 @@ available inputs (all optional):
 |-------|---------|-------------|
 | `files` | `Dockerfile` | file(s) or glob to lint |
 | `min-severity` | config or `info` | `info`, `warning`, or `error` |
+| `fail-on` | config or `error` | Fail on `info`, `warning`, or `error` findings |
 | `preset` | — | `minimal`, `security`, `performance`, `production`, or `strict` |
 | `category` | — | comma-separated rule categories to run |
 | `skip-category` | — | comma-separated rule categories to skip |
@@ -461,7 +467,7 @@ droast completion fish | source
   DF059    WARN     correctness,maintainability        Use apt-get or apt-cache instead of apt in scripts
   DF060    INFO     maintainability,reliability        Avoid running pointless interactive commands inside containers
   DF061    WARN     correctness,maintainability        Do not use --platform in FROM unless required
-  DF062    ERROR    correctness,reproducibility        ENV variable must not reference itself in the same statement
+  DF062    INFO     correctness,reproducibility        ENV references may use inherited values
   DF063    WARN     correctness,maintainability        COPY to relative destination requires WORKDIR to be set first
   DF064    WARN     performance                        useradd without -l flag may create excessively large images
   DF065    WARN     reproducibility,supply-chain       FROM uses an unrecognised image registry
@@ -517,7 +523,7 @@ rule categories: base images · security · package managers · layer hygiene ·
 
 ## exit codes
 
-`0` = clean (or `--no-fail`), `1` = errors found.
+`0` = no findings at the configured failure level (or `--no-fail`), `1` = blocking findings found.
 
 `--no-fail` is useful for advisory CI runs where you want the output but dont want to block the build yet.
 

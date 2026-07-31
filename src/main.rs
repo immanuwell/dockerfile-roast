@@ -221,6 +221,10 @@ struct Cli {
     #[arg(short = 's', long, value_enum)]
     min_severity: Option<SeverityArg>,
 
+    /// Exit unsuccessfully when a finding reaches this severity
+    #[arg(long, value_enum)]
+    fail_on: Option<SeverityArg>,
+
     /// Skip these comma-separated rule IDs
     #[arg(long, value_delimiter = ',', value_name = "RULE")]
     skip: Vec<String>,
@@ -371,11 +375,11 @@ fn main() -> Result<()> {
             let file_no_fail = cli.no_fail || settings.no_fail.unwrap_or(no_fail);
             match lint_one(file, &opts) {
                 Ok(mut result) => {
-                    let has_blocking_error = result.findings.iter().any(|finding| {
-                        finding.severity == Severity::Error
+                    let has_blocking_finding = result.findings.iter().any(|finding| {
+                        finding.severity >= fail_on_threshold(&settings, &cli)
                             && is_new_finding(baseline.as_ref(), &result.file, finding)
                     });
-                    if has_blocking_error && !file_no_fail {
+                    if has_blocking_finding && !file_no_fail {
                         any_error = true;
                     }
                     if cli.only_new {
@@ -412,11 +416,11 @@ fn main() -> Result<()> {
             match lint_one(file, &opts) {
                 Ok(mut result) => {
                     let finding_count_before_filtering = result.findings.len();
-                    let has_blocking_error = result.findings.iter().any(|finding| {
-                        finding.severity == Severity::Error
+                    let has_blocking_finding = result.findings.iter().any(|finding| {
+                        finding.severity >= fail_on_threshold(&settings, &cli)
                             && is_new_finding(baseline.as_ref(), &result.file, finding)
                     });
-                    if has_blocking_error && !file_no_fail {
+                    if has_blocking_finding && !file_no_fail {
                         any_error = true;
                     }
                     if cli.only_new {
@@ -696,6 +700,7 @@ const CONFIG_TEMPLATE: &str = r#"# droast.toml - optional project and organizati
 # Rules and severity
 # skip = ["DF012", "DF022"]
 # min-severity = "info"
+# fail-on = "error" # info | warning | error
 # categories = ["security", "supply-chain"]
 # skip-categories = ["maintainability"]
 
@@ -787,6 +792,13 @@ fn parse_severity(s: Option<&str>) -> Option<Severity> {
             None
         }
     }
+}
+
+fn fail_on_threshold(settings: &PolicySettings, cli: &Cli) -> Severity {
+    cli.fail_on
+        .map(Into::into)
+        .or_else(|| parse_severity(settings.fail_on.as_deref()))
+        .unwrap_or(Severity::Error)
 }
 
 /// Flush stdout+stderr then exit.

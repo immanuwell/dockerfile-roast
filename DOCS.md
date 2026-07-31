@@ -320,6 +320,7 @@ printf 'FROM alpine:latest\n' | droast -
 | `--skip-category NAMES` | Skip comma-separated rule categories |
 | `-f, --format FORMAT` | Select `terminal`, `json`, `github`, `compact`, or `sarif` |
 | `-s, --min-severity LEVEL` | Select `info`, `warning`, or `error` |
+| `--fail-on LEVEL` | Exit unsuccessfully for findings at or above `info`, `warning`, or `error` |
 | `--skip IDS` | Skip comma-separated rule IDs |
 | `--only IDS` | Run only comma-separated rule IDs |
 | `--no-roast` | Show technical messages only |
@@ -536,6 +537,7 @@ See [`examples/droast-enterprise.toml`](examples/droast-enterprise.toml) for a c
 | `extends` | string or array | Local configuration files to inherit |
 | `preset` | string | Built-in preset name |
 | `min-severity` | string | `info`, `warning`, `error` |
+| `fail-on` | string | `info`, `warning`, `error`; findings at or above this level fail the run |
 | `categories` | array | Run matching rule categories |
 | `skip-categories` | array | Skip matching rule categories |
 | `severity-overrides` | table | Change individual rule severities |
@@ -2241,7 +2243,7 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 | DF040 | error | Keep `EXPOSE` ports in the range 0 through 65535 |
 | DF041 | error | Keep only one effective `HEALTHCHECK` |
 | DF060 | info | Remove pointless interactive commands |
-| DF062 | error | Do not self-reference an `ENV` variable in one statement |
+| DF062 | info | ENV references may use inherited values |
 | DF064 | warning | Use `useradd -l` to avoid oversized user metadata layers |
 | DF068 | error | Do not use forbidden instructions as `ONBUILD` triggers |
 | DF074 | error | Require final-stage labels to match configured policy |

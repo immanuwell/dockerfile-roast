@@ -13,6 +13,7 @@ use crate::rules::{all_rules, ALL_CATEGORIES};
 pub struct PolicySettings {
     pub skip: Option<Vec<String>>,
     pub min_severity: Option<String>,
+    pub fail_on: Option<String>,
     pub no_roast: Option<bool>,
     pub no_fail: Option<bool>,
     pub format: Option<String>,
@@ -106,6 +107,7 @@ impl PolicySettings {
     pub fn merge(&mut self, child: PolicySettings) {
         merge_list(&mut self.skip, child.skip);
         replace(&mut self.min_severity, child.min_severity);
+        replace(&mut self.fail_on, child.fail_on);
         replace(&mut self.no_roast, child.no_roast);
         replace(&mut self.no_fail, child.no_fail);
         replace(&mut self.format, child.format);
@@ -163,6 +165,7 @@ impl PolicySettings {
     fn overlay_preset(&mut self, explicit: PolicySettings) {
         merge_list(&mut self.skip, explicit.skip);
         replace(&mut self.min_severity, explicit.min_severity);
+        replace(&mut self.fail_on, explicit.fail_on);
         replace(&mut self.no_roast, explicit.no_roast);
         replace(&mut self.no_fail, explicit.no_fail);
         replace(&mut self.format, explicit.format);
@@ -245,7 +248,7 @@ impl DroastConfig {
 
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file '{}'", path.display()))?;
-        let mut local: DroastConfig = toml::from_str(&content).map_err(|error| {
+        let mut local = parse_config(&content).map_err(|error| {
             anyhow::anyhow!("Invalid config file '{}': {error}", path.display())
         })?;
         local.source_path = Some(path.clone());
@@ -378,6 +381,20 @@ impl DroastConfig {
     }
 }
 
+/// Deserialize a standalone droast policy, or the `[tool.droast]` table from a
+/// shared TOML file such as `pyproject.toml`. A nested policy takes precedence
+/// so unrelated tool settings are never treated as droast configuration.
+fn parse_config(content: &str) -> Result<DroastConfig, toml::de::Error> {
+    let document: toml::Value = toml::from_str(content)?;
+    let value = document
+        .get("tool")
+        .and_then(toml::Value::as_table)
+        .and_then(|tool| tool.get("droast"))
+        .cloned()
+        .unwrap_or(document);
+    value.try_into()
+}
+
 impl PathOverride {
     fn matches(&self, path: &Path) -> anyhow::Result<bool> {
         let absolute = absolute_path(path)?;
@@ -462,6 +479,7 @@ fn validate_settings(settings: &PolicySettings, scope: &str) -> anyhow::Result<(
     for severity in settings
         .min_severity
         .iter()
+        .chain(settings.fail_on.iter())
         .chain(settings.severity_overrides.values())
     {
         if !matches!(
@@ -602,6 +620,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn loads_droast_settings_from_a_shared_tool_table() {
+        let root = fixture("shared-tool-table");
+        let path = root.join("pyproject.toml");
+        std::fs::write(
+            &path,
+            r#"
+[tool.pylint]
+disable = ["missing-docstring"]
+
+[tool.droast]
+preset = "production"
+no-roast = true
+
+[tool.droast.severity-overrides]
+DF013 = "error"
+
+[severity-overrides]
+DF002 = "info"
+"#,
+        )
+        .unwrap();
+
+        let config = DroastConfig::load_from(&path).unwrap();
+        assert_eq!(config.settings.no_roast, Some(true));
+        assert_eq!(config.settings.min_severity.as_deref(), Some("warning"));
+        assert_eq!(config.settings.severity_overrides["DF013"], "error");
+        assert!(!config.settings.severity_overrides.contains_key("DF002"));
     }
 
     #[test]

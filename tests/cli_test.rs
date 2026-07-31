@@ -31,6 +31,48 @@ fn policy_fixture(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn fail_on_controls_the_exit_status_from_cli_and_config() {
+    let root = policy_fixture("fail-on");
+    let dockerfile = root.join("Dockerfile");
+    let config = root.join("droast.toml");
+    std::fs::write(&dockerfile, "FROM alpine:latest\n").unwrap();
+    std::fs::write(&config, "fail-on = \"warning\"\n").unwrap();
+
+    let config_failure = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--only",
+            "DF001",
+            "--no-roast",
+            "--check-dockerignore=false",
+            dockerfile.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        config_failure.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&config_failure.stdout)
+    );
+
+    let cli_failure = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            "--fail-on",
+            "info",
+            "--only",
+            "DF001",
+            "--no-roast",
+            "--check-dockerignore=false",
+            dockerfile.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(cli_failure.status.code(), Some(1));
+}
+
+#[test]
 fn root_long_help_starts_with_the_banner_but_subcommand_help_does_not() {
     let root_help = Command::new(env!("CARGO_BIN_EXE_droast"))
         .arg("--help")
