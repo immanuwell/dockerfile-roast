@@ -1,6 +1,6 @@
 [package]
 name = "immanuwell/droast"
-version = "1.4.12" # droast:release-version
+version = "1.4.13" # droast:release-version
 description = "A fast Dockerfile linter with practical security, correctness, and build-quality checks."
 license = "MIT"
 readme = "README.md"
