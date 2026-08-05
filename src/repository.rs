@@ -930,6 +930,9 @@ fn is_dockerfile_name(path: &Path) -> bool {
         || name
             .strip_suffix(".Dockerfile")
             .is_some_and(|prefix| !prefix.is_empty())
+        || name
+            .strip_suffix(".dockerfile")
+            .is_some_and(|prefix| !prefix.is_empty())
 }
 
 fn is_compose_file(path: &Path) -> bool {
@@ -1124,6 +1127,7 @@ mod tests {
             "Dockerfile",
             "Dockerfile.dev",
             "web.Dockerfile",
+            "web.dockerfile",
             "Containerfile",
             "Containerfile.release",
         ] {

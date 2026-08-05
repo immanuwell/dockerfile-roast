@@ -755,6 +755,34 @@ fn directory_discovery_skips_dockerfile_specific_ignore_files() {
 }
 
 #[test]
+fn directory_discovery_includes_lowercase_dockerfile_suffixes() {
+    let root = policy_fixture("lowercase-dockerfile-discovery");
+    std::fs::write(root.join("app.dockerfile"), "FROM alpine:3.20\nCMD [\"true\"]\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            root.to_str().unwrap(),
+            "--format",
+            "json",
+            "--only",
+            "DF071",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(document["file"].as_str().unwrap().ends_with("app.dockerfile"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn single_file_json_output_remains_an_object() {
     let dockerfile = repository_fixture().join("Dockerfile");
     let output = Command::new(env!("CARGO_BIN_EXE_droast"))

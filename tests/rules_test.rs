@@ -1010,6 +1010,18 @@ fn df051_clear_on_local_pip_package() {
     assert!(no_rule(&lint(df), "DF051"));
 }
 
+#[test]
+fn df051_clear_on_locally_built_wheels() {
+    let df = "FROM python:3.12\nRUN pip3 install --no-cache-dir *.whl && rm -f *.whl\nCMD [\"python\", \"app.py\"]\n";
+    assert!(no_rule(&lint(df), "DF051"));
+}
+
+#[test]
+fn df051_still_fires_when_a_wheel_is_combined_with_an_unpinned_package() {
+    let df = "FROM python:3.12\nRUN pip install flask *.whl\nCMD [\"python\", \"app.py\"]\n";
+    assert!(has_rule(&lint(df), "DF051"));
+}
+
 // ─── DF052: apk version pinning ──────────────────────────────────────────────
 
 #[test]
@@ -1425,6 +1437,18 @@ fn df066_fires_on_source_builtin_no_shell() {
 fn df066_clear_with_shell_instruction() {
     let df = "FROM alpine:3.19\nSHELL [\"/bin/bash\", \"-c\"]\nRUN [[ -f /etc/os-release ]] && cat /etc/os-release\n";
     assert!(no_rule(&lint(df), "DF066"));
+}
+
+#[test]
+fn df066_clear_when_bash_c_owns_the_bash_syntax() {
+    let df = "FROM ubuntu:22.04\nRUN bash -c \"source $NVM_DIR/nvm.sh && make html\"\n";
+    assert!(no_rule(&lint(df), "DF066"));
+}
+
+#[test]
+fn df066_still_fires_on_bash_syntax_outside_bash_c() {
+    let df = "FROM ubuntu:22.04\nRUN bash -c \"echo ready\" && source /etc/profile\n";
+    assert!(has_rule(&lint(df), "DF066"));
 }
 
 // ─── DF067: COPY of archive (use ADD instead) ────────────────────────────────

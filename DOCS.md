@@ -383,6 +383,7 @@ Warnings alone do not produce exit code `1`. Use output review or a chosen rule 
 - `Dockerfile`
 - `Dockerfile.*`
 - `*.Dockerfile`
+- `*.dockerfile`
 - `Containerfile`
 - `Containerfile.*`
 - Dockerfiles referenced by Compose files
@@ -2334,6 +2335,7 @@ find . -type f \( \
   -name 'Dockerfile' -o \
   -name 'Dockerfile.*' -o \
   -name '*.Dockerfile' -o \
+  -name '*.dockerfile' -o \
   -name 'Containerfile' -o \
   -name 'Containerfile.*' \
 \)

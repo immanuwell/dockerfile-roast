@@ -2200,8 +2200,12 @@ fn rule_bash_syntax_no_shell(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
     ];
     let mut findings = Vec::new();
     for i in instrs_of(instrs, "RUN") {
+        // `RUN` itself uses /bin/sh, but an explicit `bash -c` owns the quoted
+        // command that follows it. Ignore bash-only syntax inside that command
+        // while continuing to inspect the rest of the RUN instruction.
+        let command = command_without_bash_c_scripts(&i.arguments);
         for (pattern, label) in BASH_ONLY {
-            if i.arguments.contains(pattern) {
+            if command.contains(pattern) {
                 findings.push(Finding {
                     column: 0,
                     end_line: 0,
@@ -2226,6 +2230,70 @@ fn rule_bash_syntax_no_shell(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
         }
     }
     findings
+}
+
+fn command_without_bash_c_scripts(command: &str) -> String {
+    let mut masked = command.as_bytes().to_vec();
+    let mut cursor = 0;
+
+    while let Some((_, bash_end, bash)) = next_shell_token(command, cursor) {
+        cursor = bash_end;
+        if !matches!(bash, "bash" | "/bin/bash" | "/usr/bin/bash") {
+            continue;
+        }
+
+        let mut option_cursor = bash_end;
+        let mut command_option = false;
+        while let Some((_, option_end, option)) = next_shell_token(command, option_cursor) {
+            option_cursor = option_end;
+            if option == "--command"
+                || (option.starts_with('-')
+                    && !option.starts_with("--")
+                    && option[1..].contains('c'))
+            {
+                command_option = true;
+                break;
+            }
+            if !option.starts_with('-') {
+                break;
+            }
+        }
+
+        if !command_option {
+            continue;
+        }
+        if let Some((script_start, script_end, _)) = next_shell_token(command, option_cursor) {
+            masked[script_start..script_end].fill(b' ');
+            cursor = script_end;
+        }
+    }
+
+    String::from_utf8(masked).expect("masking preserves UTF-8")
+}
+
+fn next_shell_token(command: &str, offset: usize) -> Option<(usize, usize, &str)> {
+    let bytes = command.as_bytes();
+    let mut start = offset;
+    while start < bytes.len() && bytes[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    if start == bytes.len() {
+        return None;
+    }
+
+    let mut end = start;
+    let mut quote = None;
+    while end < bytes.len() {
+        match (quote, bytes[end]) {
+            (None, b'\'' | b'\"') => quote = Some(bytes[end]),
+            (Some(current), byte) if byte == current => quote = None,
+            (_, b'\\') if quote == Some(b'\"') && end + 1 < bytes.len() => end += 1,
+            (None, byte) if byte.is_ascii_whitespace() => break,
+            _ => {}
+        }
+        end += 1;
+    }
+    Some((start, end, &command[start..end]))
 }
 
 fn rule_untrusted_registry(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -2544,18 +2612,31 @@ fn rule_pip_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
 }
 
 fn is_local_pip_install(command: &str) -> bool {
-    let Some(install) = command.find("pip install") else {
+    let Some(arguments) = pip_install_arguments(command) else {
         return false;
     };
-    command[install + "pip install".len()..]
+    let targets = arguments
+        .split(['&', '|', ';'])
+        .next()
+        .unwrap_or_default()
         .split_whitespace()
         .filter(|argument| !argument.starts_with('-'))
-        .any(|argument| {
-            matches!(argument, "." | "./")
+        .collect::<Vec<_>>();
+    !targets.is_empty()
+        && targets.iter().all(|argument| {
+            matches!(*argument, "." | "./")
                 || argument.starts_with("./")
                 || argument.starts_with("../")
+                || argument.starts_with('/')
                 || argument.starts_with("file:")
+                || (argument.ends_with(".whl") && !argument.contains("://"))
         })
+}
+
+fn pip_install_arguments(command: &str) -> Option<&str> {
+    ["pip install", "pip3 install"]
+        .into_iter()
+        .find_map(|install| command.find(install).map(|position| &command[position + install.len()..]))
 }
 
 fn rule_apk_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
