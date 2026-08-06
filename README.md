@@ -557,3 +557,6 @@ The benchmark measures execution speed and binary size, not detection quality. F
 ---
 
 If droast is useful to you, [buy me a coffee](https://buymeacoffee.com/immanuwell).
+
+you can also give droast a ⭐️!
+
