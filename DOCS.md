@@ -1291,9 +1291,10 @@ droast --format sarif --no-roast --no-fail . > droast.sarif
 ### Baselines and stable fingerprints
 
 Every JSON finding includes a deterministic `sha256:` fingerprint. SARIF results
-carry the same value in `partialFingerprints.droast/v1`. The identity uses the
-normalized file path, rule ID, and diagnostic message, so unrelated line
-insertions do not invalidate an accepted finding.
+carry the same value in `partialFingerprints.droast/v2`. The identity uses the
+normalized file path, rule ID, source location, and diagnostic message. This
+keeps repeated findings in one Dockerfile independently suppressible. Version 1
+baselines must be regenerated because they collapsed repeated diagnostics.
 
 Record the current findings for an existing repository:
 
@@ -2154,7 +2155,7 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 |---|---|---|
 | DF001 | warning | Use a specific base image tag instead of `latest` |
 | DF005 | info | Pin package versions for repeatable builds |
-| DF011 | warning | Use multi-stage builds when they reduce the final image |
+| DF011 | info | Use multi-stage builds when they reduce the final image |
 | DF023 | warning | Give multiple `FROM` stages aliases |
 | DF024 | warning | Avoid `:latest` on aliased stages |
 | DF042 | error | Keep stage aliases unique |
@@ -2172,7 +2173,7 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 | DF013 | error | Do not store secrets in `ENV` |
 | DF014 | error | Do not hardcode passwords or tokens in `ARG` or `ENV` |
 | DF020 | info | Set an explicit non-root `USER` |
-| DF021 | error | Do not pipe remote downloads directly to a shell |
+| DF021 | error | Do not execute unverified remote downloads with a shell or interpreter |
 | DF034 | error | Do not use `chmod 777` |
 | DF057 | warning | Set `pipefail` for shell pipelines |
 | DF066 | warning | Set an appropriate `SHELL` before Bash-specific syntax |
@@ -2181,12 +2182,12 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 
 | Rule | Severity | Check |
 |---|---|---|
-| DF003 | warning | Combine related `RUN` commands to reduce layers |
+| DF003 | info | Combine related `RUN` commands to reduce layers |
 | DF006 | warning | Prefer `COPY` over `ADD` for local files |
 | DF007 | warning | Avoid broad `COPY . .` operations |
 | DF008 | info | Use `WORKDIR` instead of inline `cd` |
 | DF009 | warning | Use absolute `WORKDIR` paths |
-| DF026 | warning | Avoid recursive copies from filesystem root |
+| DF026 | warning | Avoid copying local build-context content to filesystem root |
 | DF033 | info | Use an effective `.dockerignore` for each build context |
 | DF048 | error | End multi-source `COPY` destinations with `/` |
 | DF049 | warning | Reserved for invalid `COPY --from` stage references |
@@ -2225,7 +2226,7 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 |---|---|---|
 | DF035 | info | Make curl fail on HTTP and transfer errors |
 | DF056 | info | Limit wget progress output in build logs |
-| DF058 | warning | Use either wget or curl consistently |
+| DF058 | info | Use either wget or curl consistently |
 
 ### Runtime behavior and metadata
 
@@ -2245,7 +2246,7 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 | DF041 | error | Keep only one effective `HEALTHCHECK` |
 | DF060 | info | Remove pointless interactive commands |
 | DF062 | info | ENV references may use inherited values |
-| DF064 | warning | Use `useradd -l` to avoid oversized user metadata layers |
+| DF064 | warning | Use `useradd -l` when assigning an explicitly high UID |
 | DF068 | error | Do not use forbidden instructions as `ONBUILD` triggers |
 | DF074 | error | Require final-stage labels to match configured policy |
 | DF075 | info | Lint `Containerfile.in` after Podman CPP preprocessing |

@@ -245,6 +245,18 @@ fn lone_continuation_token_is_reported_without_panicking() {
 }
 
 #[test]
+fn trailing_whitespace_after_continuation_escape_is_reported() {
+    let document = parse_document("FROM alpine:3.20\nRUN echo one \\  \n    && echo two\n");
+    let diagnostic = document
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "P013")
+        .expect("trailing continuation whitespace diagnostic");
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diagnostic.span.start.line, 2);
+}
+
+#[test]
 fn modern_fixture_parses_without_recovery_diagnostics() {
     let source = include_str!("fixtures/modern.Dockerfile");
     let document = parse_document(source);

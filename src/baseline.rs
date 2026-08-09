@@ -16,8 +16,12 @@ pub fn load(path: &Path) -> Result<BTreeSet<String>> {
         .with_context(|| format!("Failed to read baseline '{}'", path.display()))?;
     let document: BaselineDocument = serde_json::from_str(&content)
         .with_context(|| format!("Baseline '{}' is not valid JSON", path.display()))?;
-    if document.schema_version != 1 {
-        anyhow::bail!("Baseline '{}' uses unsupported schema version {}", path.display(), document.schema_version);
+    if document.schema_version != 2 {
+        anyhow::bail!(
+            "Baseline '{}' uses unsupported schema version {}",
+            path.display(),
+            document.schema_version
+        );
     }
     Ok(document.fingerprints)
 }
@@ -25,9 +29,16 @@ pub fn load(path: &Path) -> Result<BTreeSet<String>> {
 pub fn write(path: &Path, results: &[(&str, &[Finding])]) -> Result<()> {
     let fingerprints = results
         .iter()
-        .flat_map(|(file, findings)| findings.iter().map(move |finding| finding_fingerprint(file, finding)))
+        .flat_map(|(file, findings)| {
+            findings
+                .iter()
+                .map(move |finding| finding_fingerprint(file, finding))
+        })
         .collect();
-    let document = BaselineDocument { schema_version: 1, fingerprints };
+    let document = BaselineDocument {
+        schema_version: 2,
+        fingerprints,
+    };
     let content = format!("{}\n", serde_json::to_string_pretty(&document)?);
     std::fs::write(path, content)
         .with_context(|| format!("Failed to write baseline '{}'", path.display()))

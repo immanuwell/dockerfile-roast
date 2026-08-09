@@ -244,6 +244,15 @@ pub fn parse_document(content: &str) -> Dockerfile {
                 }
             }
 
+            if continuation_has_trailing_whitespace(semantic, escape) {
+                diagnostics.push(ParseDiagnostic {
+                    code: "P013",
+                    severity: DiagnosticSeverity::Warning,
+                    message: "line continuation has trailing whitespace after the escape character"
+                        .to_string(),
+                    span: span(&lines, physical.start, physical.semantic_end),
+                });
+            }
             let cut = continuation_cut(semantic, escape);
             let semantic_start = if is_first {
                 keyword_start
@@ -586,6 +595,11 @@ fn continuation_cut(line: &str, escape: char) -> Option<usize> {
         .take_while(|character| *character == escape)
         .count();
     (count % 2 == 1).then(|| end - escape.len_utf8())
+}
+
+fn continuation_has_trailing_whitespace(line: &str, escape: char) -> bool {
+    let trimmed = line.trim_end_matches([' ', '\t']);
+    trimmed.len() < line.len() && trimmed.ends_with(escape)
 }
 
 fn is_known_instruction(keyword: &str) -> bool {

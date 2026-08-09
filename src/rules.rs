@@ -110,7 +110,7 @@ pub fn all_rules() -> Vec<Rule> {
         },
         Rule {
             id: "DF011",
-            severity: Severity::Warning,
+            severity: Severity::Info,
             description: "Use multi-stage builds to reduce image size",
             func: rule_no_multistage,
         },
@@ -134,7 +134,7 @@ pub fn all_rules() -> Vec<Rule> {
         },
         Rule {
             id: "DF003",
-            severity: Severity::Warning,
+            severity: Severity::Info,
             description: "Combine RUN commands to reduce layers",
             func: rule_many_run_layers,
         },
@@ -231,7 +231,7 @@ pub fn all_rules() -> Vec<Rule> {
         Rule {
             id: "DF026",
             severity: Severity::Warning,
-            description: "Avoid recursive COPY from root",
+            description: "Avoid local COPY to the filesystem root",
             func: rule_copy_root,
         },
         Rule {
@@ -291,7 +291,7 @@ pub fn all_rules() -> Vec<Rule> {
         Rule {
             id: "DF021",
             severity: Severity::Error,
-            description: "Avoid wget|sh pipe patterns (execute remote code)",
+            description: "Avoid executing unverified remote scripts",
             func: rule_curl_pipe_sh,
         },
         Rule {
@@ -440,7 +440,7 @@ pub fn all_rules() -> Vec<Rule> {
         },
         Rule {
             id: "DF058",
-            severity: Severity::Warning,
+            severity: Severity::Info,
             description: "Use either wget or curl consistently, not both",
             func: rule_wget_and_curl,
         },
@@ -477,7 +477,7 @@ pub fn all_rules() -> Vec<Rule> {
         Rule {
             id: "DF064",
             severity: Severity::Warning,
-            description: "useradd without -l flag may create excessively large images",
+            description: "Use useradd -l with explicitly high UIDs",
             func: rule_useradd_no_l,
         },
         Rule {
@@ -828,6 +828,13 @@ fn instruction_operands(instruction: &Instruction) -> Vec<&str> {
     }
 }
 
+fn is_absolute_container_path(path: &str) -> bool {
+    let path = path.trim().trim_matches(['\'', '"']);
+    path.starts_with('/')
+        || path.starts_with('$')
+        || matches!(path.as_bytes(), [drive, b':', b'/' | b'\\', ..] if drive.is_ascii_alphabetic())
+}
+
 fn ephemeral_mount_targets(instruction: &Instruction) -> Vec<&str> {
     instruction
         .flags
@@ -1046,7 +1053,7 @@ fn rule_no_multistage(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             end_line: 0,
             end_column: 0,
             rule: "DF011".into(),
-            severity: Severity::Warning,
+            severity: Severity::Info,
             line: first_from.line,
             message: "Single-stage build with a heavy build image — consider multi-stage builds"
                 .to_string(),
@@ -1078,7 +1085,7 @@ fn rule_many_run_layers(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     end_line: 0,
                     end_column: 0,
                     rule: "DF003".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Info,
                     line: start_line,
                     message: format!(
                         "{} consecutive RUN instructions could be merged into one",
@@ -1100,7 +1107,7 @@ fn rule_many_run_layers(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             end_line: 0,
             end_column: 0,
             rule: "DF003".into(),
-            severity: Severity::Warning,
+            severity: Severity::Info,
             line: start_line,
             message: format!("{} consecutive RUN instructions could be merged into one", consecutive),
             roast: format!(
@@ -1198,7 +1205,7 @@ fn rule_relative_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .into_iter()
         .filter(|i| {
             let path = i.arguments.trim().trim_matches(['\'', '"']);
-            !path.starts_with('/') && !path.starts_with('$')
+            !is_absolute_container_path(path)
         })
         .map(|i| Finding {
             column: 0,
@@ -1379,23 +1386,41 @@ fn rule_shell_form_cmd(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 }
 
 fn rule_copy_root(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    instrs_of(instrs, "COPY")
-        .into_iter()
-        .filter(|i| matches!(instruction_operands(i).last(), Some(&"/" | &"/.")))
-        .map(|i| Finding {
+    let mut direct_scratch_stage = false;
+    let mut findings = Vec::new();
+
+    for instruction in instrs {
+        if instruction.instruction == "FROM" {
+            direct_scratch_stage = parse_from_arguments(&instruction.arguments)
+                .is_some_and(|from| from.image.eq_ignore_ascii_case("scratch"));
+            continue;
+        }
+        if instruction.instruction != "COPY"
+            || direct_scratch_stage
+            || instruction
+                .flags
+                .iter()
+                .any(|flag| flag.name.eq_ignore_ascii_case("from"))
+            || !matches!(instruction_operands(instruction).last(), Some(&"/" | &"/."))
+        {
+            continue;
+        }
+        findings.push(Finding {
             column: 0,
             end_line: 0,
             end_column: 0,
             rule: "DF026".into(),
             severity: Severity::Warning,
-            line: i.line,
+            line: instruction.line,
             message: "COPY to filesystem root — this may overwrite system files".to_string(),
             roast: "Copying files directly to /? Brave. Reckless. Chaotic. You're one typo away \
                     from overwriting /bin/sh and creating a container that doesn't even boot. \
                     Use a dedicated app directory."
                 .to_string(),
-        })
-        .collect()
+        });
+    }
+
+    findings
 }
 
 fn rule_pip_no_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -1438,10 +1463,12 @@ fn rule_pip_no_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                 let arguments = &instruction.arguments;
                 if is_uv_pip_install(arguments) {
                     !arguments.contains("--no-cache")
+                        && !arguments.contains("uv cache clean")
                         && !has_language_cache_mount(instruction, "uv")
                 } else {
                     (arguments.contains("pip install") || arguments.contains("pip3 install"))
                         && !arguments.contains("--no-cache-dir")
+                        && !arguments.contains("pip cache purge")
                         && !pip_cache_disabled
                         && !has_language_cache_mount(instruction, "pip")
                 }
@@ -1657,15 +1684,17 @@ fn rule_no_cmd_or_entrypoint(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
 }
 
 fn rule_uncleaned_package_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let apt_distclean = Regex::new(r"\bapt-get\s+distclean\b").expect("valid apt distclean regex");
+    let apt_distclean =
+        Regex::new(r"\bapt-get\s+dist-?clean\b").expect("valid apt dist-clean regex");
     let mut findings = Vec::new();
     for i in instrs_of(instrs, "RUN") {
         let arg = &i.arguments;
         let has_apt = arg.contains("apt-get install") || arg.contains("apt install");
         let has_yum = arg.contains("yum install") || arg.contains("dnf install");
         let has_apk = arg.contains("apk add") && !arg.contains("--no-cache");
-        let cleans_apt_lists =
-            arg.contains("rm -rf /var/lib/apt/lists") || apt_distclean.is_match(arg);
+        let cleans_apt_lists = arg.contains("rm -rf /var/lib/apt/lists")
+            || apt_distclean.is_match(arg)
+            || removes_brace_expanded_apt_state(arg);
         let apt_lists_are_ephemeral = has_ephemeral_mount_covering(i, "/var/lib/apt/lists");
         if has_apt && !cleans_apt_lists && !apt_lists_are_ephemeral {
             findings.push(Finding {
@@ -1719,6 +1748,12 @@ fn rule_uncleaned_package_cache(instrs: &[Instruction], _raw: &str) -> Vec<Findi
         }
     }
     findings
+}
+
+fn removes_brace_expanded_apt_state(command: &str) -> bool {
+    command.split_whitespace().any(|token| {
+        token.starts_with("/var/lib/{") && token.contains("apt") && token.contains('}')
+    })
 }
 
 fn rule_unpinned_packages(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -1852,29 +1887,65 @@ fn apt_assumes_yes(tokens: &[&str]) -> bool {
 }
 
 fn rule_apt_no_y(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    instrs_of(instrs, "RUN")
-        .into_iter()
-        .filter(|i| {
-            let a = &i.arguments;
-            apt_install_commands(a)
-                .iter()
-                .any(|(tokens, _)| !apt_assumes_yes(tokens))
-                && !a.contains("DEBIAN_FRONTEND=noninteractive")
-        })
-        .map(|i| Finding {
-            column: 0,
-            end_line: 0,
-            end_column: 0,
-            rule: "DF015".into(),
-            severity: Severity::Error,
-            line: i.line,
-            message: "apt-get install without -y flag will hang waiting for user input".to_string(),
-            roast: "apt-get install without -y? Your build is going to sit there, patiently \
-                    waiting for a 'yes' that will never come, like a golden retriever waiting \
-                    for an owner who's on a cruise ship."
-                .to_string(),
-        })
-        .collect()
+    let mut stage_settings = std::collections::HashMap::new();
+    let mut current_alias = None;
+    let mut assumes_yes = false;
+    let mut findings = Vec::new();
+
+    for instruction in instrs {
+        if instruction.instruction == "FROM" {
+            let Some(from) = parse_from_arguments(&instruction.arguments) else {
+                continue;
+            };
+            assumes_yes = stage_settings
+                .get(&from.image.to_ascii_lowercase())
+                .copied()
+                .unwrap_or(false);
+            current_alias = from.alias.map(str::to_ascii_lowercase);
+        } else if instruction.instruction == "RUN" {
+            let command_setting = apt_assume_yes_setting(&instruction.arguments);
+            let effective_assumes_yes = command_setting.unwrap_or(assumes_yes);
+            if !effective_assumes_yes
+                && apt_install_commands(&instruction.arguments)
+                    .iter()
+                    .any(|(tokens, _)| !apt_assumes_yes(tokens))
+                && !instruction
+                    .arguments
+                    .contains("DEBIAN_FRONTEND=noninteractive")
+            {
+                findings.push(Finding {
+                    column: 0,
+                    end_line: 0,
+                    end_column: 0,
+                    rule: "DF015".into(),
+                    severity: Severity::Error,
+                    line: instruction.line,
+                    message: "apt-get install without -y flag will hang waiting for user input"
+                        .to_string(),
+                    roast: "apt-get install without -y? Your build is going to sit there, patiently \
+                            waiting for a 'yes' that will never come, like a golden retriever waiting \
+                            for an owner who's on a cruise ship."
+                        .to_string(),
+                });
+            }
+            if let Some(setting) = command_setting {
+                assumes_yes = setting;
+            }
+        }
+        if let Some(alias) = &current_alias {
+            stage_settings.insert(alias.clone(), assumes_yes);
+        }
+    }
+
+    findings
+}
+
+fn apt_assume_yes_setting(command: &str) -> Option<bool> {
+    let setting = Regex::new(r#"(?i)APT::Get::Assume-Yes[\s=\"']+(true|false|1|0)"#)
+        .expect("valid apt assume-yes regex");
+    setting
+        .captures(command)
+        .map(|capture| matches!(&capture[1].to_ascii_lowercase()[..], "true" | "1"))
 }
 
 fn rule_apt_recommends(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -1968,7 +2039,90 @@ fn rule_apk_no_cache(_instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 }
 
 fn rule_secrets_in_env(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let secret_patterns = [
+    let mut findings = Vec::new();
+    for i in instrs_of(instrs, "ENV") {
+        for (name, _) in instruction_assignments(i) {
+            if let Some(pattern) = sensitive_variable_pattern(name) {
+                findings.push(Finding {
+                    column: 0,
+                    end_line: 0,
+                    end_column: 0,
+                    rule: "DF013".into(),
+                    severity: Severity::Error,
+                    line: i.line,
+                    message: format!("Potential secret in ENV variable (matched: '{}')", pattern),
+                    roast: format!(
+                        "You put a '{}' in an ENV instruction. Congratulations — it's now \
+                         immortalized in your image layers, your registry, your CI logs, \
+                         and probably a security audit finding. Use Docker secrets or a vault.",
+                        pattern
+                    ),
+                });
+                break;
+            }
+        }
+    }
+    findings
+}
+
+fn rule_hardcoded_secrets(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for i in instrs
+        .iter()
+        .filter(|i| i.instruction == "ARG" || i.instruction == "ENV")
+    {
+        for (name, value) in instruction_assignments(i) {
+            let value = value.trim();
+            if sensitive_variable_pattern(name).is_some()
+                && !value.is_empty()
+                && !value.starts_with('$')
+                && value != "\"\""
+                && value != "''"
+            {
+                findings.push(Finding {
+                    column: 0,
+                    end_line: 0,
+                    end_column: 0,
+                    rule: "DF014".into(),
+                    severity: Severity::Error,
+                    line: i.line,
+                    message: "Hardcoded secret value detected in ARG/ENV".to_string(),
+                    roast: "A hardcoded secret! How delightfully naive. It's in your git \
+                            history forever now. Have fun rotating that. Maybe consider \
+                            build secrets or runtime injection next time?"
+                        .to_string(),
+                });
+                break;
+            }
+        }
+    }
+    findings
+}
+
+fn instruction_assignments(instruction: &Instruction) -> Vec<(&str, &str)> {
+    if instruction
+        .words
+        .first()
+        .is_some_and(|word| word.value.contains('='))
+    {
+        return instruction
+            .words
+            .iter()
+            .filter_map(|word| word.value.split_once('='))
+            .collect();
+    }
+    match instruction.words.as_slice() {
+        [name, value, ..] => vec![(name.value.as_str(), value.value.as_str())],
+        _ => Vec::new(),
+    }
+}
+
+fn sensitive_variable_pattern(name: &str) -> Option<&'static str> {
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with("_file") {
+        return None;
+    }
+    [
         "password",
         "passwd",
         "secret",
@@ -1981,71 +2135,15 @@ fn rule_secrets_in_env(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         "secret_key",
         "db_pass",
         "database_password",
-    ];
-    let mut findings = Vec::new();
-    for i in instrs_of(instrs, "ENV") {
-        let lower = i.arguments.to_lowercase();
-        for pat in &secret_patterns {
-            if lower.contains(pat) {
-                findings.push(Finding {
-                    column: 0,
-                    end_line: 0,
-                    end_column: 0,
-                    rule: "DF013".into(),
-                    severity: Severity::Error,
-                    line: i.line,
-                    message: format!("Potential secret in ENV variable (matched: '{}')", pat),
-                    roast: format!(
-                        "You put a '{}' in an ENV instruction. Congratulations — it's now \
-                         immortalized in your image layers, your registry, your CI logs, \
-                         and probably a security audit finding. Use Docker secrets or a vault.",
-                        pat
-                    ),
-                });
-                break;
-            }
-        }
-    }
-    findings
-}
-
-fn rule_hardcoded_secrets(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let re = Regex::new(r"(?i)(password|secret|token|key|passwd)\s*=\s*\S+").unwrap();
-    let mut findings = Vec::new();
-    for i in instrs
-        .iter()
-        .filter(|i| i.instruction == "ARG" || i.instruction == "ENV")
-    {
-        if let Some(cap) = re.find(&i.arguments) {
-            let parts: Vec<&str> = cap.as_str().splitn(2, '=').collect();
-            if parts.len() == 2 {
-                let val = parts[1].trim();
-                if !val.is_empty() && !val.starts_with('$') && val != "\"\"" && val != "''" {
-                    findings.push(Finding {
-                        column: 0,
-                        end_line: 0,
-                        end_column: 0,
-                        rule: "DF014".into(),
-                        severity: Severity::Error,
-                        line: i.line,
-                        message: "Hardcoded secret value detected in ARG/ENV".to_string(),
-                        roast: "A hardcoded secret! How delightfully naive. It's in your git \
-                                history forever now. Have fun rotating that. Maybe consider \
-                                build secrets or runtime injection next time?"
-                            .to_string(),
-                    });
-                }
-            }
-        }
-    }
-    findings
+    ]
+    .into_iter()
+    .find(|pattern| lower.contains(pattern))
 }
 
 fn rule_curl_pipe_sh(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let re = Regex::new(r"(curl|wget)[^|]*\|\s*(bash|sh|ash|zsh|fish)\b").unwrap();
     instrs_of(instrs, "RUN")
         .into_iter()
-        .filter(|i| re.is_match(&i.arguments))
+        .filter(|i| executes_remote_script(&i.arguments))
         .map(|i| Finding {
             column: 0,
             end_line: 0,
@@ -2053,13 +2151,29 @@ fn rule_curl_pipe_sh(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             rule: "DF021".into(),
             severity: Severity::Error,
             line: i.line,
-            message: "Piping remote script directly to shell (curl/wget | sh)".to_string(),
-            roast: "curl | sh: the technical equivalent of 'hold my beer'. You're downloading \
+            message: "Executing a remotely downloaded script without verifying it".to_string(),
+            roast: "Executing a remote script directly: the technical equivalent of 'hold my beer'. You're downloading \
                     code from the internet and executing it blind, inside your container, \
                     and shipping it to prod. Your threat model is vibes."
                 .to_string(),
         })
         .collect()
+}
+
+fn executes_remote_script(command: &str) -> bool {
+    let pipe = Regex::new(
+        r"(?i)\b(?:curl|wget)\b[^|;]*\|\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:/usr/bin/env\s+)?(?:/[^\s]*/)?(?:ba|a|z|fi)?sh\b|\b(?:curl|wget)\b[^|;]*\|\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:/usr/bin/env\s+)?python(?:[0-9]+(?:\.[0-9]+)?)?\b",
+    )
+    .expect("valid remote script pipeline regex");
+    if pipe.is_match(command) {
+        return true;
+    }
+
+    let command_substitution =
+        Regex::new(r"(?i)\$\(\s*(?:curl|wget)\b").expect("valid download substitution regex");
+    let shell_c = Regex::new(r"(?i)(?:^|\s)(?:/[^\s]*/)?(?:ba|a|z|fi)?sh\s+(?:[^;]*\s)?-c\b")
+        .expect("valid shell command regex");
+    command_substitution.is_match(command) && shell_c.is_match(command)
 }
 
 fn rule_apt_instead_of_apt_get(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -2088,26 +2202,26 @@ fn rule_apt_instead_of_apt_get(instrs: &[Instruction], _raw: &str) -> Vec<Findin
 
 fn rule_useless_commands(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let useless = [
-        "ssh ",
-        "vim ",
-        "nano ",
-        "emacs ",
+        "ssh",
+        "vim",
+        "nano",
+        "emacs",
         "shutdown",
         "reboot",
-        "service ",
-        "systemctl ",
-        "ifconfig ",
+        "service",
+        "systemctl",
+        "ifconfig",
         "iwconfig",
-        "free ",
-        "top ",
-        "htop ",
-        "mount ",
-        "umount ",
+        "free",
+        "top",
+        "htop",
+        "mount",
+        "umount",
     ];
     let mut findings = Vec::new();
     for i in instrs_of(instrs, "RUN") {
         for cmd in &useless {
-            if i.arguments.contains(cmd) {
+            if shell_invokes_command(&run_script(i), cmd) {
                 findings.push(Finding {
                     column: 0,
                     end_line: 0,
@@ -2117,13 +2231,13 @@ fn rule_useless_commands(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     line: i.line,
                     message: format!(
                         "Command '{}' makes little sense inside a container",
-                        cmd.trim()
+                        cmd
                     ),
                     roast: format!(
                         "`{}` in a Dockerfile: you're running a command that assumes a full \
                          interactive OS environment inside a container. It doesn't apply here. \
                          Containers are not VMs.",
-                        cmd.trim()
+                        cmd
                     ),
                 });
                 break;
@@ -2194,7 +2308,7 @@ fn rule_copy_relative_no_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Find
         } else if i.instruction == "COPY" {
             let args = instruction_operands(i);
             if let Some(dest) = args.last() {
-                if !dest.starts_with('/') && !dest.starts_with('$') && !state.has_workdir {
+                if !is_absolute_container_path(dest) && !state.has_workdir {
                     let (message, roast) = if state.base_metadata_known {
                         (
                             format!(
@@ -2239,14 +2353,9 @@ fn rule_copy_relative_no_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Find
 }
 
 fn rule_useradd_no_l(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let re = Regex::new(r"\buseradd\b").unwrap();
     instrs_of(instrs, "RUN")
         .into_iter()
-        .filter(|i| {
-            re.is_match(&i.arguments)
-                && !i.arguments.contains(" -l")
-                && !i.arguments.contains("--no-log-init")
-        })
+        .filter(|i| useradd_with_high_uid_without_no_log_init(&i.arguments))
         .map(|i| Finding {
             column: 0,
             end_line: 0,
@@ -2263,6 +2372,45 @@ fn rule_useradd_no_l(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                 .to_string(),
         })
         .collect()
+}
+
+fn useradd_with_high_uid_without_no_log_init(command: &str) -> bool {
+    const HIGH_UID_THRESHOLD: u64 = 100_000;
+    let tokens = command.split_whitespace().collect::<Vec<_>>();
+    tokens
+        .iter()
+        .enumerate()
+        .filter(|(_, token)| token.rsplit('/').next() == Some("useradd"))
+        .any(|(useradd_index, _)| {
+            let arguments = tokens[useradd_index + 1..]
+                .iter()
+                .take_while(|token| !matches!(**token, "&&" | "||" | ";" | "|"))
+                .copied()
+                .collect::<Vec<_>>();
+            if arguments
+                .iter()
+                .any(|argument| matches!(*argument, "-l" | "--no-log-init"))
+            {
+                return false;
+            }
+
+            arguments.iter().enumerate().any(|(index, argument)| {
+                let value = if matches!(*argument, "-u" | "--uid") {
+                    arguments.get(index + 1).copied()
+                } else {
+                    argument
+                        .strip_prefix("--uid=")
+                        .or_else(|| {
+                            argument
+                                .strip_prefix("-u")
+                                .filter(|value| !value.is_empty())
+                        })
+                };
+                value
+                    .and_then(|uid| uid.parse::<u64>().ok())
+                    .is_some_and(|uid| uid >= HIGH_UID_THRESHOLD)
+            })
+        })
 }
 
 fn rule_copy_archive_use_add(_instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -2515,7 +2663,10 @@ fn rule_pipefail_missing(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                 };
                 shell_metadata_known = true;
             }
-            "RUN" if run_has_unprotected_pipeline(&instruction.command, shell_has_pipefail) => {
+            "RUN"
+                if !executes_remote_script(&instruction.command)
+                    && run_has_unprotected_pipeline(&instruction.command, shell_has_pipefail) =>
+            {
                 let message = if shell_metadata_known {
                     "RUN with pipe but no pipefail — failed commands in the pipe are silently ignored"
                 } else {
@@ -2595,7 +2746,9 @@ fn run_has_unprotected_pipeline(script: &str, initial_pipefail_enabled: bool) ->
                 } else {
                     // `set -o pipefail | command` runs `set` in a pipeline
                     // subshell, so it does not protect this pipeline.
-                    if !pipefail_enabled {
+                    flush_shell_word(&mut current_word, &mut words);
+                    let expected_sigpipe = shell_executable(&words) == Some("yes");
+                    if !pipefail_enabled && !expected_sigpipe {
                         return true;
                     }
                     current_word.clear();
@@ -2607,6 +2760,13 @@ fn run_has_unprotected_pipeline(script: &str, initial_pipefail_enabled: bool) ->
     }
 
     false
+}
+
+fn shell_executable(words: &[String]) -> Option<&str> {
+    words
+        .iter()
+        .find(|word| !word.contains('=') || word.starts_with('='))
+        .map(String::as_str)
 }
 
 fn flush_shell_word(current_word: &mut String, words: &mut Vec<String>) {
@@ -2657,7 +2817,7 @@ fn rule_wget_and_curl(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             end_line: 0,
             end_column: 0,
             rule: "DF058".into(),
-            severity: Severity::Warning,
+            severity: Severity::Info,
             line: 0,
             message: "Both wget and curl are used — pick one and use it consistently".to_string(),
             roast: "You're using both wget and curl in the same Dockerfile. They do the same \

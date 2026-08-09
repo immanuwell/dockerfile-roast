@@ -307,7 +307,11 @@ fn baseline_fingerprints_are_emitted_and_suppress_existing_errors() {
         ])
         .output()
         .unwrap();
-    assert!(write.status.success(), "{}", String::from_utf8_lossy(&write.stderr));
+    assert!(
+        write.status.success(),
+        "{}",
+        String::from_utf8_lossy(&write.stderr)
+    );
     let json: serde_json::Value = serde_json::from_slice(&write.stdout).unwrap();
     assert!(json["findings"][0]["fingerprint"].as_str().unwrap().starts_with("sha256:"));
 
@@ -323,7 +327,7 @@ fn baseline_fingerprints_are_emitted_and_suppress_existing_errors() {
         .unwrap();
     assert!(check.status.success(), "{}", String::from_utf8_lossy(&check.stderr));
     let sarif: serde_json::Value = serde_json::from_slice(&check.stdout).unwrap();
-    assert!(sarif["runs"][0]["results"][0]["partialFingerprints"]["droast/v1"]
+    assert!(sarif["runs"][0]["results"][0]["partialFingerprints"]["droast/v2"]
         .as_str()
         .unwrap()
         .starts_with("sha256:"));
@@ -425,6 +429,63 @@ fn baseline_fingerprints_are_emitted_and_suppress_existing_errors() {
         .unwrap();
     assert!(!write_and_filter.status.success());
     assert!(String::from_utf8_lossy(&write_and_filter.stderr).contains("cannot be used with"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn baseline_keeps_repeated_findings_independent() {
+    let root = policy_fixture("baseline-repeated-findings");
+    let dockerfile = root.join("Dockerfile");
+    let baseline = root.join("droast-baseline.json");
+    std::fs::write(
+        &dockerfile,
+        "FROM alpine:3.20\nRUN chmod 777 /tmp/one\nRUN chmod 777 /tmp/two\n",
+    )
+    .unwrap();
+
+    let write = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--only", "DF034",
+            "--baseline", baseline.to_str().unwrap(),
+            "--write-baseline",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(write.status.success(), "{}", String::from_utf8_lossy(&write.stderr));
+    let baseline_json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&baseline).unwrap()).unwrap();
+    assert_eq!(baseline_json["schema_version"], 2);
+    assert_eq!(baseline_json["fingerprints"].as_array().unwrap().len(), 2);
+
+    std::fs::write(
+        &dockerfile,
+        "FROM alpine:3.20\nRUN chmod 777 /tmp/one\nRUN chmod 777 /tmp/two\nRUN chmod 777 /tmp/three\n",
+    )
+    .unwrap();
+    let only_new = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--only", "DF034",
+            "--baseline", baseline.to_str().unwrap(),
+            "--only-new",
+            "--format", "json",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        only_new.status.success(),
+        "{}",
+        String::from_utf8_lossy(&only_new.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&only_new.stdout).unwrap();
+    assert_eq!(json["total"], 1);
+    assert_eq!(json["findings"][0]["line"], 4);
+
     std::fs::remove_dir_all(root).unwrap();
 }
 

@@ -244,12 +244,21 @@ fn json_output(file: &str, findings: &[Finding]) -> JsonOutput {
     }
 }
 
-/// Stable baseline identity. It intentionally excludes the physical line so a
-/// finding survives unrelated insertions above it, while retaining the file,
-/// rule, and normalized diagnostic message.
+/// Stable baseline identity. Source location is part of the identity so two
+/// occurrences of the same rule and message in one file remain independently
+/// suppressible instead of collapsing into a single baseline entry.
 pub fn finding_fingerprint(file: &str, finding: &Finding) -> String {
     let normalized_message = finding.message.split_whitespace().collect::<Vec<_>>().join(" ");
-    let material = format!("droast-fingerprint-v1\0{}\0{}\0{}", normalize_uri(file), finding.rule, normalized_message);
+    let material = format!(
+        "droast-fingerprint-v2\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
+        normalize_uri(file),
+        finding.rule,
+        finding.line,
+        finding.column,
+        finding.end_line,
+        finding.end_column,
+        normalized_message
+    );
     format!("sha256:{:x}", Sha256::digest(material.as_bytes()))
 }
 
@@ -420,7 +429,7 @@ fn build_sarif(results: &[(&str, &[Finding])]) -> String {
                 "ruleIndex": idx,
                 "level": sarif_level(&f.severity),
                 "message": { "text": f.message },
-                "partialFingerprints": { "droast/v1": finding_fingerprint(file, f) },
+                "partialFingerprints": { "droast/v2": finding_fingerprint(file, f) },
                 "locations": [{
                     "physicalLocation": {
                         "artifactLocation": {
@@ -542,7 +551,7 @@ mod tests {
                 ["startColumn"],
             9
         );
-        assert_eq!(
+        assert_ne!(
             finding_fingerprint("Dockerfile", &finding),
             finding_fingerprint("Dockerfile", &Finding { line: 99, ..finding })
         );

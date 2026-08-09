@@ -141,6 +141,12 @@ fn df003_clear_on_few_runs() {
     assert!(no_rule(&lint(df), "DF003"));
 }
 
+#[test]
+fn df003_is_an_info_level_advisory() {
+    let findings = lint("FROM alpine:3.19\nRUN a\nRUN b\nRUN c\nRUN d\n");
+    assert_eq!(finding(&findings, "DF003").severity, Severity::Info);
+}
+
 // ─── DF004: uncleaned apt cache ──────────────────────────────────────────────
 
 #[test]
@@ -159,6 +165,15 @@ fn df004_clear_when_cleanup_present() {
 fn df004_clear_with_apt_get_distclean() {
     let df = "FROM ubuntu:24.04\nRUN apt-get install -U -y --no-install-recommends bash && apt-get distclean\nCMD [\"/bin/sh\"]\n";
     assert!(no_rule(&lint(df), "DF004"));
+}
+
+#[test]
+fn df004_clear_with_apt_get_dist_clean_and_brace_expansion() {
+    let dist_clean =
+        "FROM debian:trixie\nRUN apt-get update && apt-get install -y curl && apt-get dist-clean\n";
+    let brace_cleanup = "FROM debian:bookworm\nRUN apt-get update && apt-get install -y curl && rm -rf /var/lib/{apt,dpkg,cache,log}\n";
+    assert!(no_rule(&lint(dist_clean), "DF004"));
+    assert!(no_rule(&lint(brace_cleanup), "DF004"));
 }
 
 #[test]
@@ -272,6 +287,14 @@ fn df009_clear_on_quoted_absolute_workdir() {
     assert!(no_rule(&lint(df), "DF009"));
 }
 
+#[test]
+fn df009_accepts_windows_absolute_workdirs() {
+    for path in ["C:/Users/ContainerAdministrator/app", "C:\\\\app"] {
+        let df = format!("FROM mcr.microsoft.com/windows/servercore:ltsc2022\nWORKDIR {path}\n");
+        assert!(no_rule(&lint(&df), "DF009"), "unexpected DF009 for {path}");
+    }
+}
+
 // ─── DF013: secrets in ENV ───────────────────────────────────────────────────
 
 #[test]
@@ -284,6 +307,14 @@ fn df013_fires_on_secret_env() {
 fn df013_clear_on_normal_env() {
     let df = "FROM alpine:3.19\nENV APP_PORT=8080\n";
     assert!(no_rule(&lint(df), "DF013"));
+}
+
+#[test]
+fn df013_and_df014_ignore_secret_file_variables() {
+    let df = "FROM scratch\nENV MINIO_ACCESS_KEY_FILE=access_key \\\n    MINIO_ROOT_PASSWORD_FILE=secret_key \\\n    MINIO_KMS_SECRET_KEY_FILE=kms_master_key\n";
+    let findings = lint(df);
+    assert!(no_rule(&findings, "DF013"));
+    assert!(no_rule(&findings, "DF014"));
 }
 
 // ─── DF015: apt without -y ───────────────────────────────────────────────────
@@ -314,6 +345,18 @@ fn df015_clear_with_combined_and_quiet_assume_yes_options() {
 #[test]
 fn df015_fires_with_single_quiet_option() {
     let df = "FROM ubuntu:24.04\nRUN apt-get install -q bash\n";
+    assert!(has_rule(&lint(df), "DF015"));
+}
+
+#[test]
+fn df015_respects_inherited_apt_assume_yes_configuration() {
+    let df = "FROM ubuntu:24.04 AS configured\nRUN echo 'APT::Get::Assume-Yes \"true\";' > /etc/apt/apt.conf.d/90ci\nFROM configured\nRUN apt-get update && apt-get install curl\n";
+    assert!(no_rule(&lint(df), "DF015"));
+}
+
+#[test]
+fn df015_does_not_leak_apt_configuration_to_unrelated_stages() {
+    let df = "FROM ubuntu:24.04 AS configured\nRUN echo 'APT::Get::Assume-Yes \"true\";' > /etc/apt/apt.conf.d/90ci\nFROM ubuntu:24.04\nRUN apt-get install curl\n";
     assert!(has_rule(&lint(df), "DF015"));
 }
 
@@ -351,6 +394,18 @@ fn df021_fires_on_curl_pipe_sh() {
 fn df021_fires_on_wget_pipe_bash() {
     let df = "FROM alpine:3.19\nRUN wget -O- http://example.com/install.sh | bash\n";
     assert!(has_rule(&lint(df), "DF021"));
+}
+
+#[test]
+fn df021_covers_interpreters_assignments_and_shell_substitutions() {
+    for command in [
+        "curl -fsSL https://example.com/install.sh | TAG=v1 bash",
+        "curl -fsSL https://example.com/get-pip.py | python3.12",
+        "sh -c \"$(curl -fsSL https://example.com/install.sh)\"",
+    ] {
+        let df = format!("FROM ubuntu:24.04\nRUN {command}\n");
+        assert!(has_rule(&lint(&df), "DF021"), "missed {command}");
+    }
 }
 
 #[test]
@@ -413,6 +468,14 @@ fn df030_fires_without_no_cache() {
 fn df030_clear_with_no_cache() {
     let df = "FROM python:3.12\nRUN pip install --no-cache-dir flask\nCMD [\"python\", \"app.py\"]\n";
     assert!(no_rule(&lint(df), "DF030"));
+}
+
+#[test]
+fn df030_clear_when_cache_is_purged_in_the_same_run() {
+    let pip = "FROM python:3.12\nRUN python -m pip install flask && python -m pip cache purge\n";
+    let uv = "FROM python:3.12\nRUN uv pip install flask && uv cache clean\n";
+    assert!(no_rule(&lint(pip), "DF030"));
+    assert!(no_rule(&lint(uv), "DF030"));
 }
 
 #[test]
@@ -555,6 +618,12 @@ fn df011_clear_on_multistage() {
 fn df011_clear_on_non_build_image() {
     let df = "FROM alpine:3.19\nCMD [\"/bin/sh\"]\n";
     assert!(no_rule(&lint(df), "DF011"));
+}
+
+#[test]
+fn df011_is_an_info_level_advisory() {
+    let findings = lint("FROM golang:1.26\nRUN go build ./...\n");
+    assert_eq!(finding(&findings, "DF011").severity, Severity::Info);
 }
 
 // ─── DF012: no HEALTHCHECK ────────────────────────────────────────────────────
@@ -705,6 +774,14 @@ fn df026_handles_json_copy_destination() {
     let subdir = "FROM alpine:3.19\nCOPY [\"app\", \"/opt/app/\"]\n";
     assert!(has_rule(&lint(root), "DF026"));
     assert!(no_rule(&lint(subdir), "DF026"));
+}
+
+#[test]
+fn df026_ignores_scratch_and_cross_stage_root_composition() {
+    let scratch = "FROM scratch\nCOPY rootfs /\n";
+    let cross_stage = "FROM alpine:3.19 AS rootfs\nRUN touch /app\nFROM alpine:3.19\nCOPY --from=rootfs / /\n";
+    assert!(no_rule(&lint(scratch), "DF026"));
+    assert!(no_rule(&lint(cross_stage), "DF026"));
 }
 
 // ─── DF027: yum without -y ───────────────────────────────────────────────────
@@ -1344,6 +1421,16 @@ fn df057_later_shell_without_pipefail_overrides_prior_shell() {
     assert_eq!(findings[0].line, 5);
 }
 
+#[test]
+fn df057_does_not_duplicate_remote_execution_or_break_yes_pipelines() {
+    let remote = "FROM ubuntu:24.04\nRUN curl -fsSL https://example.com/install.sh | bash\n";
+    let expected_sigpipe = "FROM ubuntu:24.04\nRUN yes | unminimize\n";
+    let remote_findings = lint(remote);
+    assert!(has_rule(&remote_findings, "DF021"));
+    assert!(no_rule(&remote_findings, "DF057"));
+    assert!(no_rule(&lint(expected_sigpipe), "DF057"));
+}
+
 // ─── DF058: wget and curl both used ──────────────────────────────────────────
 
 #[test]
@@ -1362,6 +1449,12 @@ fn df058_clear_on_only_wget() {
 fn df058_clear_on_only_curl() {
     let df = "FROM alpine:3.19\nRUN curl -fsSL https://a.com/file -o /tmp/f\n";
     assert!(no_rule(&lint(df), "DF058"));
+}
+
+#[test]
+fn df058_is_an_info_level_advisory() {
+    let findings = lint("FROM alpine:3.19\nRUN wget https://a.test/file\nRUN curl https://b.test/file\n");
+    assert_eq!(finding(&findings, "DF058").severity, Severity::Info);
 }
 
 // ─── DF059: apt used instead of apt-get ──────────────────────────────────────
@@ -1396,6 +1489,22 @@ fn df060_fires_on_service() {
 fn df060_clear_on_normal_command() {
     let df = "FROM ubuntu:22.04\nRUN nginx -t\n";
     assert!(no_rule(&lint(df), "DF060"));
+}
+
+#[test]
+fn df060_ignores_package_names_paths_version_checks_and_symlink_targets() {
+    for command in [
+        "apt-get install -y vim",
+        "/usr/bin/mount --version",
+        "ln -s init /rootfs/usr/bin/shutdown",
+        "mkdir -p /home/app/.ssh",
+    ] {
+        let df = format!("FROM ubuntu:24.04\nRUN {command}\n");
+        assert!(
+            no_rule(&lint(&df), "DF060"),
+            "unexpected DF060 for {command}"
+        );
+    }
 }
 
 // ─── DF061: --platform in FROM ────────────────────────────────────────────────
@@ -1514,6 +1623,19 @@ fn df063_clear_on_quoted_or_variable_absolute_destination() {
 }
 
 #[test]
+fn df063_accepts_windows_absolute_copy_destinations() {
+    for destination in ["C:/app/program.exe", "C:\\\\app\\\\program.exe"] {
+        let df = format!(
+            "FROM mcr.microsoft.com/windows/nanoserver:ltsc2022\nCOPY program.exe {destination}\n"
+        );
+        assert!(
+            no_rule(&lint(&df), "DF063"),
+            "unexpected DF063 for {destination}"
+        );
+    }
+}
+
+#[test]
 fn df063_clear_when_workdir_is_inherited_from_previous_stage() {
     let df = "FROM node:26.5.0-alpine@sha256:abc123 AS restore\nWORKDIR /tmp/foo/bar\nCOPY Dockerfile .\nFROM restore AS migrate\nCOPY Dockerfile .\n";
     assert!(no_rule(&lint(df), "DF063"));
@@ -1523,19 +1645,35 @@ fn df063_clear_when_workdir_is_inherited_from_previous_stage() {
 
 #[test]
 fn df064_fires_on_useradd_without_l() {
-    let df = "FROM ubuntu:22.04\nRUN useradd appuser\n";
+    let df = "FROM ubuntu:22.04\nRUN useradd --uid 100000 appuser\n";
     assert!(has_rule(&lint(df), "DF064"));
 }
 
 #[test]
+fn df064_ignores_default_normal_and_unknown_uids() {
+    for command in [
+        "useradd appuser",
+        "useradd --uid 1000 appuser",
+        "useradd -u 1500 appuser",
+        "useradd --uid $APP_UID appuser",
+    ] {
+        let df = format!("FROM ubuntu:22.04\nRUN {command}\n");
+        assert!(
+            no_rule(&lint(&df), "DF064"),
+            "unexpected DF064 for {command}"
+        );
+    }
+}
+
+#[test]
 fn df064_clear_on_useradd_with_l() {
-    let df = "FROM ubuntu:22.04\nRUN useradd -l appuser\n";
+    let df = "FROM ubuntu:22.04\nRUN useradd -l --uid 100000 appuser\n";
     assert!(no_rule(&lint(df), "DF064"));
 }
 
 #[test]
 fn df064_clear_on_useradd_with_no_log_init() {
-    let df = "FROM ubuntu:22.04\nRUN useradd --no-log-init appuser\n";
+    let df = "FROM ubuntu:22.04\nRUN useradd --no-log-init --uid 100000 appuser\n";
     assert!(no_rule(&lint(df), "DF064"));
 }
 
