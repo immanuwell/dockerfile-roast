@@ -428,7 +428,7 @@ droast completion fish | source
   DF023    WARN     correctness,maintainability        Avoid multiple FROM without aliases (unintended multistage)
   DF024    WARN     correctness,reproducibility        Avoid using :latest in FROM even with aliases
   DF025    WARN     correctness,reliability            Use JSON array syntax for CMD/ENTRYPOINT
-  DF026    WARN     maintainability,performance        Avoid local COPY to the filesystem root
+  DF026    WARN     maintainability,performance        Avoid broad local COPY to the filesystem root
   DF030    INFO     performance                        Avoid using pip without --no-cache-dir
   DF031    INFO     performance                        Avoid npm install without ci/--production for prod images
   DF032    INFO     maintainability,reliability        Set PYTHONDONTWRITEBYTECODE and PYTHONUNBUFFERED for Python images
@@ -487,7 +487,7 @@ droast completion fish | source
   DF079    WARN     correctness,reliability            Match AS casing to FROM in multi-stage builds
   DF082    INFO     correctness,reliability            Use key=value syntax for ENV and LABEL
   DF083    WARN     correctness,reproducibility        Do not set FROM --platform to the default target platform
-  DF084    ERROR    correctness,reliability            Do not use reserved Dockerfile stage names
+  DF084    WARN     correctness,reliability            Avoid reserved Dockerfile stage names
   DF085    WARN     correctness,reliability            Use lowercase multi-stage build names
   DF086    ERROR    correctness,reliability            Declare ARG variables used by FROM before the first FROM
   DF087    ERROR    correctness,reliability            Declare Dockerfile variables before using them

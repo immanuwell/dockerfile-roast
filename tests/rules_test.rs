@@ -162,6 +162,24 @@ fn df004_clear_when_cleanup_present() {
 }
 
 #[test]
+fn df004_recognizes_cleanup_regardless_of_path_order_or_rm_flags() {
+    let reordered = "FROM ubuntu:24.04\nRUN apt-get install -y curl && rm -rf /tmp/* /var/lib/apt/lists/* /var/log/*\n";
+    let package_lists = "FROM ubuntu:20.04\nRUN apt-get install -y curl && rm /var/lib/apt/lists/*_*\n";
+    assert!(no_rule(&lint(reordered), "DF004"));
+    assert!(no_rule(&lint(package_lists), "DF004"));
+}
+
+#[test]
+fn package_cache_rules_ignore_disposable_stages_but_follow_inheritance() {
+    let disposable = "FROM ubuntu:24.04 AS build\nRUN apt-get install -y make\nFROM scratch\nCOPY --from=build /usr/bin/make /make\n";
+    let inherited = "FROM ubuntu:24.04 AS base\nRUN apt-get install -y curl\nFROM base\nCMD [\"curl\", \"--version\"]\n";
+    let root_copy = "FROM ubuntu:24.04 AS rootfs\nRUN apt-get install -y curl\nFROM scratch\nCOPY --from=rootfs / /\n";
+    assert!(no_rule(&lint(disposable), "DF004"));
+    assert!(has_rule(&lint(inherited), "DF004"));
+    assert!(has_rule(&lint(root_copy), "DF004"));
+}
+
+#[test]
 fn df004_clear_with_apt_get_distclean() {
     let df = "FROM ubuntu:24.04\nRUN apt-get install -U -y --no-install-recommends bash && apt-get distclean\nCMD [\"/bin/sh\"]\n";
     assert!(no_rule(&lint(df), "DF004"));
@@ -262,6 +280,12 @@ fn df007_fires_on_copy_dot() {
 }
 
 #[test]
+fn df007_is_informational_in_a_scratch_staging_stage() {
+    let findings = lint("FROM scratch AS context\nCOPY . /source/\nFROM alpine:3.20\nCOPY --from=context /source/app /app\n");
+    assert_eq!(finding(&findings, "DF007").severity, Severity::Info);
+}
+
+#[test]
 fn df007_clear_on_specific_copy() {
     let df = "FROM alpine:3.19\nCOPY src/ /app/src/\n";
     assert!(no_rule(&lint(df), "DF007"));
@@ -299,8 +323,15 @@ fn df009_accepts_windows_absolute_workdirs() {
 
 #[test]
 fn df013_fires_on_secret_env() {
-    let df = "FROM alpine:3.19\nENV DATABASE_PASSWORD=secret\n";
+    let df = "FROM alpine:3.19\nARG DATABASE_PASSWORD\nENV DATABASE_PASSWORD=$DATABASE_PASSWORD\n";
     assert!(has_rule(&lint(df), "DF013"));
+}
+
+#[test]
+fn df014_supersedes_df013_for_a_hardcoded_env_secret() {
+    let findings = lint("FROM alpine:3.19\nENV DATABASE_PASSWORD=secret\n");
+    assert!(no_rule(&findings, "DF013"));
+    assert!(has_rule(&findings, "DF014"));
 }
 
 #[test]
@@ -409,6 +440,15 @@ fn df021_covers_interpreters_assignments_and_shell_substitutions() {
 }
 
 #[test]
+fn df021_reports_the_executed_downloader_on_its_physical_line() {
+    let df = "FROM ubuntu:24.04\nRUN echo 'installing curl' \\\n+    && curl -fsSL https://example.com/bootstrap.py | python3\n";
+    let findings = lint(df);
+    let remote = finding(&findings, "DF021");
+    assert_eq!(remote.line, 3);
+    assert!(remote.column > 0);
+}
+
+#[test]
 fn df021_clear_when_checksum_output_is_piped_to_sha256sum() {
     let df = "FROM ubuntu:24.04\nRUN curl -fsSLo /tmp/tool https://example.com/tool \\\n+        && printf '%s  %s\\n' \"$TOOL_SHA256\" /tmp/tool | sha256sum -c -\n";
     assert!(no_rule(&lint(df), "DF021"));
@@ -454,6 +494,24 @@ fn df034_fires_on_chmod_777() {
 fn df034_clear_on_sane_chmod() {
     let df = "FROM alpine:3.19\nRUN chmod 755 /app\n";
     assert!(no_rule(&lint(df), "DF034"));
+}
+
+#[test]
+fn df034_ignores_removed_mktemp_directories() {
+    let df = "FROM debian:bookworm\nRUN tempDir=\"$(mktemp -d)\" \\\n+    && chmod 777 \"$tempDir\" \\\n+    && do-something \"$tempDir\" \\\n+    && rm -rf \"$tempDir\"\n";
+    assert!(no_rule(&lint(df), "DF034"));
+}
+
+#[test]
+fn df034_reports_each_occurrence_at_the_actual_mode_token() {
+    let df = "FROM alpine:3.20\nRUN chmod 777 /one \\\n+    && chmod -R 777 /two\n";
+    let findings = lint(df)
+        .into_iter()
+        .filter(|finding| finding.rule == "DF034")
+        .collect::<Vec<_>>();
+    assert_eq!(findings.len(), 2);
+    assert_eq!((findings[0].line, findings[1].line), (2, 3));
+    assert!(findings.iter().all(|finding| finding.column > 0));
 }
 
 // ─── DF030: pip no-cache-dir ─────────────────────────────────────────────────
@@ -752,8 +810,14 @@ fn df023_clear_with_platform_flags_and_aliases() {
 
 #[test]
 fn df026_fires_on_copy_to_root() {
-    let df = "FROM alpine:3.19\nCOPY app /\n";
+    let df = "FROM alpine:3.19\nCOPY app/ /\n";
     assert!(has_rule(&lint(df), "DF026"));
+}
+
+#[test]
+fn df026_ignores_an_explicit_single_file_copied_to_root() {
+    let df = "FROM alpine:3.19\nCOPY docker-entrypoint.sh /\n";
+    assert!(no_rule(&lint(df), "DF026"));
 }
 
 #[test]
@@ -770,7 +834,7 @@ fn df026_clear_when_root_is_source_but_destination_is_subdir() {
 
 #[test]
 fn df026_handles_json_copy_destination() {
-    let root = "FROM alpine:3.19\nCOPY [\"app\", \"/\"]\n";
+    let root = "FROM alpine:3.19\nCOPY [\"app/\", \"/\"]\n";
     let subdir = "FROM alpine:3.19\nCOPY [\"app\", \"/opt/app/\"]\n";
     assert!(has_rule(&lint(root), "DF026"));
     assert!(no_rule(&lint(subdir), "DF026"));
@@ -892,6 +956,12 @@ fn df035_clear_on_curl_with_fail_flag() {
 #[test]
 fn df035_clear_on_curl_with_fssl() {
     let df = "FROM alpine:3.19\nRUN curl -fsSL https://example.com/file -o /tmp/file\n";
+    assert!(no_rule(&lint(df), "DF035"));
+}
+
+#[test]
+fn df035_ignores_curl_as_a_package_name() {
+    let df = "FROM ubuntu:24.04\nRUN apt-get install -y curl && echo https://example.com\n";
     assert!(no_rule(&lint(df), "DF035"));
 }
 
@@ -1095,6 +1165,15 @@ fn df046_fires_on_dnf_without_clean() {
 fn df046_clear_on_dnf_with_clean() {
     let df = "FROM fedora:38\nRUN dnf install -y curl && dnf clean all\n";
     assert!(no_rule(&lint(df), "DF046"));
+}
+
+#[test]
+fn df046_recognizes_removed_rpm_cache_and_disposable_stages() {
+    let removed = "FROM registry.access.redhat.com/ubi10/ubi-minimal\nRUN microdnf install -y tar && rm -rf /var/cache/yum\n";
+    let disposable = "FROM fedora:latest AS build\nRUN dnf install -y tar\nFROM scratch\nCOPY --from=build /usr/bin/tar /tar\n";
+    assert!(no_rule(&lint(removed), "DF004"));
+    assert!(no_rule(&lint(removed), "DF046"));
+    assert!(no_rule(&lint(disposable), "DF046"));
 }
 
 // ─── DF047: yum clean all missing ────────────────────────────────────────────
@@ -1325,6 +1404,14 @@ fn df056_clear_on_wget_with_progress_flag() {
     assert!(no_rule(&lint(df), "DF056"));
 }
 
+#[test]
+fn df056_and_df058_ignore_downloader_package_names() {
+    let df = "FROM ubuntu:24.04\nRUN apt-get install -y curl wget && curl -fsSL https://example.com/file -o /tmp/file\n";
+    let findings = lint(df);
+    assert!(no_rule(&findings, "DF056"));
+    assert!(no_rule(&findings, "DF058"));
+}
+
 // ─── DF057: pipefail missing ──────────────────────────────────────────────────
 
 #[test]
@@ -1361,6 +1448,10 @@ fn df057_fires_when_set_options_omit_pipefail() {
 fn df057_fires_on_pipelines_without_spaces_or_with_pipefail_text() {
     let df = "FROM alpine:3.19\nRUN printf pipefail|cat\n";
     assert!(has_rule(&lint(df), "DF057"));
+
+    let substitution =
+        "FROM debian:bookworm\nRUN arch=\"$(dpkg --print-architecture | awk -F- '{ print $NF }')\"\n";
+    assert!(has_rule(&lint(substitution), "DF057"));
 }
 
 #[test]
@@ -1429,6 +1520,20 @@ fn df057_does_not_duplicate_remote_execution_or_break_yes_pipelines() {
     assert!(has_rule(&remote_findings, "DF021"));
     assert!(no_rule(&remote_findings, "DF057"));
     assert!(no_rule(&lint(expected_sigpipe), "DF057"));
+}
+
+#[test]
+fn df057_ignores_low_value_and_non_pipeline_shell_syntax() {
+    for command in [
+        "echo 'abc file' | sha256sum -c -",
+        "echo root:root | chpasswd",
+        "rm -f /tmp/missing | :",
+        "case x in x86_64) true ;; arm64 | aarch64) true ;; esac",
+        "{ echo one; echo two; } | tee /tmp/config",
+    ] {
+        let df = format!("FROM ubuntu:24.04\nRUN {command}\n");
+        assert!(no_rule(&lint(&df), "DF057"), "unexpected DF057 for {command}");
+    }
 }
 
 // ─── DF058: wget and curl both used ──────────────────────────────────────────
@@ -1941,6 +2046,12 @@ fn docker_key_value_and_stage_checks_accept_modern_forms() {
     assert!(has_rule(&findings, "DF082"));
     assert!(has_rule(&findings, "DF083"));
     assert!(has_rule(&findings, "DF085"));
+}
+
+#[test]
+fn df084_is_a_warning_for_the_reserved_scratch_alias() {
+    let findings = lint("FROM scratch AS scratch\nCOPY app /app\n");
+    assert_eq!(finding(&findings, "DF084").severity, Severity::Warning);
 }
 
 #[test]

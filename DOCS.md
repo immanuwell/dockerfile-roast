@@ -2184,10 +2184,10 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 |---|---|---|
 | DF003 | info | Combine related `RUN` commands to reduce layers |
 | DF006 | warning | Prefer `COPY` over `ADD` for local files |
-| DF007 | warning | Avoid broad `COPY . .` operations |
+| DF007 | warning | Avoid broad `COPY . .` operations; scratch staging is informational |
 | DF008 | info | Use `WORKDIR` instead of inline `cd` |
 | DF009 | warning | Use absolute `WORKDIR` paths |
-| DF026 | warning | Avoid copying local build-context content to filesystem root |
+| DF026 | warning | Avoid broad local copies to filesystem root |
 | DF033 | info | Use an effective `.dockerignore` for each build context |
 | DF048 | error | End multi-source `COPY` destinations with `/` |
 | DF049 | warning | Reserved for invalid `COPY --from` stage references |
