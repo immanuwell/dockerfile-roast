@@ -1109,6 +1109,7 @@ fn persistent_stage_indices(instrs: &[Instruction]) -> std::collections::HashSet
     #[derive(Default)]
     struct Stage {
         parent: Option<usize>,
+        named: bool,
     }
 
     let mut stages = Vec::<Stage>::new();
@@ -1131,7 +1132,10 @@ fn persistent_stage_indices(instrs: &[Instruction]) -> std::collections::HashSet
                     })
             });
             let index = stages.len();
-            stages.push(Stage { parent });
+            stages.push(Stage {
+                parent,
+                named: from.and_then(|from| from.alias).is_some(),
+            });
             if let Some(alias) = from.and_then(|from| from.alias) {
                 aliases.insert(alias.to_ascii_lowercase(), index);
             }
@@ -1144,6 +1148,44 @@ fn persistent_stage_indices(instrs: &[Instruction]) -> std::collections::HashSet
     if !stages.is_empty() {
         persistent.insert(stages.len() - 1);
     }
+
+    // A named stage not consumed by a later stage is an explicit build target:
+    // `docker build --target <name>` can publish it. A stage copied selectively
+    // remains a disposable builder, so do not retain its cache findings.
+    let mut consumed = stages
+        .iter()
+        .filter_map(|stage| stage.parent)
+        .collect::<std::collections::HashSet<_>>();
+    for instruction in instrs
+        .iter()
+        .filter(|instruction| instruction.instruction == "COPY")
+    {
+        let source = instruction
+            .flags
+            .iter()
+            .find(|flag| flag.name.eq_ignore_ascii_case("from"))
+            .and_then(|flag| flag.value.as_deref());
+        let Some(source) = source else {
+            continue;
+        };
+        if let Some(stage) = aliases
+            .get(&source.to_ascii_lowercase())
+            .copied()
+            .or_else(|| {
+                source
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|index| *index < stages.len())
+            })
+        {
+            consumed.insert(stage);
+        }
+    }
+    persistent.extend(
+        stages.iter().enumerate().filter_map(|(index, stage)| {
+            (stage.named && !consumed.contains(&index)).then_some(index)
+        }),
+    );
 
     loop {
         let mut changed = false;
@@ -1993,6 +2035,13 @@ fn pip_install_regex() -> Regex {
     .expect("valid pip install regex")
 }
 
+fn pip_pinning_regex() -> Regex {
+    Regex::new(
+        r"(?i)(?:(?P<uv>\buv\b)\s+pip\s+install|(?P<pip>\bpip3?\b)\s+install|(?P<pipx>\bpipx\b)\s+install|(?P<python>\bpython(?:[0-9]+(?:\.[0-9]+)?)?\b)[^;&|\n]*\s+-m\s+pip\s+install)",
+    )
+    .expect("valid Python package install regex")
+}
+
 fn pip_cache_violation(
     instruction: &Instruction,
     install: &Regex,
@@ -2043,7 +2092,7 @@ fn pip_install_span(
         .captures_iter(&instruction.raw)
         .nth(ordinal)
         .and_then(|capture| {
-            ["uv", "pip", "python"]
+            ["uv", "pip", "pipx", "python"]
                 .iter()
                 .find_map(|name| capture.name(name))
         })
@@ -2060,7 +2109,7 @@ fn pip_boolean(value: &str) -> bool {
     )
 }
 
-fn rule_npm_install(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+fn rule_npm_install(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
     let npm_install = Regex::new(r"\bnpm\s+install\b").expect("valid npm install regex");
     instrs_of(instrs, "RUN")
         .into_iter()
@@ -2076,19 +2125,16 @@ fn rule_npm_install(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             }
             (!a.contains("--production") && !a.contains("--omit=dev")).then_some((i, false))
         })
-        .map(|(i, global)| Finding {
-            column: 0,
-            end_line: 0,
-            end_column: 0,
-            rule: "DF031".into(),
-            severity: Severity::Info,
-            line: i.line,
-            message: if global { "npm global install without version pinning" } else { "npm install used — consider npm ci for reproducible builds" }.to_string(),
-            roast: if global { "A global npm package without a version means this build installs whatever happens to be latest. Pin it with package@version." } else { "`npm install` in a Dockerfile: non-deterministic, slower than `npm ci`, \
+        .map(|(i, global)| finding_at_span(
+            "DF031",
+            Severity::Info,
+            shell_command_span(raw, i, "npm"),
+            if global { "npm global install without version pinning" } else { "npm install used — consider npm ci for reproducible builds" }.to_string(),
+            if global { "A global npm package without a version means this build installs whatever happens to be latest. Pin it with package@version." } else { "`npm install` in a Dockerfile: non-deterministic, slower than `npm ci`, \
                     and potentially installs different versions than your lockfile specifies. \
                     `npm ci` exists specifically for CI/CD and containers. Use it."
-                }.to_string(),
-        })
+                },
+        ))
         .collect()
 }
 
@@ -4324,7 +4370,7 @@ fn rule_wget_no_progress(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
 }
 
 fn rule_pip_version_pinning(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
-    let install = pip_install_regex();
+    let install = pip_pinning_regex();
     instrs_of(instrs, "RUN")
         .into_iter()
         .flat_map(|instruction| {
@@ -4353,7 +4399,9 @@ fn rule_pip_version_pinning(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
 
 fn pip_install_has_unpinned_target(command: &str) -> bool {
     command.split(['&', '|', ';']).any(|segment| {
-        if !(segment.contains("pip install") || segment.contains("pip3 install"))
+        if !(segment.contains("pip install")
+            || segment.contains("pip3 install")
+            || segment.contains("pipx install"))
             || segment.contains("-r ")
             || segment.contains("--requirement")
             || segment.contains(".txt")
@@ -4497,7 +4545,7 @@ fn is_local_pip_install(command: &str) -> bool {
 }
 
 fn pip_install_arguments(command: &str) -> Option<&str> {
-    ["pip install", "pip3 install"]
+    ["pip install", "pip3 install", "pipx install"]
         .into_iter()
         .find_map(|install| {
             command

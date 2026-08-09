@@ -197,6 +197,18 @@ fn package_cache_rules_ignore_disposable_stages_but_follow_inheritance() {
 }
 
 #[test]
+fn package_cache_rules_check_unconsumed_named_output_stages() {
+    let df = "FROM ubuntu:24.04 AS runtime\nRUN apt-get install -y curl && rm -rf /var/lib/{apt,dpkg,cache,log}\nFROM ubuntu:24.04 AS ci-runtime\nRUN apt-get install -y curl && rm -rf /var/lib/{apt,dpkg,cache,log}\nFROM runtime\nCMD [\"curl\", \"--version\"]\n";
+    let findings = lint(df);
+    let lines = findings
+        .iter()
+        .filter(|finding| finding.rule == "DF004")
+        .map(|finding| finding.line)
+        .collect::<Vec<_>>();
+    assert_eq!(lines, [2, 4]);
+}
+
+#[test]
 fn package_cache_cleanup_before_root_snapshot_prevents_runtime_findings() {
     let df = "FROM registry.access.redhat.com/ubi9/ubi AS rootfs\nRUN microdnf install -y curl\nRUN microdnf clean all\nFROM scratch\nCOPY --from=rootfs / /\n";
     let findings = lint(df);
@@ -1204,6 +1216,14 @@ fn df031_fires_on_unpinned_npm_global_install() {
 }
 
 #[test]
+fn df031_reports_the_npm_token_on_its_physical_line() {
+    let df = "FROM node:20\nRUN apt-get update && \\\n    npm install -g yarn\n";
+    let findings = lint(df);
+    let finding = finding(&findings, "DF031");
+    assert_eq!((finding.line, finding.column), (3, 5));
+}
+
+#[test]
 fn df031_clear_on_prefixed_package_managers() {
     for command in ["pnpm install --frozen-lockfile", "cnpm install"] {
         let df = format!("FROM node:20\nRUN {command}\nCMD [\"node\", \"app.js\"]\n");
@@ -1631,6 +1651,18 @@ fn df051_fires_on_unpinned_pip() {
     let df =
         "FROM python:3.12\nRUN pip install --no-cache-dir flask\nCMD [\"python\", \"app.py\"]\n";
     assert!(has_rule(&lint(df), "DF051"));
+}
+
+#[test]
+fn df051_checks_pipx_packages_and_maps_the_pipx_token() {
+    let pinned = "FROM python:3.12\nRUN pipx install tool==1.2.3\n";
+    assert!(no_rule(&lint(pinned), "DF051"));
+
+    let unpinned =
+        "FROM python:3.12\nRUN echo preparing && \\\n    pipx install --include-deps tool\n";
+    let findings = lint(unpinned);
+    let finding = finding(&findings, "DF051");
+    assert_eq!((finding.line, finding.column), (3, 5));
 }
 
 #[test]
