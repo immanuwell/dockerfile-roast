@@ -408,11 +408,11 @@ droast completion fish | source
   ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   DF001    WARN     correctness,reproducibility        Use specific base image tags instead of 'latest'
   DF002    ERROR    security                           Do not run as root
-  DF011    WARN     performance                        Use multi-stage builds to reduce image size
+  DF011    INFO     performance                        Use multi-stage builds to reduce image size
   DF013    ERROR    security                           Avoid storing secrets in ENV variables
   DF014    ERROR    security                           Avoid hardcoding passwords or tokens in ARG/ENV
   DF020    INFO     security                           Set explicit non-root USER
-  DF003    WARN     performance                        Combine RUN commands to reduce layers
+  DF003    INFO     performance                        Combine RUN commands to reduce layers
   DF004    WARN     performance                        Clean apt/yum/apk cache in the same RUN layer
   DF005    INFO     correctness,reproducibility        Pin package versions for reproducibility
   DF006    WARN     maintainability,performance        Avoid ADD for local files; prefer COPY
@@ -428,7 +428,7 @@ droast completion fish | source
   DF023    WARN     correctness,maintainability        Avoid multiple FROM without aliases (unintended multistage)
   DF024    WARN     correctness,reproducibility        Avoid using :latest in FROM even with aliases
   DF025    WARN     correctness,reliability            Use JSON array syntax for CMD/ENTRYPOINT
-  DF026    WARN     maintainability,performance        Avoid recursive COPY from root
+  DF026    WARN     maintainability,performance        Avoid local COPY to the filesystem root
   DF030    INFO     performance                        Avoid using pip without --no-cache-dir
   DF031    INFO     performance                        Avoid npm install without ci/--production for prod images
   DF032    INFO     maintainability,reliability        Set PYTHONDONTWRITEBYTECODE and PYTHONUNBUFFERED for Python images
@@ -438,7 +438,7 @@ droast completion fish | source
   DF036    INFO     maintainability,reliability        Avoid Dockerfile with no CMD or ENTRYPOINT
   DF015    ERROR    correctness,reliability            Avoid using apt-get without -y flag
   DF016    INFO     performance                        Use --no-install-recommends with apt-get
-  DF021    ERROR    security,supply-chain              Avoid wget|sh pipe patterns (execute remote code)
+  DF021    ERROR    security,supply-chain              Avoid executing unverified remote scripts
   DF027    ERROR    correctness,reliability            Do not use yum without -y flag
   DF028    WARN     performance                        Cache-bust apt-get update
   DF029    WARN     performance                        Avoid apk add without --no-cache
@@ -463,13 +463,13 @@ droast completion fish | source
   DF055    INFO     performance                        Run yarn cache clean after yarn install
   DF056    INFO     maintainability,performance        Use wget --progress=dot:giga to avoid bloated build logs
   DF057    WARN     reliability,security               Set -o pipefail before RUN commands that use pipes
-  DF058    WARN     maintainability,performance        Use either wget or curl consistently, not both
+  DF058    INFO     maintainability,performance        Use either wget or curl consistently, not both
   DF059    WARN     correctness,maintainability        Use apt-get or apt-cache instead of apt in scripts
   DF060    INFO     maintainability,reliability        Avoid running pointless interactive commands inside containers
   DF061    INFO     correctness,maintainability        Do not use --platform in FROM unless required
   DF062    INFO     correctness,reproducibility        ENV references may use inherited values
   DF063    WARN     correctness,maintainability        COPY to relative destination requires WORKDIR to be set first
-  DF064    WARN     performance                        useradd without -l flag may create excessively large images
+  DF064    WARN     performance                        Use useradd -l with explicitly high UIDs
   DF065    WARN     reproducibility,supply-chain       Enforce configured approved registries
   DF066    WARN     reliability,security               Bash-specific syntax used without a SHELL instruction
   DF067    INFO     maintainability,performance        Reserved: archive extraction policy is context-dependent
