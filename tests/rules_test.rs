@@ -1798,6 +1798,14 @@ fn df054_fires_on_legacy_unversioned_go_get() {
 }
 
 #[test]
+fn df054_accepts_local_go_get_targets() {
+    for target in [".", "./cmd/tool", "../tool"] {
+        let df = format!("FROM golang:1.21\nRUN go get {target}\n");
+        assert!(no_rule(&lint(&df), "DF054"), "flagged {target}");
+    }
+}
+
+#[test]
 fn df054_accepts_module_managed_go_tool_install() {
     let df = "FROM golang:1.24\nCOPY go.mod go.sum ./\nRUN go install tool\n";
     assert!(no_rule(&lint(df), "DF054"));

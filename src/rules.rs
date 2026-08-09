@@ -4669,7 +4669,14 @@ fn go_get_needs_version(segment: &str, module_managed: bool) -> bool {
         .filter(|word| !word.starts_with('-'))
         .copied()
         .collect::<Vec<_>>();
-    !module_managed && packages.iter().any(|package| !package.contains('@'))
+    !module_managed
+        && packages.iter().any(|package| {
+            !package.contains('@')
+                && !matches!(*package, "." | "./")
+                && !package.starts_with("./")
+                && !package.starts_with("../")
+                && !package.starts_with('/')
+        })
 }
 
 fn go_install_needs_version(segment: &str, module_managed: bool) -> bool {
