@@ -4364,7 +4364,16 @@ fn pip_install_has_unpinned_target(command: &str) -> bool {
         let Some(arguments) = pip_install_arguments(segment) else {
             return false;
         };
+        let mut skip_option_value = false;
         arguments.split_whitespace().any(|target| {
+            if skip_option_value {
+                skip_option_value = false;
+                return false;
+            }
+            if pip_option_takes_value(target) {
+                skip_option_value = true;
+                return false;
+            }
             !target.starts_with('-')
                 && !target.contains("==")
                 && !target.contains(">=")
@@ -4384,6 +4393,39 @@ fn pip_install_has_unpinned_target(command: &str) -> bool {
                         .is_some_and(|(_, reference)| !reference.is_empty()))
         })
     })
+}
+
+fn pip_option_takes_value(option: &str) -> bool {
+    matches!(
+        option,
+        "-c" | "--constraint"
+            | "-r"
+            | "--requirement"
+            | "-i"
+            | "--index-url"
+            | "--extra-index-url"
+            | "-f"
+            | "--find-links"
+            | "--trusted-host"
+            | "--python"
+            | "--target"
+            | "--prefix"
+            | "--root"
+            | "--platform"
+            | "--implementation"
+            | "--abi"
+            | "--only-binary"
+            | "--no-binary"
+            | "--progress-bar"
+            | "--timeout"
+            | "--retries"
+            | "--exists-action"
+            | "--cache-dir"
+            | "--cert"
+            | "--client-cert"
+            | "--proxy"
+            | "--src"
+    )
 }
 
 fn is_local_pip_install(command: &str) -> bool {

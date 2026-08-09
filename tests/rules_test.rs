@@ -1681,6 +1681,15 @@ fn df051_accepts_a_pinned_vcs_requirement_and_maps_the_pip_token() {
 }
 
 #[test]
+fn df051_ignores_value_taking_pip_options() {
+    let pinned = "FROM python:3.12\nRUN uv pip install flashinfer==1.2.3 --index-url https://packages.example.test/simple --extra-index-url https://mirror.example.test/simple --trusted-host packages.example.test\n";
+    assert!(no_rule(&lint(pinned), "DF051"));
+
+    let mixed = "FROM python:3.12\nRUN pip install pinned==1.2.3 unpinned --index-url https://packages.example.test/simple\n";
+    assert!(has_rule(&lint(mixed), "DF051"));
+}
+
+#[test]
 fn df051_accepts_local_archives_editable_directories_and_dist_globs() {
     for target in [
         "./package.tar.gz",
