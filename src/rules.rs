@@ -5024,16 +5024,15 @@ fn rule_dnf_clean(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
     let persistent_stages = persistent_stage_indices(instrs);
     let layer_stages = layer_persistent_stage_indices(instrs);
     let instruction_stages = instruction_stage_indices(instrs);
-    let install = Regex::new(r"\b(?P<manager>microdnf|dnf|tdnf)\s+install\b")
-        .expect("valid dnf-family install regex");
+    let install = Regex::new(r"(?i)\b(?P<manager>microdnf|dnf|tdnf)\b(?P<body>[^;&|\n]*)")
+        .expect("valid dnf-family invocation regex");
     instrs
         .iter()
         .enumerate()
         .filter_map(|(index, instruction)| {
-            let manager = (instruction.instruction == "RUN")
-                .then(|| install.captures(&instruction.arguments))
-                .flatten()
-                .and_then(|capture| capture.name("manager"))?;
+            let (manager, _, _) = (instruction.instruction == "RUN")
+                .then(|| dnf_install_match(&instruction.arguments, &install))
+                .flatten()?;
             let cache_is_ephemeral = ["/var/cache/dnf", "/var/cache/tdnf", "/var/cache/yum"]
                 .iter()
                 .any(|path| has_ephemeral_mount_covering(instruction, path));
@@ -5047,17 +5046,13 @@ fn rule_dnf_clean(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
                     index,
                     cleans_dnf_cache,
                 ))
-            .then_some((instruction, manager.as_str()))
+            .then_some((instruction, manager))
         })
         .map(|(instruction, manager)| {
             finding_at_span(
                 "DF046",
                 Severity::Warning,
-                instruction_substring_span(
-                    raw,
-                    instruction,
-                    &["microdnf install", "tdnf install", "dnf install"],
-                ),
+                dnf_install_span(raw, instruction, &install),
                 format!(
                     "{manager} clean all missing after {manager} install — RPM cache bloats the image"
                 ),
@@ -5065,6 +5060,57 @@ fn rule_dnf_clean(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
             )
         })
         .collect()
+}
+
+fn dnf_install_span(source: &str, instruction: &Instruction, install: &Regex) -> SourceSpan {
+    dnf_install_match(&instruction.raw, install)
+        .map(|(_, start, end)| instruction_match_span(source, instruction, start, end))
+        .unwrap_or(instruction.span)
+}
+
+fn dnf_install_match<'a>(command: &'a str, invocation: &Regex) -> Option<(&'a str, usize, usize)> {
+    invocation.captures_iter(command).find_map(|capture| {
+        let manager = capture.name("manager")?.as_str();
+        let body = capture.name("body")?;
+        let mut cursor = 0;
+        let mut skip_option_value = false;
+        while let Some((start, end, token)) = next_shell_token(body.as_str(), cursor) {
+            cursor = end;
+            let token = token.trim_matches(['\'', '"']);
+            if skip_option_value {
+                skip_option_value = false;
+                continue;
+            }
+            if token.eq_ignore_ascii_case("install") {
+                return Some((manager, body.start() + start, body.start() + end));
+            }
+            if token.starts_with('-') {
+                if dnf_option_takes_value(token) {
+                    skip_option_value = true;
+                }
+                continue;
+            }
+            break;
+        }
+        None
+    })
+}
+
+fn dnf_option_takes_value(option: &str) -> bool {
+    matches!(
+        option,
+        "-c" | "--config"
+            | "--installroot"
+            | "--releasever"
+            | "--setopt"
+            | "--enablerepo"
+            | "--disablerepo"
+            | "--exclude"
+            | "--disableexcludes"
+            | "--color"
+            | "--downloaddir"
+            | "--destdir"
+    )
 }
 
 fn rule_yum_clean(instrs: &[Instruction], raw: &str) -> Vec<Finding> {

@@ -1497,6 +1497,18 @@ fn df046_fires_on_dnf_without_clean() {
 }
 
 #[test]
+fn df046_accepts_dnf_options_before_install_and_maps_the_install_token() {
+    let df = "FROM fedora:42\nRUN dnf --enablerepo=powertools install -y doxygen\nRUN microdnf --setopt install_weak_deps=False install -y curl\n";
+    let findings = lint(df);
+    let locations = findings
+        .iter()
+        .filter(|finding| finding.rule == "DF046")
+        .map(|finding| (finding.line, finding.column))
+        .collect::<Vec<_>>();
+    assert_eq!(locations, [(2, 33), (3, 47)]);
+}
+
+#[test]
 fn df046_clear_on_dnf_with_clean() {
     let df = "FROM fedora:38\nRUN dnf install -y curl && dnf clean all\n";
     assert!(no_rule(&lint(df), "DF046"));
