@@ -454,7 +454,7 @@ droast completion fish | source
   DF046    WARN     performance                        Run dnf clean all after dnf install
   DF047    WARN     performance                        Run yum clean all after yum install
   DF048    ERROR    correctness,reliability            COPY with multiple sources requires destination to end with /
-  DF049    WARN     correctness,reliability            Reserved for invalid COPY --from references
+  DF049    INFO     correctness,reliability            Review unresolved COPY --from references resembling stage aliases
   DF050    ERROR    correctness,reliability            COPY --from cannot reference the current stage
   DF051    WARN     reproducibility,supply-chain       Pin versions in pip install
   DF052    INFO     reproducibility,supply-chain       Pin versions in apk add

@@ -49,6 +49,21 @@ struct Script {
     preamble_lines: usize,
 }
 
+#[derive(Clone, Copy)]
+struct ShellBehavior {
+    dialect: Option<&'static str>,
+    busybox_extensions: bool,
+}
+
+impl Default for ShellBehavior {
+    fn default() -> Self {
+        Self {
+            dialect: Some("sh"),
+            busybox_extensions: false,
+        }
+    }
+}
+
 /// Lint every shell-form RUN independently, matching Docker's one-shell-per-RUN
 /// execution model. `auto` skips cleanly when ShellCheck is not installed.
 pub fn lint(
@@ -61,16 +76,19 @@ pub fn lint(
         return Vec::new();
     }
     let mut findings = Vec::new();
-    let mut dialect = Some("sh");
+    let mut shell = ShellBehavior::default();
+    let mut stage_shells = HashMap::<String, ShellBehavior>::new();
     let mut stage_environment = HashMap::<String, HashSet<String>>::new();
     let mut environment = HashSet::new();
     let mut current_stage_alias = None;
     for instruction in instructions {
         if instruction.instruction == "FROM" {
             environment = from_stage_environment(instruction, &stage_environment);
+            shell = from_stage_shell(instruction, &stage_shells);
             current_stage_alias = from_alias(instruction);
             if let Some(alias) = &current_stage_alias {
                 stage_environment.insert(alias.clone(), environment.clone());
+                stage_shells.insert(alias.clone(), shell);
             }
             continue;
         }
@@ -82,18 +100,26 @@ pub fn lint(
             continue;
         }
         if instruction.instruction == "SHELL" {
-            dialect = shell_dialect(instruction);
+            shell = shell_behavior(instruction, shell.busybox_extensions);
+            if let Some(alias) = &current_stage_alias {
+                stage_shells.insert(alias.clone(), shell);
+            }
             continue;
         }
         if instruction.instruction != "RUN" || !matches!(instruction.form, InstructionForm::Shell) {
             continue;
         }
-        let Some(dialect) = dialect else {
+        let Some(dialect) = shell.dialect else {
             continue;
         };
         for script in scripts_for_run(content, instruction, dialect, &environment) {
             match run(&script, exclude) {
-                Ok(mut shellcheck_findings) => findings.append(&mut shellcheck_findings),
+                Ok(mut shellcheck_findings) => {
+                    shellcheck_findings.retain(|finding| {
+                        shellcheck_finding_applies(finding, shell.busybox_extensions)
+                    });
+                    findings.append(&mut shellcheck_findings);
+                }
                 Err(error) if mode == Mode::Auto && is_not_found(&error) => return findings,
                 Err(error) => findings.push(bridge_error(instruction.line, error)),
             }
@@ -115,6 +141,22 @@ fn shell_dialect(instruction: &Instruction) -> Option<&'static str> {
         // PowerShell and cmd use incompatible syntax. Do not feed them to a
         // POSIX analyzer and manufacture misleading diagnostics.
         _ => None,
+    }
+}
+
+fn shell_behavior(instruction: &Instruction, inherited_busybox: bool) -> ShellBehavior {
+    let dialect = shell_dialect(instruction);
+    let executable = match &instruction.form {
+        InstructionForm::Json(command) => command
+            .first()
+            .and_then(|value| value.rsplit(['/', '\\']).next())
+            .unwrap_or_default()
+            .to_ascii_lowercase(),
+        _ => String::new(),
+    };
+    ShellBehavior {
+        dialect,
+        busybox_extensions: executable == "ash" || executable == "sh" && inherited_busybox,
     }
 }
 
@@ -141,6 +183,41 @@ fn from_stage_environment(
         .and_then(|image| stage_environment.get(&image.to_ascii_lowercase()))
         .cloned()
         .unwrap_or_default()
+}
+
+fn from_stage_shell(
+    instruction: &Instruction,
+    stage_shells: &HashMap<String, ShellBehavior>,
+) -> ShellBehavior {
+    let image = instruction
+        .arguments
+        .split_whitespace()
+        .find(|token| !token.starts_with("--"))
+        .unwrap_or_default();
+    if let Some(shell) = stage_shells.get(&image.to_ascii_lowercase()) {
+        return *shell;
+    }
+    let without_digest = image.split('@').next().unwrap_or(image);
+    let last_slash = without_digest.rfind('/');
+    let repository = without_digest.rfind(':').map_or(without_digest, |colon| {
+        if last_slash.is_none_or(|slash| colon > slash) {
+            &without_digest[..colon]
+        } else {
+            without_digest
+        }
+    });
+    let image_name = repository.rsplit('/').next().unwrap_or(repository);
+    ShellBehavior {
+        dialect: Some("sh"),
+        busybox_extensions: matches!(
+            image_name.to_ascii_lowercase().as_str(),
+            "alpine" | "busybox"
+        ),
+    }
+}
+
+fn shellcheck_finding_applies(finding: &Finding, busybox_extensions: bool) -> bool {
+    !busybox_extensions || !matches!(finding.rule.as_str(), "SC3010" | "SC3020" | "SC3060")
 }
 
 fn declared_names(instruction: &Instruction) -> Vec<String> {
@@ -304,9 +381,8 @@ fn run(script: &Script, exclude: &[String]) -> anyhow::Result<Vec<Finding>> {
     Ok(diagnostics
         .into_iter()
         .filter_map(|diagnostic| {
-            (diagnostic.line > script.preamble_lines).then(|| {
-                map_diagnostic(diagnostic, &script.line_starts, script.preamble_lines)
-            })
+            (diagnostic.line > script.preamble_lines)
+                .then(|| map_diagnostic(diagnostic, &script.line_starts, script.preamble_lines))
         })
         .collect())
 }
@@ -384,11 +460,46 @@ fn is_not_found(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        declared_names, heredoc_line_starts, map_diagnostic, script_source, scripts_for_run,
-        shell_dialect, source_line_starts, Diagnostic,
+        declared_names, from_stage_shell, heredoc_line_starts, map_diagnostic, script_source,
+        scripts_for_run, shell_dialect, shellcheck_finding_applies, source_line_starts, Diagnostic,
     };
     use crate::parser::parse;
-    use std::collections::HashSet;
+    use crate::rules::{Finding, Severity};
+    use std::collections::{HashMap, HashSet};
+
+    #[test]
+    fn filters_only_known_busybox_extension_diagnostics() {
+        let finding = |rule: &str| Finding {
+            rule: rule.into(),
+            severity: Severity::Warning,
+            line: 1,
+            column: 1,
+            end_line: 1,
+            end_column: 2,
+            message: String::new(),
+            roast: String::new(),
+        };
+        for rule in ["SC3010", "SC3020", "SC3060"] {
+            assert!(!shellcheck_finding_applies(&finding(rule), true));
+            assert!(shellcheck_finding_applies(&finding(rule), false));
+        }
+        assert!(shellcheck_finding_applies(&finding("SC2086"), true));
+    }
+
+    #[test]
+    fn recognizes_busybox_base_and_named_stage_inheritance() {
+        let instructions =
+            parse("FROM alpine:3.21 AS base\nFROM base AS inherited\nFROM ubuntu:24.04 AS posix\n");
+        let direct = from_stage_shell(&instructions[0], &HashMap::new());
+        assert!(direct.busybox_extensions);
+
+        let inherited = from_stage_shell(
+            &instructions[1],
+            &HashMap::from([("base".to_string(), direct)]),
+        );
+        assert!(inherited.busybox_extensions);
+        assert!(!from_stage_shell(&instructions[2], &HashMap::new()).busybox_extensions);
+    }
 
     #[test]
     fn maps_shellcheck_ranges_to_dockerfile_source_positions() {

@@ -652,6 +652,20 @@ fn df034_reports_each_occurrence_at_the_actual_mode_token() {
     assert!(findings.iter().all(|finding| finding.column > 0));
 }
 
+#[test]
+fn df034_checks_copy_chmod_flags() {
+    for mode in ["777", "0777", "a+rwX", "ugo+w"] {
+        let df = format!("FROM scratch\nCOPY --chmod={mode} app /app\n");
+        let findings = lint(&df);
+        let finding = finding(&findings, "DF034");
+        assert_eq!((finding.line, finding.column), (2, 14));
+    }
+    assert!(no_rule(
+        &lint("FROM scratch\nCOPY --chmod=1777 app /app\n"),
+        "DF034"
+    ));
+}
+
 // ─── DF030: pip no-cache-dir ─────────────────────────────────────────────────
 
 #[test]
@@ -673,6 +687,17 @@ fn df030_clear_when_cache_is_purged_in_the_same_run() {
     let uv = "FROM python:3.12\nRUN uv pip install flask && uv cache clean\n";
     assert!(no_rule(&lint(pip), "DF030"));
     assert!(no_rule(&lint(uv), "DF030"));
+}
+
+#[test]
+fn df030_applies_no_cache_flags_to_each_install_invocation() {
+    let mixed = "FROM python:3.12\nRUN pip install --upgrade pip \\\n+    && pip install -r requirements.txt \\\n+    && pip install --no-cache-dir .\n";
+    let findings = lint(mixed);
+    let pip = finding(&findings, "DF030");
+    assert_eq!((pip.line, pip.column), (2, 5));
+
+    let all_safe = "FROM python:3.12\nRUN pip install --no-cache-dir --upgrade pip \\\n+    && pip install --no-cache-dir .\n";
+    assert!(no_rule(&lint(all_safe), "DF030"));
 }
 
 #[test]
@@ -957,6 +982,18 @@ fn df016_fires_without_no_install_recommends() {
 fn df016_clear_with_no_install_recommends() {
     let df = "FROM ubuntu:22.04\nRUN apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*\n";
     assert!(no_rule(&lint(df), "DF016"));
+}
+
+#[test]
+fn df016_recognizes_global_apt_options_before_install() {
+    for command in ["apt-get -qq install curl", "apt-get -y install tzdata"] {
+        let df = format!("FROM ubuntu:24.04\nRUN {command}\n");
+        assert!(has_rule(&lint(&df), "DF016"), "missed {command}");
+    }
+    assert!(no_rule(
+        &lint("FROM ubuntu:24.04\nRUN apt-get -qq install --no-install-recommends curl\n"),
+        "DF016"
+    ));
 }
 
 // ─── DF020: no USER instruction ──────────────────────────────────────────────
@@ -1405,6 +1442,18 @@ fn df046_clear_on_dnf_with_clean() {
 }
 
 #[test]
+fn df046_models_tdnf_install_and_cleanup_explicitly() {
+    let clean = "FROM photon:5.0\nRUN tdnf install -y curl && tdnf clean all\n";
+    let removed = "FROM photon:5.0\nRUN tdnf install -y curl && rm -rf /var/cache/tdnf\n";
+    let dirty = "FROM photon:5.0\nRUN tdnf install -y curl\n";
+    assert!(no_rule(&lint(clean), "DF046"));
+    assert!(no_rule(&lint(removed), "DF046"));
+    let findings = lint(dirty);
+    let finding = finding(&findings, "DF046");
+    assert!(finding.message.starts_with("tdnf clean all"));
+}
+
+#[test]
 fn df046_accepts_clean_options_and_does_not_duplicate_df004() {
     let clean = "FROM registry.access.redhat.com/ubi9/ubi\nRUN dnf install -y curl && dnf clean --disableplugin=subscription-manager all\n";
     let dirty = "FROM fedora:latest\nRUN dnf install -y curl\n";
@@ -1507,6 +1556,19 @@ fn df049_clear_on_copy_from_numeric_index() {
     assert!(no_rule(&lint(df), "DF049"));
 }
 
+#[test]
+fn df049_informs_on_a_strong_stage_alias_typo() {
+    let df =
+        "FROM alpine:3.19 AS license-set\nRUN mkdir /out\nFROM scratch\nCOPY --from=set /out /\n";
+    let findings = lint(df);
+    let finding = finding(&findings, "DF049");
+    assert_eq!(finding.severity, Severity::Info);
+    assert!(finding.message.contains("license-set"));
+
+    let one_edit = "FROM alpine:3.19 AS builder\nFROM scratch\nCOPY --from=buildre /out /\n";
+    assert!(has_rule(&lint(one_edit), "DF049"));
+}
+
 // ─── DF050: COPY --from current stage ────────────────────────────────────────
 
 #[test]
@@ -1605,6 +1667,26 @@ fn df052_clear_on_multiline_pinned_apk_install() {
     assert!(no_rule(&lint(df), "DF052"));
 }
 
+#[test]
+fn df052_recognizes_global_apk_options_before_add() {
+    for command in [
+        "apk --no-cache add curl",
+        "apk --update add ca-certificates",
+        "apk --root /rootfs --no-cache --keys-dir /etc/apk/keys add --arch amd64 bash",
+    ] {
+        let df = format!("FROM alpine:3.21\nRUN {command}\n");
+        assert!(has_rule(&lint(&df), "DF052"), "missed {command}");
+    }
+    assert!(no_rule(
+        &lint("FROM alpine:3.21\nRUN apk --no-cache add curl=8.21.0-r0\n"),
+        "DF052"
+    ));
+    assert!(has_rule(
+        &lint("FROM alpine:3.21\nRUN <<SCRIPT\napk --no-cache add curl\nSCRIPT\n"),
+        "DF052"
+    ));
+}
+
 // ─── DF053: gem version pinning ──────────────────────────────────────────────
 
 #[test]
@@ -1631,6 +1713,12 @@ fn df054_fires_on_go_install_no_version() {
 fn df054_clear_on_go_install_with_version() {
     let df = "FROM golang:1.21\nRUN go install github.com/user/tool@v1.2.3\n";
     assert!(no_rule(&lint(df), "DF054"));
+}
+
+#[test]
+fn df054_treats_latest_as_unpinned() {
+    let df = "FROM golang:1.24\nRUN go install example.com/tool@latest\n";
+    assert!(has_rule(&lint(df), "DF054"));
 }
 
 #[test]
@@ -1903,6 +1991,10 @@ fn df057_ignores_low_value_and_non_pipeline_shell_syntax() {
         "gid=$(getent group users | cut -d: -f3)",
         "echo one | tee /tmp/one | tee /tmp/two",
         "archive=$(ls -v package-*.tar.gz | tail -n 1)",
+        "suffix=$(ls package-* | sed -e 's/^package//')",
+        "root=$(tar tfz package.tar.gz | tail -n1 | cut -f1 -d/)",
+        "cp package-* \"/out/package$(ls package-* | sed -e 's/^package//')\"",
+        "cp \"$(tar tfz package.tar.gz | tail -n1 | cut -f1 -d/)\" /out",
     ] {
         let df = format!("FROM ubuntu:24.04\nRUN {command}\n");
         assert!(
@@ -1910,6 +2002,12 @@ fn df057_ignores_low_value_and_non_pipeline_shell_syntax() {
             "unexpected DF057 for {command}"
         );
     }
+}
+
+#[test]
+fn df057_ignores_explicit_powershell_pipelines_with_unknown_metadata() {
+    let df = "FROM external/windows-base:latest\nRUN powershell busybox.exe --list ^|%{ Write-Host $_ }\n";
+    assert!(no_rule(&lint(df), "DF057"));
 }
 
 #[test]
@@ -2250,6 +2348,18 @@ fn df066_fires_on_double_bracket_no_shell() {
 fn df066_fires_on_source_builtin_no_shell() {
     let df = "FROM ubuntu:22.04\nRUN source /etc/profile && env\n";
     assert!(has_rule(&lint(df), "DF066"));
+}
+
+#[test]
+fn df066_models_combined_redirection_capability() {
+    let unknown = "FROM external/base:latest\nRUN command &> /dev/null\n";
+    let alpine = "FROM alpine:3.21\nRUN command &> /dev/null\n";
+    assert!(has_rule(&lint(unknown), "DF066"));
+    assert!(no_rule(&lint(alpine), "DF066"));
+    assert!(no_rule(
+        &lint("FROM ubuntu:24.04\nRUN echo '&> is documentation'\n"),
+        "DF066"
+    ));
 }
 
 #[test]

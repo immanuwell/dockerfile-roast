@@ -386,8 +386,8 @@ pub fn all_rules() -> Vec<Rule> {
         },
         Rule {
             id: "DF049",
-            severity: Severity::Warning,
-            description: "Reserved for invalid COPY --from references",
+            severity: Severity::Info,
+            description: "Review unresolved COPY --from references resembling stage aliases",
             func: rule_copy_from_undefined_stage,
         },
         Rule {
@@ -1280,9 +1280,11 @@ fn cleans_apt_cache(command: &str) -> bool {
 }
 
 fn cleans_dnf_cache(command: &str) -> bool {
-    let clean = Regex::new(r"\b(?:micro)?dnf\b[^;&|]*\bclean\b").expect("valid dnf cleanup regex");
+    let clean =
+        Regex::new(r"\b(?:microdnf|dnf|tdnf)\b[^;&|]*\bclean\b").expect("valid dnf cleanup regex");
     clean.is_match(command)
         || removes_cache_path(command, "/var/cache/dnf")
+        || removes_cache_path(command, "/var/cache/tdnf")
         || removes_cache_path(command, "/var/cache/yum")
 }
 
@@ -1901,10 +1903,11 @@ fn rule_pip_no_cache(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
         .into_iter()
         .map(|instruction| instruction.span.start.offset)
         .collect::<std::collections::HashSet<_>>();
+    let install = pip_install_regex();
 
     instrs
         .iter()
-        .filter(|instruction| match instruction.instruction.as_str() {
+        .filter_map(|instruction| match instruction.instruction.as_str() {
             "FROM" => {
                 let base = parse_from_arguments(&instruction.arguments).map(|from| from.image);
                 pip_cache_disabled = base
@@ -1925,7 +1928,7 @@ fn rule_pip_no_cache(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
                     stage_cache_settings.insert(stage.clone(), pip_cache_disabled);
                     stage_uv_cache_dirs.insert(stage.clone(), uv_cache_dir.clone());
                 }
-                false
+                None
             }
             "ENV" => {
                 for (name, value, _) in instruction_assignments(instruction) {
@@ -1939,38 +1942,28 @@ fn rule_pip_no_cache(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
                         stage_uv_cache_dirs.insert(stage.clone(), uv_cache_dir.clone());
                     }
                 }
-                false
+                None
             }
             "RUN" => {
                 if !persistent_runs.contains(&instruction.span.start.offset) {
-                    return false;
+                    return None;
                 }
-                let arguments = &instruction.arguments;
-                if is_uv_pip_install(arguments) {
-                    !arguments.contains("--no-cache")
-                        && !arguments.contains("uv cache clean")
-                        && !has_language_cache_mount(instruction, "uv")
-                        && !uv_cache_dir.as_deref().is_some_and(|directory| {
-                            has_ephemeral_mount_covering(instruction, directory)
-                        })
-                } else {
-                    (arguments.contains("pip install") || arguments.contains("pip3 install"))
-                        && !arguments.contains("--no-cache-dir")
-                        && !arguments.contains("pip cache purge")
-                        && !removes_cache_path(arguments, "/root/.cache/pip")
-                        && !removes_cache_path(arguments, "/root/.cache")
-                        && !pip_cache_disabled
-                        && !has_language_cache_mount(instruction, "pip")
-                }
+                pip_cache_violation(
+                    instruction,
+                    &install,
+                    pip_cache_disabled,
+                    uv_cache_dir.as_deref(),
+                )
+                .map(|(uv, ordinal)| (instruction, uv, ordinal))
             }
-            _ => false,
+            _ => None,
         })
-        .map(|i| {
+        .map(|(instruction, uv, ordinal)| {
             finding_at_span(
                 "DF030",
                 Severity::Info,
-                pip_install_span(raw, i),
-                if is_uv_pip_install(&i.arguments) {
+                pip_install_span(raw, instruction, &install, ordinal),
+                if uv {
                     "uv pip install without --no-cache wastes space in the image layer".to_string()
                 } else {
                     "pip install without --no-cache-dir wastes space in the image layer".to_string()
@@ -1983,13 +1976,62 @@ fn rule_pip_no_cache(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
         .collect()
 }
 
-fn pip_install_span(source: &str, instruction: &Instruction) -> SourceSpan {
-    let install = Regex::new(
+fn pip_install_regex() -> Regex {
+    Regex::new(
         r"(?i)(?:(?P<uv>\buv\b)\s+pip\s+install|(?P<pip>\bpip3?\b)\s+install|(?P<python>\bpython(?:[0-9]+(?:\.[0-9]+)?)?\b)[^;&|\n]*\s+-m\s+pip\s+install)",
     )
-    .expect("valid pip install regex");
+    .expect("valid pip install regex")
+}
+
+fn pip_cache_violation(
+    instruction: &Instruction,
+    install: &Regex,
+    pip_cache_disabled: bool,
+    uv_cache_dir: Option<&str>,
+) -> Option<(bool, usize)> {
+    let arguments = &instruction.arguments;
+    let pip_cleanup = arguments.contains("pip cache purge")
+        || removes_cache_path(arguments, "/root/.cache/pip")
+        || removes_cache_path(arguments, "/root/.cache");
+    let uv_cleanup = arguments.contains("uv cache clean");
+    let segments = shell_command_segments(arguments);
+
     install
-        .captures(&instruction.raw)
+        .captures_iter(arguments)
+        .enumerate()
+        .find_map(|(ordinal, capture)| {
+            let matched = capture.get(0)?;
+            let segment = segments.iter().find(|segment| {
+                segment.start <= matched.start() && matched.start() < segment.end
+            })?;
+            let invocation = &arguments[matched.start()..segment.end];
+            let uv = capture.name("uv").is_some();
+            let unsafe_cache = if uv {
+                !invocation.contains("--no-cache")
+                    && !uv_cleanup
+                    && !has_language_cache_mount(instruction, "uv")
+                    && !uv_cache_dir.is_some_and(|directory| {
+                        has_ephemeral_mount_covering(instruction, directory)
+                    })
+            } else {
+                !invocation.contains("--no-cache-dir")
+                    && !pip_cleanup
+                    && !pip_cache_disabled
+                    && !has_language_cache_mount(instruction, "pip")
+            };
+            unsafe_cache.then_some((uv, ordinal))
+        })
+}
+
+fn pip_install_span(
+    source: &str,
+    instruction: &Instruction,
+    install: &Regex,
+    ordinal: usize,
+) -> SourceSpan {
+    install
+        .captures_iter(&instruction.raw)
+        .nth(ordinal)
         .and_then(|capture| {
             ["uv", "pip", "python"]
                 .iter()
@@ -2006,12 +2048,6 @@ fn pip_boolean(value: &str) -> bool {
         value.to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
-}
-
-fn is_uv_pip_install(command: &str) -> bool {
-    Regex::new(r"(?:^|\s)uv\s+pip\s+install(?:\s|$)")
-        .expect("valid uv pip install regex")
-        .is_match(command)
 }
 
 fn rule_npm_install(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -2098,7 +2134,9 @@ fn rule_chmod_777(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
     let re =
         Regex::new(r"\bchmod\b(?:\s+-[^\s]+)*\s+(?P<mode>0?777|(?:a|ugo|o)\+[rwxX]*w[rwxX]*)\b")
             .expect("valid world-writable chmod regex");
-    instrs_of(instrs, "RUN")
+    let unsafe_mode = Regex::new(r"^(?:0?777|(?:a|ugo|o)\+[rwxX]*w[rwxX]*)$")
+        .expect("valid world-writable mode regex");
+    let mut findings = instrs_of(instrs, "RUN")
         .into_iter()
         .flat_map(|instruction| {
             re.captures_iter(&instruction.raw)
@@ -2125,7 +2163,42 @@ fn rule_chmod_777(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
                 })
                 .collect::<Vec<_>>()
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    for instruction in instrs_of(instrs, "COPY") {
+        for flag in &instruction.flags {
+            let Some(mode) = flag
+                .name
+                .eq_ignore_ascii_case("chmod")
+                .then_some(flag.value.as_deref())
+                .flatten()
+                .filter(|mode| unsafe_mode.is_match(mode))
+            else {
+                continue;
+            };
+            let relative_start = flag
+                .span
+                .start
+                .offset
+                .saturating_sub(instruction.span.start.offset);
+            let flag_text = flag.span.text(raw);
+            let mode_start = flag_text.find(mode).unwrap_or_default();
+            findings.push(finding_at_span(
+                "DF034",
+                Severity::Error,
+                instruction_match_span(
+                    raw,
+                    instruction,
+                    relative_start + mode_start,
+                    relative_start + mode_start + mode.len(),
+                ),
+                format!("COPY --chmod={mode} grants world-writable permissions — overly permissive"),
+                "COPY creates this path with world-writable permissions in the image. Use the minimum mode required by the runtime user.",
+            ));
+        }
+    }
+    findings.sort_by_key(|finding| (finding.line, finding.column));
+    findings
 }
 
 fn chmod_is_removed_temporary_directory(raw: &str, chmod_start: usize, mode_end: usize) -> bool {
@@ -2516,12 +2589,20 @@ fn apt_assume_yes_setting(command: &str) -> Option<bool> {
 }
 
 fn rule_apt_recommends(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let apt = Regex::new(r"(?i)\b(?:apt-get|apt)\b(?P<body>[^;&|\n]*)")
+        .expect("valid apt invocation regex");
     instrs_of(instrs, "RUN")
         .into_iter()
         .filter(|i| {
-            let a = &i.arguments;
-            (a.contains("apt-get install") || a.contains("apt install"))
-                && !a.contains("--no-install-recommends")
+            let script = run_script(i);
+            subcommand_arguments(
+                &script,
+                &apt,
+                "install",
+                &["-c", "--config-file", "-o", "--option"],
+            )
+            .into_iter()
+            .any(|arguments| !arguments.contains("--no-install-recommends"))
         })
         .map(|i| Finding {
             column: 0,
@@ -3401,6 +3482,22 @@ fn rule_bash_syntax_no_shell(instrs: &[Instruction], raw: &str) -> Vec<Finding> 
                     message.to_string(),
                     "'${!' is bash syntax. Set an explicit Bash SHELL before using it.",
                 ));
+            } else if !reported
+                && !shell_capabilities.supports("&>")
+                && contains_unquoted_operator(&command, "&>")
+            {
+                let message = if state.base_metadata_known {
+                    "RUN uses bash-specific syntax (combined stdout/stderr redirection) but no SHELL instruction is set"
+                } else {
+                    "RUN uses bash-specific syntax (combined stdout/stderr redirection) without an explicit SHELL in this stage"
+                };
+                findings.push(finding_at_span(
+                    "DF066",
+                    Severity::Warning,
+                    instruction_substring_span(raw, i, &["&>"]),
+                    message.to_string(),
+                    "'&>' is not portable POSIX redirection. Declare a shell that supports it, or use `>file 2>&1`.",
+                ));
             }
         }
         if let Some(alias) = &current_alias {
@@ -3415,6 +3512,7 @@ fn rule_bash_syntax_no_shell(instrs: &[Instruction], raw: &str) -> Vec<Finding> 
 struct ShellSyntaxCapabilities {
     source: bool,
     double_bracket: bool,
+    combined_redirect: bool,
 }
 
 impl ShellSyntaxCapabilities {
@@ -3436,6 +3534,7 @@ impl ShellSyntaxCapabilities {
             Self {
                 source: true,
                 double_bracket: true,
+                combined_redirect: true,
             }
         } else {
             Self::default()
@@ -3455,6 +3554,7 @@ impl ShellSyntaxCapabilities {
             Self {
                 source: true,
                 double_bracket: true,
+                combined_redirect: true,
             }
         } else {
             Self::default()
@@ -3465,9 +3565,36 @@ impl ShellSyntaxCapabilities {
         match command {
             "source" => self.source,
             "[[" => self.double_bracket,
+            "&>" => self.combined_redirect,
             _ => false,
         }
     }
+}
+
+fn contains_unquoted_operator(script: &str, operator: &str) -> bool {
+    let bytes = script.as_bytes();
+    let operator = operator.as_bytes();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut index = 0;
+    while index + operator.len() <= bytes.len() {
+        let byte = bytes[index];
+        if escaped {
+            escaped = false;
+        } else if byte == b'\\' && quote != Some(b'\'') {
+            escaped = true;
+        } else if matches!(byte, b'\'' | b'"') {
+            if quote == Some(byte) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(byte);
+            }
+        } else if quote.is_none() && bytes[index..].starts_with(operator) {
+            return true;
+        }
+        index += 1;
+    }
+    false
 }
 
 fn heredoc_has_bash_interpreter(instruction: &Instruction) -> bool {
@@ -3637,7 +3764,8 @@ fn rule_pipefail_missing(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
             }
             "RUN" if !executes_remote_script(&instruction.command) => {
                 if matches!(shell, ShellPipelineBehavior::Unknown)
-                    && looks_like_powershell(&instruction.command)
+                    && (looks_like_powershell(&instruction.command)
+                        || invokes_non_posix_shell(&instruction.command))
                 {
                     continue;
                 }
@@ -3708,7 +3836,7 @@ fn unprotected_pipeline_offset(script: &str, initial_pipefail_enabled: bool) -> 
                 ) || matches!(
                     next_pipeline_executable(&script[index + 1..]),
                     Some(":" | "sha256sum" | "shasum")
-                );
+                ) || pipeline_matches_low_value_pattern(script, index);
                 if !pipefail_enabled && !low_value {
                     return Some(index);
                 }
@@ -3839,6 +3967,19 @@ fn looks_like_powershell(command: &str) -> bool {
         || lower.contains("$erroractionpreference")
 }
 
+fn invokes_non_posix_shell(command: &str) -> bool {
+    [
+        "powershell",
+        "powershell.exe",
+        "pwsh",
+        "pwsh.exe",
+        "cmd",
+        "cmd.exe",
+    ]
+    .iter()
+    .any(|shell| shell_invokes_command(command, shell))
+}
+
 fn unclosed_command_substitution(before: &str) -> bool {
     before
         .rfind("$(")
@@ -3950,6 +4091,8 @@ fn pipeline_matches_low_value_pattern(script: &str, pipe: usize) -> bool {
         r"(?is)\$\(\s*cat\b[^;&|\n]*\|\s*xargs\b[^;&\n]*\)",
         r"(?is)\bls\s+-v\b[^;&|\n]*\|\s*tail\b[^;&\n]*",
         r"(?is)\$\(\s*ls\b[^;&|\n]*\|\s*grep\b[^;&\n]*\)",
+        r"(?is)\$\(\s*ls\b[^;&|\n]*\|\s*sed\b[^;&\n]*\)",
+        r"(?is)\$\(\s*tar\b[^;&|\n]*\|\s*tail\b[^;&|\n]*\|\s*cut\b[^;&\n]*\)",
         r"(?is)\becho\s+[^;&\n]*\|\s*tee\b[^;&\n]*\|\s*tee\b[^;&\n]*",
     ];
     PATTERNS.iter().any(|pattern| {
@@ -4222,20 +4365,27 @@ fn pip_install_arguments(command: &str) -> Option<&str> {
 }
 
 fn rule_apk_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let apk = Regex::new(r"(?i)\bapk\b(?P<body>[^;&|\n]*)").expect("valid apk invocation regex");
     instrs_of(instrs, "RUN")
         .into_iter()
         .filter(|i| {
-            let a = &i.command;
-            if !a.contains("apk add") {
-                return false;
-            }
-            // Check package arguments in this apk invocation only. `command` is
-            // continuation-normalized, and shell operators terminate the call.
-            let after_add = match a.find("apk add") {
-                Some(pos) => &a[pos + 7..],
-                None => return false,
-            };
-            apk_add_has_unpinned_package(after_add)
+            let script = run_script(i);
+            subcommand_arguments(
+                &script,
+                &apk,
+                "add",
+                &[
+                    "--arch",
+                    "--cache-dir",
+                    "--keys-dir",
+                    "--repositories-file",
+                    "--repository",
+                    "--root",
+                    "-X",
+                ],
+            )
+            .into_iter()
+            .any(apk_add_has_unpinned_package)
         })
         .map(|i| Finding {
             column: 0,
@@ -4250,6 +4400,49 @@ fn rule_apk_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
                     immediately added unpinned packages. Your builds are non-deterministic \
                     by design now. Use package=version."
                 .to_string(),
+        })
+        .collect()
+}
+
+/// Return arguments following a package-manager subcommand while accepting
+/// global options between the executable and subcommand. Shell control
+/// operators bound each regex match, so a later unrelated command cannot be
+/// mistaken for the requested subcommand.
+fn subcommand_arguments<'a>(
+    script: &'a str,
+    invocation: &Regex,
+    subcommand: &str,
+    options_with_values: &[&str],
+) -> Vec<&'a str> {
+    invocation
+        .captures_iter(script)
+        .filter_map(|capture| {
+            let body = capture.name("body")?;
+            let mut cursor = 0;
+            let mut skip_value = false;
+            while let Some((_, end, token)) = next_shell_token(body.as_str(), cursor) {
+                cursor = end;
+                let token = token.trim_matches(['\'', '"']);
+                if skip_value {
+                    skip_value = false;
+                    continue;
+                }
+                if token.eq_ignore_ascii_case(subcommand) {
+                    return Some(&script[body.start() + end..body.end()]);
+                }
+                if options_with_values
+                    .iter()
+                    .any(|option| token.eq_ignore_ascii_case(option))
+                {
+                    skip_value = true;
+                    continue;
+                }
+                if token.starts_with('-') {
+                    continue;
+                }
+                break;
+            }
+            None
         })
         .collect()
 }
@@ -4385,8 +4578,6 @@ fn go_install_needs_version(segment: &str, module_managed: bool) -> bool {
     if arguments
         .first()
         .is_some_and(|argument| *argument == "tool")
-        || arguments.iter().any(|argument| argument.contains('@'))
-        || module_managed
     {
         return false;
     }
@@ -4405,7 +4596,7 @@ fn go_install_needs_version(segment: &str, module_managed: bool) -> bool {
         "-toolexec",
     ];
     let mut skip_value = false;
-    let mut package = false;
+    let mut packages = Vec::new();
     for argument in arguments {
         if skip_value {
             skip_value = false;
@@ -4414,10 +4605,23 @@ fn go_install_needs_version(segment: &str, module_managed: bool) -> bool {
         if options_with_values.contains(&argument) {
             skip_value = true;
         } else if !argument.starts_with('-') {
-            package = true;
+            packages.push(argument);
         }
     }
-    package
+    if packages.is_empty() {
+        return false;
+    }
+    if packages.iter().any(|package| {
+        package
+            .rsplit_once('@')
+            .is_some_and(|(_, version)| version.eq_ignore_ascii_case("latest"))
+    }) {
+        return true;
+    }
+    if packages.iter().all(|package| package.contains('@')) {
+        return false;
+    }
+    !module_managed
 }
 
 fn rule_copy_multi_arg_slash(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -4449,11 +4653,119 @@ fn rule_copy_multi_arg_slash(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
         .collect()
 }
 
-fn rule_copy_from_undefined_stage(_instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    // An unresolved non-numeric reference is a valid external image (or a
-    // BuildKit named context), so it cannot be diagnosed as an undefined
-    // stage. Image allowlists are enforced by DF073 instead.
-    Vec::new()
+fn rule_copy_from_undefined_stage(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let mut aliases = Vec::<String>::new();
+    let mut findings = Vec::new();
+    for instruction in instrs {
+        if instruction.instruction == "FROM" {
+            if let Some(alias) =
+                parse_from_arguments(&instruction.arguments).and_then(|from| from.alias)
+            {
+                aliases.push(alias.to_ascii_lowercase());
+            }
+            continue;
+        }
+        if instruction.instruction != "COPY" {
+            continue;
+        }
+        let Some(flag) = instruction
+            .flags
+            .iter()
+            .find(|flag| flag.name.eq_ignore_ascii_case("from"))
+        else {
+            continue;
+        };
+        let Some(reference) = flag.value.as_deref() else {
+            continue;
+        };
+        let reference_lower = reference.to_ascii_lowercase();
+        if reference.parse::<usize>().is_ok()
+            || aliases.iter().any(|alias| alias == &reference_lower)
+            || reference.contains(['/', ':', '@', '$'])
+        {
+            continue;
+        }
+        let candidates = aliases
+            .iter()
+            .filter(|alias| stage_alias_resembles(&reference_lower, alias))
+            .collect::<Vec<_>>();
+        if candidates.len() != 1 {
+            continue;
+        }
+        let candidate = candidates[0];
+        findings.push(finding_at_span(
+            "DF049",
+            Severity::Info,
+            flag.span,
+            format!(
+                "COPY --from={reference} is unresolved and resembles declared stage '{candidate}'"
+            ),
+            "This may be an intentional external image or named context, but it also looks like a stage-alias typo. Verify the reference before Docker tries to pull it.",
+        ));
+    }
+    findings
+}
+
+fn stage_alias_resembles(reference: &str, alias: &str) -> bool {
+    if reference.len() >= 3
+        && (alias
+            .strip_suffix(reference)
+            .is_some_and(|prefix| prefix.ends_with('-'))
+            || alias
+                .strip_prefix(reference)
+                .is_some_and(|suffix| suffix.starts_with('-')))
+    {
+        return true;
+    }
+    reference.len() >= 4
+        && alias.len() >= 4
+        && reference.len().abs_diff(alias.len()) <= 1
+        && edit_distance_at_most_one(reference.as_bytes(), alias.as_bytes())
+}
+
+fn edit_distance_at_most_one(left: &[u8], right: &[u8]) -> bool {
+    if left.len().abs_diff(right.len()) > 1 {
+        return false;
+    }
+    if left.len() == right.len() {
+        let differences = left
+            .iter()
+            .zip(right)
+            .enumerate()
+            .filter_map(|(index, (left, right))| (left != right).then_some(index))
+            .collect::<Vec<_>>();
+        if differences.len() == 2
+            && differences[1] == differences[0] + 1
+            && left[differences[0]] == right[differences[1]]
+            && left[differences[1]] == right[differences[0]]
+        {
+            return true;
+        }
+    }
+    let (shorter, longer) = if left.len() <= right.len() {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    let mut short = 0;
+    let mut long = 0;
+    let mut edits = 0;
+    while short < shorter.len() && long < longer.len() {
+        if shorter[short] == longer[long] {
+            short += 1;
+            long += 1;
+            continue;
+        }
+        edits += 1;
+        if edits > 1 {
+            return false;
+        }
+        if shorter.len() == longer.len() {
+            short += 1;
+        }
+        long += 1;
+    }
+    edits + usize::from(long < longer.len()) <= 1
 }
 
 fn rule_copy_from_self(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -4500,30 +4812,44 @@ fn rule_dnf_clean(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
     let persistent_stages = persistent_stage_indices(instrs);
     let layer_stages = layer_persistent_stage_indices(instrs);
     let instruction_stages = instruction_stage_indices(instrs);
+    let install = Regex::new(r"\b(?P<manager>microdnf|dnf|tdnf)\s+install\b")
+        .expect("valid dnf-family install regex");
     instrs
         .iter()
         .enumerate()
-        .filter(|(index, instruction)| {
-            instruction.instruction == "RUN"
-                && instruction.arguments.contains("dnf install")
-                && !cleans_dnf_cache(&instruction.arguments)
-                && !has_ephemeral_mount_covering(instruction, "/var/cache/dnf")
+        .filter_map(|(index, instruction)| {
+            let manager = (instruction.instruction == "RUN")
+                .then(|| install.captures(&instruction.arguments))
+                .flatten()
+                .and_then(|capture| capture.name("manager"))?;
+            let cache_is_ephemeral = ["/var/cache/dnf", "/var/cache/tdnf", "/var/cache/yum"]
+                .iter()
+                .any(|path| has_ephemeral_mount_covering(instruction, path));
+            (!cleans_dnf_cache(&instruction.arguments)
+                && !cache_is_ephemeral
                 && cache_reaches_final_image(
                     instrs,
                     &instruction_stages,
                     &persistent_stages,
                     &layer_stages,
-                    *index,
+                    index,
                     cleans_dnf_cache,
-                )
+                ))
+            .then_some((instruction, manager.as_str()))
         })
-        .map(|(_, instruction)| {
+        .map(|(instruction, manager)| {
             finding_at_span(
                 "DF046",
                 Severity::Warning,
-                instruction_substring_span(raw, instruction, &["microdnf install", "dnf install"]),
-                "dnf clean all missing after dnf install — RPM cache bloats the image".to_string(),
-                "The DNF cache reaches the final image. Clean it in the install layer, or before copying a stage filesystem snapshot.",
+                instruction_substring_span(
+                    raw,
+                    instruction,
+                    &["microdnf install", "tdnf install", "dnf install"],
+                ),
+                format!(
+                    "{manager} clean all missing after {manager} install — RPM cache bloats the image"
+                ),
+                "The RPM package cache reaches the final image. Clean it in the install layer, or before copying a stage filesystem snapshot.",
             )
         })
         .collect()
