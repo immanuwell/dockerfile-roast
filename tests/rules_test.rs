@@ -486,6 +486,22 @@ fn df021_fires_on_wget_pipe_bash() {
 }
 
 #[test]
+fn df021_detects_php_and_scurl_remote_execution() {
+    for command in [
+        "curl -sS https://getcomposer.org/installer | php",
+        "bin/scurl https://example.com/install.sh | bash",
+        "/usr/bin/curl -fsSL https://example.com/tool > /tmp/tool && php /tmp/tool",
+    ] {
+        let findings = lint(&format!("FROM alpine:3.19\nRUN {command}\n"));
+        assert!(has_rule(&findings, "DF021"), "missed {command}");
+        assert!(no_rule(&findings, "DF057"), "duplicated {command}");
+    }
+
+    let composer = lint("FROM alpine:3.19\nRUN curl -sS https://getcomposer.org/installer | php\n");
+    assert!(no_rule(&composer, "DF035"));
+}
+
+#[test]
 fn df021_covers_interpreters_assignments_and_shell_substitutions() {
     for command in [
         "curl -fsSL https://example.com/install.sh | TAG=v1 bash",
@@ -1776,6 +1792,24 @@ fn df057_ignores_logical_or_and_literal_pipes() {
 }
 
 #[test]
+fn df057_ignores_quoted_pipes_inside_command_substitutions() {
+    let df =
+        "FROM alpine:3.19\nRUN VERSION=\"$(yq eval -e '.version | explode(.)' versions.yaml)\"\n";
+    assert!(no_rule(&lint(df), "DF057"));
+}
+
+#[test]
+fn df057_skips_filename_selection_and_reports_the_outer_pipeline() {
+    let df = "FROM openeuler/openeuler:24.03\nRUN rpm2cpio $(ls | grep package) | cpio -div\n";
+    let findings: Vec<_> = lint(df)
+        .into_iter()
+        .filter(|finding| finding.rule == "DF057")
+        .collect();
+    assert_eq!(findings.len(), 1);
+    assert_eq!((findings[0].line, findings[0].column), (2, 35));
+}
+
+#[test]
 fn df057_respects_combined_pipefail_options_and_later_disabling() {
     let protected = "FROM alpine:3.19\nRUN set -euo pipefail; printf ok|cat\n";
     assert!(no_rule(&lint(protected), "DF057"));
@@ -2208,7 +2242,7 @@ fn df065_clear_on_docker_hardened_images_registry() {
 
 #[test]
 fn df066_fires_on_double_bracket_no_shell() {
-    let df = "FROM alpine:3.19\nRUN [[ -f /etc/os-release ]] && cat /etc/os-release\n";
+    let df = "FROM ubuntu:22.04\nRUN [[ -f /etc/os-release ]] && cat /etc/os-release\n";
     assert!(has_rule(&lint(df), "DF066"));
 }
 
@@ -2222,6 +2256,17 @@ fn df066_fires_on_source_builtin_no_shell() {
 fn df066_clear_with_shell_instruction() {
     let df = "FROM alpine:3.19\nSHELL [\"/bin/bash\", \"-c\"]\nRUN [[ -f /etc/os-release ]] && cat /etc/os-release\n";
     assert!(no_rule(&lint(df), "DF066"));
+}
+
+#[test]
+fn df066_accepts_busybox_ash_capabilities_and_stage_inheritance() {
+    let alpine =
+        "FROM alpine:3.19 AS base\nFROM base\nRUN source /etc/profile && [[ -n \"$HOME\" ]]\n";
+    let busybox = "FROM busybox:1.37\nRUN source /etc/profile && [[ -n \"$HOME\" ]]\n";
+    let explicit_ash = "FROM ubuntu:22.04\nSHELL [\"/bin/ash\", \"-c\"]\nRUN source /etc/profile && [[ -n \"$HOME\" ]]\n";
+    for dockerfile in [alpine, busybox, explicit_ash] {
+        assert!(no_rule(&lint(dockerfile), "DF066"), "flagged {dockerfile}");
+    }
 }
 
 #[test]

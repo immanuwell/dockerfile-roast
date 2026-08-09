@@ -2854,10 +2854,10 @@ fn executes_remote_script(command: &str) -> bool {
 
 fn remote_script_matches(command: &str) -> Vec<std::ops::Range<usize>> {
     let pipe = Regex::new(
-        r"(?i)\b(?:curl|wget)\b[^|;]*\|\s*(?:\\\r?\n\s*)*(?:sudo(?:\s+-\S+)*\s+)?(?:(?:/usr/bin/)?env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:(?:/[^\s]*/)?(?:ba|a|z|fi)?sh\b|(?:/[^\s]*/)?python(?:[0-9]+(?:\.[0-9]+)?)?\b|\$\{?(?:PYTHON|PYTHON_BIN|PYTHON_EXECUTABLE)\}?)",
+        r"(?i)(?:\b(?:curl|wget)\b|(?:^|[\s;&|])(?:[./A-Za-z0-9_-]+/)?scurl\b)[^|;]*\|\s*(?:\\\r?\n\s*)*(?:sudo(?:\s+-\S+)*\s+)?(?:(?:/usr/bin/)?env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:(?:/[^\s]*/)?(?:ba|a|z|fi)?sh\b|(?:/[^\s]*/)?python(?:[0-9]+(?:\.[0-9]+)?)?\b|(?:/[^\s]*/)?php(?:[0-9]+(?:\.[0-9]+)?)?\b|\$\{?(?:PYTHON|PYTHON_BIN|PYTHON_EXECUTABLE)\}?)",
     )
     .expect("valid remote script pipeline regex");
-    let downloader = Regex::new(r"(?i)\b(?:curl|wget)\b").expect("valid downloader regex");
+    let downloader = Regex::new(r"(?i)\b(?:curl|wget|scurl)\b").expect("valid downloader regex");
     let mut matches = pipe
         .find_iter(command)
         .map(|matched| {
@@ -2872,7 +2872,8 @@ fn remote_script_matches(command: &str) -> Vec<std::ops::Range<usize>> {
         .collect::<Vec<_>>();
 
     let command_substitution =
-        Regex::new(r"(?i)\$\(\s*(?:curl|wget)\b").expect("valid download substitution regex");
+        Regex::new(r"(?i)\$\(\s*(?:(?:[./A-Za-z0-9_-]+/)?scurl|curl|wget)\b")
+            .expect("valid download substitution regex");
     let shell_c = Regex::new(r"(?i)(?:^|\s)(?:/[^\s]*/)?(?:ba|a|z|fi)?sh\s+(?:[^;]*\s)?-c\b")
         .expect("valid shell command regex");
     if shell_c.is_match(command) {
@@ -2888,8 +2889,10 @@ fn remote_script_matches(command: &str) -> Vec<std::ops::Range<usize>> {
 }
 
 fn downloaded_script_matches(command: &str) -> Vec<(String, std::ops::Range<usize>)> {
-    let invocation = Regex::new(r"(?i)\b(?P<tool>curl|wget)\b(?P<body>.*)")
-        .expect("valid downloader invocation regex");
+    let invocation = Regex::new(
+        r"(?i)(?:^|\s)(?P<tool>(?:[./A-Za-z0-9_-]+/)?(?:scurl|curl|wget))\b(?P<body>.*)",
+    )
+    .expect("valid downloader invocation regex");
     let output = Regex::new(
         r#"(?i)(?:^|\s)(?:-o|--output(?:=|\s+)|-O|--output-document(?:=|\s+))\s*["']?(?P<path>[^\s"']+)"#,
     )
@@ -2981,7 +2984,7 @@ fn script_basename(path: &str) -> &str {
 fn script_execution_offset(command: &str, path: &str) -> Option<usize> {
     let basename = regex::escape(script_basename(path));
     let interpreter = Regex::new(&format!(
-        r#"(?im)(?:^\s*RUN\s+|[;&|]\s*|\n\s*)(?:sudo(?:\s+-\S+)*\s+)?(?:(?:/usr/bin/)?env(?:\s+(?:-\S+|[A-Za-z_][A-Za-z0-9_]*=\S+))*\s+)?(?:(?:/[^\s]*/)?(?:ba|a|z|fi)?sh|(?:/[^\s]*/)?python(?:[0-9]+(?:\.[0-9]+)?)?|(?:/[^\s]*/)?(?:perl|ruby)|\$\{{?(?:PYTHON|PYTHON_BIN|PYTHON_EXECUTABLE)\}}?)(?:\s+-\S+)*\s+["']?(?:[^\s"']*/)?{basename}["']?"#
+        r#"(?im)(?:^\s*RUN\s+|[;&|]\s*|\n\s*)(?:sudo(?:\s+-\S+)*\s+)?(?:(?:/usr/bin/)?env(?:\s+(?:-\S+|[A-Za-z_][A-Za-z0-9_]*=\S+))*\s+)?(?:(?:/[^\s]*/)?(?:ba|a|z|fi)?sh|(?:/[^\s]*/)?python(?:[0-9]+(?:\.[0-9]+)?)?|(?:/[^\s]*/)?php(?:[0-9]+(?:\.[0-9]+)?)?|(?:/[^\s]*/)?(?:perl|ruby)|\$\{{?(?:PYTHON|PYTHON_BIN|PYTHON_EXECUTABLE)\}}?)(?:\s+-\S+)*\s+["']?(?:[^\s"']*/)?{basename}["']?"#
     ))
     .expect("escaped script name creates a valid interpreter execution regex");
     if let Some(matched) = interpreter.find(command) {
@@ -3319,17 +3322,24 @@ fn rule_bash_syntax_no_shell(instrs: &[Instruction], raw: &str) -> Vec<Finding> 
         ("readarray", "readarray builtin"),
     ];
     let mut stages = std::collections::HashMap::new();
+    let mut shell_capability_stages = std::collections::HashMap::new();
     let mut current_alias = None;
     let mut state = StageRuntimeState::default();
+    let mut shell_capabilities = ShellSyntaxCapabilities::default();
     let mut findings = Vec::new();
     for i in instrs {
         if i.instruction == "FROM" {
             if let Some(from) = parse_from_arguments(&i.arguments) {
                 state = inherited_runtime_state(from, &stages);
+                shell_capabilities = shell_capability_stages
+                    .get(&from.image.to_ascii_lowercase())
+                    .copied()
+                    .unwrap_or_else(|| ShellSyntaxCapabilities::for_base_image(from.image));
                 current_alias = from.alias.map(str::to_ascii_lowercase);
             }
         } else if i.instruction == "SHELL" {
             state.has_explicit_shell = true;
+            shell_capabilities = ShellSyntaxCapabilities::for_shell_instruction(i);
         } else if i.instruction == "RUN"
             && !state.has_explicit_shell
             && !heredoc_has_bash_interpreter(i)
@@ -3340,6 +3350,9 @@ fn rule_bash_syntax_no_shell(instrs: &[Instruction], raw: &str) -> Vec<Finding> 
             let command = command_without_bash_c_scripts(&run_script(i));
             let mut reported = false;
             for (command_name, label) in BASH_COMMANDS {
+                if shell_capabilities.supports(command_name) {
+                    continue;
+                }
                 if shell_invokes_command(&command, command_name) {
                     let (message, roast) = if state.base_metadata_known {
                         (
@@ -3392,9 +3405,69 @@ fn rule_bash_syntax_no_shell(instrs: &[Instruction], raw: &str) -> Vec<Finding> 
         }
         if let Some(alias) = &current_alias {
             stages.insert(alias.clone(), state.clone());
+            shell_capability_stages.insert(alias.clone(), shell_capabilities);
         }
     }
     findings
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ShellSyntaxCapabilities {
+    source: bool,
+    double_bracket: bool,
+}
+
+impl ShellSyntaxCapabilities {
+    fn for_base_image(image: &str) -> Self {
+        let without_digest = image.split('@').next().unwrap_or(image);
+        let last_slash = without_digest.rfind('/');
+        let repository = without_digest.rfind(':').map_or(without_digest, |colon| {
+            if last_slash.is_none_or(|slash| colon > slash) {
+                &without_digest[..colon]
+            } else {
+                without_digest
+            }
+        });
+        let image_name = repository.rsplit('/').next().unwrap_or(repository);
+        if matches!(
+            image_name.to_ascii_lowercase().as_str(),
+            "alpine" | "busybox"
+        ) {
+            Self {
+                source: true,
+                double_bracket: true,
+            }
+        } else {
+            Self::default()
+        }
+    }
+
+    fn for_shell_instruction(instruction: &Instruction) -> Self {
+        let InstructionForm::Json(arguments) = &instruction.form else {
+            return Self::default();
+        };
+        let executable = arguments
+            .first()
+            .and_then(|argument| argument.rsplit(['/', '\\']).next())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if matches!(executable.as_str(), "bash" | "ash") {
+            Self {
+                source: true,
+                double_bracket: true,
+            }
+        } else {
+            Self::default()
+        }
+    }
+
+    fn supports(self, command: &str) -> bool {
+        match command {
+            "source" => self.source,
+            "[[" => self.double_bracket,
+            _ => false,
+        }
+    }
 }
 
 fn heredoc_has_bash_interpreter(instruction: &Instruction) -> bool {
@@ -3621,6 +3694,7 @@ fn unprotected_pipeline_offset(script: &str, initial_pipefail_enabled: bool) -> 
             } else if active_quote == '"'
                 && character == '|'
                 && unclosed_command_substitution(&script[..index])
+                && command_substitution_pipe_is_operator(script, index)
             {
                 if chars.peek().is_some_and(|(_, next)| *next == '|') {
                     chars.next();
@@ -3744,7 +3818,8 @@ fn shell_pipeline_offsets(script: &str) -> Vec<usize> {
             continue;
         }
         if byte == b'|'
-            && quote != Some(b'\'')
+            && (quote.is_none()
+                || (quote == Some(b'"') && command_substitution_pipe_is_operator(script, index)))
             && bytes.get(index.wrapping_sub(1)) != Some(&b'|')
             && bytes.get(index + 1) != Some(&b'|')
         {
@@ -3768,6 +3843,33 @@ fn unclosed_command_substitution(before: &str) -> bool {
     before
         .rfind("$(")
         .is_some_and(|open| before.rfind(')').is_none_or(|close| close < open))
+}
+
+fn command_substitution_pipe_is_operator(script: &str, pipe: usize) -> bool {
+    let before = &script[..pipe];
+    let Some(open) = before.rfind("$(") else {
+        return false;
+    };
+    if before.rfind(')').is_some_and(|close| close > open) {
+        return false;
+    }
+
+    let mut quote = None;
+    let mut escaped = false;
+    for byte in before[open + 2..].bytes() {
+        if escaped {
+            escaped = false;
+        } else if byte == b'\\' && quote != Some(b'\'') {
+            escaped = true;
+        } else if matches!(byte, b'\'' | b'"') {
+            if quote == Some(byte) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(byte);
+            }
+        }
+    }
+    quote.is_none()
 }
 
 fn command_substitution_producer(before: &str) -> Option<&str> {
@@ -3847,6 +3949,7 @@ fn pipeline_matches_low_value_pattern(script: &str, pipe: usize) -> bool {
         r"(?is)\becho\b[^;&|\n]*\|\s*debconf-set-selections\b[^;&\n]*",
         r"(?is)\$\(\s*cat\b[^;&|\n]*\|\s*xargs\b[^;&\n]*\)",
         r"(?is)\bls\s+-v\b[^;&|\n]*\|\s*tail\b[^;&\n]*",
+        r"(?is)\$\(\s*ls\b[^;&|\n]*\|\s*grep\b[^;&\n]*\)",
         r"(?is)\becho\s+[^;&\n]*\|\s*tee\b[^;&\n]*\|\s*tee\b[^;&\n]*",
     ];
     PATTERNS.iter().any(|pattern| {
