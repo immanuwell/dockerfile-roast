@@ -436,6 +436,19 @@ fn df015_does_not_leak_apt_configuration_to_unrelated_stages() {
     assert!(has_rule(&lint(df), "DF015"));
 }
 
+#[test]
+fn df015_reports_the_apt_install_token_on_its_physical_line() {
+    let df = concat!(
+        "FROM ubuntu:24.04\n",
+        "RUN apt-get update \\\n",
+        "    && echo preparing \\\n",
+        "    && apt-get install curl\n",
+    );
+    let findings = lint(df);
+    let apt = finding(&findings, "DF015");
+    assert_eq!((apt.line, apt.column), (4, 8));
+}
+
 // ─── DF018: shell form ENTRYPOINT ────────────────────────────────────────────
 
 #[test]
@@ -493,6 +506,40 @@ fn df021_detects_env_wrappers_and_download_then_execute_flows() {
     let copied = "FROM ubuntu:24.04 AS download\nRUN curl -fsSL https://example.com/install.sh > install.sh\nFROM ubuntu:24.04\nCOPY --from=download install.sh .\nRUN sh install.sh\n";
     for dockerfile in [wrapped, same_run, later_run, copied] {
         assert!(has_rule(&lint(dockerfile), "DF021"), "missed {dockerfile}");
+    }
+}
+
+#[test]
+fn df021_detects_extensionless_variable_and_python_download_flows() {
+    for command in [
+        "curl -fsSL https://example.com/sdk > /tmp/gcloud && bash /tmp/gcloud",
+        "curl -fSsLO https://example.com/bazel-installer-linux.sh && ./bazel-installer-linux.sh",
+        "curl -fsSL https://example.com/get-pip.py | ${PYTHON}",
+        "wget https://example.com/get-pip.py && python3 get-pip.py",
+    ] {
+        let df = format!("FROM ubuntu:24.04\nRUN {command}\n");
+        assert!(has_rule(&lint(&df), "DF021"), "missed {command}");
+    }
+}
+
+#[test]
+fn df021_handles_quoted_shell_separators_in_downloader_options() {
+    let executed = "FROM ubuntu:24.04\nENV BAZEL_VERSION=7.4.1\nRUN curl -H 'User-Agent: X11; Linux' -fSsL -O https://example.com/bazel-$BAZEL_VERSION-installer.sh && ./bazel-$BAZEL_VERSION-installer.sh\n";
+    let unpacked_binary = "FROM ubuntu:24.04\nRUN curl -sL -H 'Accept: application/octet-stream' https://example.com/tool.gz -o tool.gz && gunzip tool.gz && chmod +x tool && mv ./tool /usr/local/bin/tool\n";
+    assert!(has_rule(&lint(executed), "DF021"));
+    assert!(no_rule(&lint(unpacked_binary), "DF021"));
+}
+
+#[test]
+fn df021_supersedes_downloader_output_advice_for_remote_execution() {
+    for command in [
+        "curl https://example.com/install.sh | sh",
+        "wget https://example.com/install.sh -O /tmp/install && bash /tmp/install",
+    ] {
+        let findings = lint(&format!("FROM ubuntu:24.04\nRUN {command}\n"));
+        assert!(has_rule(&findings, "DF021"));
+        assert!(no_rule(&findings, "DF035"));
+        assert!(no_rule(&findings, "DF056"));
     }
 }
 
@@ -610,6 +657,24 @@ fn df030_clear_when_cache_is_purged_in_the_same_run() {
     let uv = "FROM python:3.12\nRUN uv pip install flask && uv cache clean\n";
     assert!(no_rule(&lint(pip), "DF030"));
     assert!(no_rule(&lint(uv), "DF030"));
+}
+
+#[test]
+fn df030_clear_when_the_root_pip_cache_is_removed_in_the_same_run() {
+    let df = "FROM python:3.12\nRUN python -m pip install flask && rm -rf /root/.cache/pip\n";
+    assert!(no_rule(&lint(df), "DF030"));
+}
+
+#[test]
+fn df030_reports_the_pip_invocation_on_its_physical_line() {
+    let df = concat!(
+        "FROM python:3.12\n",
+        "RUN echo preparing \\\n",
+        "    && python3 -m pip install flask\n",
+    );
+    let findings = lint(df);
+    let pip = finding(&findings, "DF030");
+    assert_eq!((pip.line, pip.column), (3, 8));
 }
 
 #[test]
@@ -1570,6 +1635,29 @@ fn df054_accepts_module_managed_go_tool_install() {
     assert!(no_rule(&lint(df), "DF054"));
 }
 
+#[test]
+fn df054_accepts_go_installs_managed_by_the_current_module() {
+    for dockerfile in [
+        "FROM golang:1.24\nRUN go install -tags extended -ldflags '-s -w'\n",
+        "FROM golang:1.24\nCOPY go.mod go.sum ./\nRUN go install github.com/gohugoio/hugo\n",
+        "FROM golang:1.24\nRUN go mod download && go install ./cmd/tool\n",
+    ] {
+        assert!(no_rule(&lint(dockerfile), "DF054"), "flagged {dockerfile}");
+    }
+}
+
+#[test]
+fn df054_reports_the_go_invocation_on_its_physical_line() {
+    let df = concat!(
+        "FROM golang:1.24\n",
+        "RUN echo preparing \\\n",
+        "    && go install example.com/tool\n",
+    );
+    let findings = lint(df);
+    let go = finding(&findings, "DF054");
+    assert_eq!((go.line, go.column), (3, 8));
+}
+
 // ─── DF055: yarn cache not cleaned ───────────────────────────────────────────
 
 #[test]
@@ -1774,6 +1862,13 @@ fn df057_ignores_low_value_and_non_pipeline_shell_syntax() {
         "arch=$(uname -m | sed s/x86_64/amd64/)",
         "value=$(echo abc | cut -c1 | tr a-z A-Z)",
         "echo \"$([ x = y ] || echo fallback)\"",
+        "echo postfix postfix/mailname string example.test | debconf-set-selections",
+        "find /tmp -type f | head -n 1 | xargs cat",
+        "pip freeze | grep requests",
+        "if apt list --installed | grep -q curl; then true; fi",
+        "gid=$(getent group users | cut -d: -f3)",
+        "echo one | tee /tmp/one | tee /tmp/two",
+        "archive=$(ls -v package-*.tar.gz | tail -n 1)",
     ] {
         let df = format!("FROM ubuntu:24.04\nRUN {command}\n");
         assert!(
@@ -2034,6 +2129,19 @@ fn df063_is_informational_when_external_workdir_metadata_is_unknown() {
     assert_eq!(finding(&findings, "DF063").severity, Severity::Info);
 }
 
+#[test]
+fn df063_reports_unknown_external_workdir_dependency_once_per_stage() {
+    let df = "FROM external/image:1\nCOPY one one\nCOPY two two\nCOPY three three\nFROM external/other:1\nCOPY four four\nCOPY five five\n";
+    let findings = lint(df)
+        .into_iter()
+        .filter(|finding| finding.rule == "DF063")
+        .collect::<Vec<_>>();
+    assert_eq!(findings.len(), 2);
+    assert!(findings
+        .iter()
+        .all(|finding| finding.severity == Severity::Info));
+}
+
 // ─── DF064: useradd without -l ────────────────────────────────────────────────
 
 #[test]
@@ -2119,6 +2227,12 @@ fn df066_clear_with_shell_instruction() {
 #[test]
 fn df066_clear_when_bash_c_owns_the_bash_syntax() {
     let df = "FROM ubuntu:22.04\nRUN bash -c \"source $NVM_DIR/nvm.sh && make html\"\n";
+    assert!(no_rule(&lint(df), "DF066"));
+}
+
+#[test]
+fn df066_accepts_relative_paths_to_an_explicit_bash_interpreter() {
+    let df = "FROM ubuntu:22.04\nRUN bin/bash -c 'if [[ -f /tmp/x ]]; then echo yes; fi'\n";
     assert!(no_rule(&lint(df), "DF066"));
 }
 
