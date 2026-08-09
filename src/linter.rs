@@ -88,7 +88,10 @@ fn lint_content_without_context(content: &str, filename: &str, opts: &LintOption
         if !rule_enabled(opts, &rule) {
             continue;
         }
-        if rule.id == "DF065" && opts.approved_registries.is_some() {
+        // DF065 is an organization policy, not a universal registry opinion.
+        // policy::configured_findings emits it only when approved-registries
+        // has been explicitly configured.
+        if rule.id == "DF065" {
             continue;
         }
         let rule_findings = (rule.func)(&instructions, content);

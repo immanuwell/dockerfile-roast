@@ -716,6 +716,14 @@ SCRIPT
     }
 
     #[test]
+    fn registry_policy_is_inactive_until_approved_registries_is_configured() {
+        let source = "FROM registry.example.com/acme/runtime:1\n";
+        let options = options(&["DF065"]);
+
+        assert!(rules(source, &options).is_empty());
+    }
+
+    #[test]
     fn approved_base_images_support_globs_and_stage_aliases() {
         let source = "FROM rust:1.85 AS build\nFROM build AS packaged\n";
         let mut options = options(&["DF073"]);

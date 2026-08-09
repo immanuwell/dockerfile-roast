@@ -411,7 +411,7 @@ droast completion fish | source
   DF011    WARN     performance                        Use multi-stage builds to reduce image size
   DF013    ERROR    security                           Avoid storing secrets in ENV variables
   DF014    ERROR    security                           Avoid hardcoding passwords or tokens in ARG/ENV
-  DF020    WARN     security                           Set explicit non-root USER
+  DF020    INFO     security                           Set explicit non-root USER
   DF003    WARN     performance                        Combine RUN commands to reduce layers
   DF004    WARN     performance                        Clean apt/yum/apk cache in the same RUN layer
   DF005    INFO     correctness,reproducibility        Pin package versions for reproducibility
@@ -435,7 +435,7 @@ droast completion fish | source
   DF033    INFO     performance,security               Use an effective .dockerignore for each build context
   DF034    ERROR    security                           Avoid chmod 777 — overly permissive
   DF035    INFO     maintainability,reliability        Avoid using curl without --fail flags
-  DF036    WARN     maintainability,reliability        Avoid Dockerfile with no CMD or ENTRYPOINT
+  DF036    INFO     maintainability,reliability        Avoid Dockerfile with no CMD or ENTRYPOINT
   DF015    ERROR    correctness,reliability            Avoid using apt-get without -y flag
   DF016    INFO     performance                        Use --no-install-recommends with apt-get
   DF021    ERROR    security,supply-chain              Avoid wget|sh pipe patterns (execute remote code)
@@ -457,7 +457,7 @@ droast completion fish | source
   DF049    WARN     correctness,reliability            Reserved for invalid COPY --from references
   DF050    ERROR    correctness,reliability            COPY --from cannot reference the current stage
   DF051    WARN     reproducibility,supply-chain       Pin versions in pip install
-  DF052    WARN     reproducibility,supply-chain       Pin versions in apk add
+  DF052    INFO     reproducibility,supply-chain       Pin versions in apk add
   DF053    WARN     reproducibility,supply-chain       Pin versions in gem install
   DF054    WARN     reproducibility,supply-chain       Pin versions in go install with @version
   DF055    INFO     performance                        Run yarn cache clean after yarn install
@@ -466,13 +466,13 @@ droast completion fish | source
   DF058    WARN     maintainability,performance        Use either wget or curl consistently, not both
   DF059    WARN     correctness,maintainability        Use apt-get or apt-cache instead of apt in scripts
   DF060    INFO     maintainability,reliability        Avoid running pointless interactive commands inside containers
-  DF061    WARN     correctness,maintainability        Do not use --platform in FROM unless required
+  DF061    INFO     correctness,maintainability        Do not use --platform in FROM unless required
   DF062    INFO     correctness,reproducibility        ENV references may use inherited values
   DF063    WARN     correctness,maintainability        COPY to relative destination requires WORKDIR to be set first
   DF064    WARN     performance                        useradd without -l flag may create excessively large images
-  DF065    WARN     reproducibility,supply-chain       FROM uses an unrecognised image registry
+  DF065    WARN     reproducibility,supply-chain       Enforce configured approved registries
   DF066    WARN     reliability,security               Bash-specific syntax used without a SHELL instruction
-  DF067    INFO     maintainability,performance        COPY of a local archive — ADD auto-extracts tarballs
+  DF067    INFO     maintainability,performance        Reserved: archive extraction policy is context-dependent
   DF068    ERROR    correctness,reliability            FROM, ONBUILD, and MAINTAINER are forbidden as ONBUILD triggers
   DF069    WARN     correctness,reproducibility        Avoid apt-get upgrade / dist-upgrade — makes builds non-reproducible
   DF070    WARN     performance                        Avoid broad COPY before package install — invalidates Docker layer cache
@@ -485,7 +485,7 @@ droast completion fish | source
   DF077    ERROR    correctness,reliability            Do not COPY or ADD files excluded from the build context
   DF078    WARN     correctness,reliability            Use lowercase protocol names in EXPOSE
   DF079    WARN     correctness,reliability            Match AS casing to FROM in multi-stage builds
-  DF082    WARN     correctness,reliability            Use key=value syntax for ENV and LABEL
+  DF082    INFO     correctness,reliability            Use key=value syntax for ENV and LABEL
   DF083    WARN     correctness,reproducibility        Do not set FROM --platform to the default target platform
   DF084    ERROR    correctness,reliability            Do not use reserved Dockerfile stage names
   DF085    WARN     correctness,reliability            Use lowercase multi-stage build names
@@ -559,4 +559,3 @@ The benchmark measures execution speed and binary size, not detection quality. F
 If droast is useful to you, [buy me a coffee](https://buymeacoffee.com/immanuwell).
 
 you can also give droast a ⭐️!
-

@@ -128,7 +128,7 @@ pub fn all_rules() -> Vec<Rule> {
         },
         Rule {
             id: "DF020",
-            severity: Severity::Warning,
+            severity: Severity::Info,
             description: "Set explicit non-root USER",
             func: rule_no_user_instruction,
         },
@@ -272,7 +272,7 @@ pub fn all_rules() -> Vec<Rule> {
         },
         Rule {
             id: "DF036",
-            severity: Severity::Warning,
+            severity: Severity::Info,
             description: "Avoid Dockerfile with no CMD or ENTRYPOINT",
             func: rule_no_cmd_or_entrypoint,
         },
@@ -404,7 +404,7 @@ pub fn all_rules() -> Vec<Rule> {
         },
         Rule {
             id: "DF052",
-            severity: Severity::Warning,
+            severity: Severity::Info,
             description: "Pin versions in apk add",
             func: rule_apk_version_pinning,
         },
@@ -458,7 +458,7 @@ pub fn all_rules() -> Vec<Rule> {
         },
         Rule {
             id: "DF061",
-            severity: Severity::Warning,
+            severity: Severity::Info,
             description: "Do not use --platform in FROM unless required",
             func: rule_from_platform_flag,
         },
@@ -483,7 +483,7 @@ pub fn all_rules() -> Vec<Rule> {
         Rule {
             id: "DF065",
             severity: Severity::Warning,
-            description: "FROM uses an unrecognised image registry",
+            description: "Enforce configured approved registries",
             func: rule_untrusted_registry,
         },
         Rule {
@@ -495,7 +495,7 @@ pub fn all_rules() -> Vec<Rule> {
         Rule {
             id: "DF067",
             severity: Severity::Info,
-            description: "COPY of a local archive — ADD auto-extracts tarballs",
+            description: "Reserved: archive extraction policy is context-dependent",
             func: rule_copy_archive_use_add,
         },
         Rule {
@@ -572,7 +572,7 @@ pub fn all_rules() -> Vec<Rule> {
         },
         Rule {
             id: "DF082",
-            severity: Severity::Warning,
+            severity: Severity::Info,
             description: "Use key=value syntax for ENV and LABEL",
             func: rule_legacy_key_value_format,
         },
@@ -681,7 +681,7 @@ fn rule_legacy_key_value_format(instrs: &[Instruction], _raw: &str) -> Vec<Findi
         .filter_map(|instruction| {
             let words = &instruction.words;
             (words.len() >= 2 && !words[0].value.contains('='))
-                .then(|| finding_at_span("DF082", Severity::Warning, words[0].span,
+                .then(|| finding_at_span("DF082", Severity::Info, words[0].span,
                     format!("{} uses legacy space-separated key/value syntax", instruction.instruction),
                     "Space-separated ENV and LABEL values are vintage Dockerfile syntax. Use key=value before it starts growing sideburns."))
         }).collect()
@@ -736,18 +736,53 @@ fn rule_undefined_arg_in_from(instrs: &[Instruction], _raw: &str) -> Vec<Finding
 }
 
 fn rule_undefined_variable(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let mut declared = global_args(instrs);
+    let mut stages: std::collections::HashMap<
+        String,
+        (std::collections::HashSet<String>, bool),
+    > = std::collections::HashMap::new();
+    let mut declared = std::collections::HashSet::new();
+    let mut base_metadata_known = false;
+    let mut current_alias = None;
+    let mut in_stage = false;
     let mut findings = Vec::new();
     for instruction in instrs {
+        if instruction.instruction == "FROM" {
+            let Some(from) = parse_from_arguments(&instruction.arguments) else {
+                continue;
+            };
+            (declared, base_metadata_known) = if from.image.eq_ignore_ascii_case("scratch") {
+                (std::collections::HashSet::new(), true)
+            } else {
+                stages
+                    .get(&from.image.to_ascii_lowercase())
+                    .cloned()
+                    .unwrap_or_else(|| (std::collections::HashSet::new(), false))
+            };
+            current_alias = from.alias.map(str::to_ascii_lowercase);
+            in_stage = true;
+            if let Some(alias) = &current_alias {
+                stages.insert(alias.clone(), (declared.clone(), base_metadata_known));
+            }
+            continue;
+        }
+        if !in_stage {
+            continue;
+        }
         if instruction.instruction == "ARG" || instruction.instruction == "ENV" {
             for word in &instruction.words {
                 declared.insert(word.value.split('=').next().unwrap_or(&word.value).to_string());
+            }
+            if let Some(alias) = &current_alias {
+                stages.insert(alias.clone(), (declared.clone(), base_metadata_known));
             }
             continue;
         }
         if instruction.instruction == "RUN" { continue; }
         for variable in &instruction.variables {
-            if !declared.contains(&variable.name) && !known_build_variable(&variable.name) {
+            if base_metadata_known
+                && !declared.contains(&variable.name)
+                && !known_build_variable(&variable.name)
+            {
                 findings.push(finding_at_span("DF087", Severity::Error, variable.span,
                     format!("{} references undefined variable '{}'", instruction.instruction, variable.name),
                     "That variable appears from nowhere. Declare it with ARG or ENV before Docker starts improvising."));
@@ -781,6 +816,70 @@ fn instrs_of<'a>(instrs: &'a [Instruction], name: &str) -> Vec<&'a Instruction> 
     instrs.iter().filter(|i| i.instruction == name).collect()
 }
 
+/// Return instruction operands after BuildKit flags, preserving parsed quoted
+/// values and using decoded JSON-array values when applicable.
+fn instruction_operands(instruction: &Instruction) -> Vec<&str> {
+    match &instruction.form {
+        InstructionForm::Json(values) => values.iter().map(String::as_str).collect(),
+        _ => instruction.words[instruction.flags.len()..]
+            .iter()
+            .map(|word| word.value.as_str())
+            .collect(),
+    }
+}
+
+fn ephemeral_mount_targets(instruction: &Instruction) -> Vec<&str> {
+    instruction
+        .flags
+        .iter()
+        .filter(|flag| flag.name == "mount")
+        .filter_map(|flag| flag.value.as_deref())
+        .filter_map(|mount| {
+            let mut mount_type = "bind";
+            let mut target = None;
+            for option in mount.split(',') {
+                let Some((name, value)) = option.split_once('=') else {
+                    continue;
+                };
+                match name {
+                    "type" => mount_type = value,
+                    "target" | "dst" | "destination" => target = Some(value),
+                    _ => {}
+                }
+            }
+            matches!(mount_type, "cache" | "tmpfs")
+                .then_some(target)
+                .flatten()
+                .filter(|target| !target.is_empty())
+        })
+        .collect()
+}
+
+fn has_ephemeral_mount_covering(instruction: &Instruction, path: &str) -> bool {
+    ephemeral_mount_targets(instruction).into_iter().any(|target| {
+        let target = target.trim_end_matches('/');
+        path == target || path.strip_prefix(target).is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
+fn has_language_cache_mount(instruction: &Instruction, tool: &str) -> bool {
+    ephemeral_mount_targets(instruction).into_iter().any(|target| {
+        let target = target.trim_end_matches('/').to_ascii_lowercase();
+        target.ends_with("/.cache")
+            || target.contains(&format!("/.cache/{tool}"))
+            || target.ends_with(&format!("/{tool}"))
+    })
+}
+
+fn run_script(instruction: &Instruction) -> String {
+    let mut script = instruction.command.clone();
+    for heredoc in &instruction.heredocs {
+        script.push('\n');
+        script.push_str(&heredoc.content);
+    }
+    script
+}
+
 fn has_instr(instrs: &[Instruction], name: &str) -> bool {
     instrs.iter().any(|i| i.instruction == name)
 }
@@ -789,6 +888,61 @@ fn has_instr(instrs: &[Instruction], name: &str) -> bool {
 struct FromArguments<'a> {
     image: &'a str,
     alias: Option<&'a str>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct StageRuntimeState {
+    effective_user: Option<(String, usize)>,
+    has_command: bool,
+    has_workdir: bool,
+    has_explicit_shell: bool,
+    /// `false` means an external base may contribute runtime configuration
+    /// that cannot be determined from this Dockerfile alone.
+    base_metadata_known: bool,
+}
+
+fn inherited_runtime_state(
+    from: FromArguments<'_>,
+    stages: &std::collections::HashMap<String, StageRuntimeState>,
+) -> StageRuntimeState {
+    if from.image.eq_ignore_ascii_case("scratch") {
+        return StageRuntimeState {
+            base_metadata_known: true,
+            ..StageRuntimeState::default()
+        };
+    }
+    stages
+        .get(&from.image.to_ascii_lowercase())
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn final_runtime_state(instrs: &[Instruction]) -> Option<StageRuntimeState> {
+    let mut stages = std::collections::HashMap::new();
+    let mut current_alias = None;
+    let mut state = None;
+    for instruction in instrs {
+        if instruction.instruction == "FROM" {
+            let from = parse_from_arguments(&instruction.arguments)?;
+            current_alias = from.alias.map(str::to_ascii_lowercase);
+            state = Some(inherited_runtime_state(from, &stages));
+        } else if let Some(current) = state.as_mut() {
+            match instruction.instruction.as_str() {
+                "USER" => {
+                    current.effective_user =
+                        Some((instruction.arguments.trim().to_string(), instruction.line));
+                }
+                "CMD" | "ENTRYPOINT" => current.has_command = true,
+                "WORKDIR" => current.has_workdir = true,
+                "SHELL" => current.has_explicit_shell = true,
+                _ => {}
+            }
+        }
+        if let (Some(alias), Some(current)) = (&current_alias, &state) {
+            stages.insert(alias.clone(), current.clone());
+        }
+    }
+    state
 }
 
 /// Parse `FROM [--flag=value ...] image [AS alias]` arguments.
@@ -849,37 +1003,24 @@ fn rule_latest_tag(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 }
 
 fn rule_running_as_root(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let mut findings = Vec::new();
-    let mut effective_user: Option<&Instruction> = None;
-    let mut report_root_user = |user: Option<&Instruction>| {
-        if let Some(u) = user.filter(|user| is_root_user(&user.arguments)) {
-            findings.push(Finding {
-                column: 0,
-                end_line: 0,
-                end_column: 0,
-                rule: "DF002".into(),
-                severity: Severity::Error,
-                line: u.line,
-                message: "Container is explicitly set to run as root".to_string(),
-                roast: "Congratulations, you're running as root. Your security team is crying, \
-                        your CISO is drafting a strongly-worded email, and a hacker somewhere \
-                        just smiled."
-                    .to_string(),
-            });
-        }
-    };
-    for instruction in instrs {
-        match instruction.instruction.as_str() {
-            "FROM" => {
-                report_root_user(effective_user);
-                effective_user = None;
-            }
-            "USER" => effective_user = Some(instruction),
-            _ => {}
-        }
-    }
-    report_root_user(effective_user);
-    findings
+    final_runtime_state(instrs)
+        .and_then(|state| state.effective_user)
+        .filter(|(user, _)| is_root_user(user))
+        .map(|(_, line)| Finding {
+            column: 0,
+            end_line: 0,
+            end_column: 0,
+            rule: "DF002".into(),
+            severity: Severity::Error,
+            line,
+            message: "Container is explicitly set to run as root".to_string(),
+            roast: "Congratulations, you're running as root. Your security team is crying, \
+                    your CISO is drafting a strongly-worded email, and a hacker somewhere \
+                    just smiled."
+                .to_string(),
+        })
+        .into_iter()
+        .collect()
 }
 
 fn is_root_user(value: &str) -> bool {
@@ -1078,10 +1219,9 @@ fn rule_relative_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 }
 
 fn rule_sudo_usage(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let re = Regex::new(r"\bsudo\b").unwrap();
     instrs_of(instrs, "RUN")
         .into_iter()
-        .filter(|i| re.is_match(&i.arguments))
+        .filter(|i| shell_invokes_command(&run_script(i), "sudo"))
         .map(|i| Finding {
             column: 0,
             end_line: 0,
@@ -1241,10 +1381,7 @@ fn rule_shell_form_cmd(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 fn rule_copy_root(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     instrs_of(instrs, "COPY")
         .into_iter()
-        .filter(|i| {
-            let a = i.arguments.trim();
-            a.ends_with(" /") || a.contains(" / ") || a.ends_with("/.")
-        })
+        .filter(|i| matches!(instruction_operands(i).last(), Some(&"/" | &"/.")))
         .map(|i| Finding {
             column: 0,
             end_line: 0,
@@ -1301,10 +1438,12 @@ fn rule_pip_no_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                 let arguments = &instruction.arguments;
                 if is_uv_pip_install(arguments) {
                     !arguments.contains("--no-cache")
+                        && !has_language_cache_mount(instruction, "uv")
                 } else {
                     (arguments.contains("pip install") || arguments.contains("pip3 install"))
                         && !arguments.contains("--no-cache-dir")
                         && !pip_cache_disabled
+                        && !has_language_cache_mount(instruction, "pip")
                 }
             }
             _ => false,
@@ -1488,24 +1627,32 @@ fn rule_curl_no_fail(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 }
 
 fn rule_no_cmd_or_entrypoint(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    if has_instr(instrs, "CMD") || has_instr(instrs, "ENTRYPOINT") {
+    let Some(state) = final_runtime_state(instrs) else {
+        return vec![];
+    };
+    if state.has_command || instrs.len() < 3 {
         return vec![];
     }
-    if instrs.len() < 3 {
-        return vec![];
-    }
+    let (message, roast) = if state.base_metadata_known {
+        (
+            "No CMD or ENTRYPOINT defined — the container has no default command",
+            "The final stage has no default process. Add one if this stage is intended to run.",
+        )
+    } else {
+        (
+            "No CMD or ENTRYPOINT declared in the final stage — the default command depends on the base image",
+            "This stage inherits its default process from external image metadata. Declare it explicitly if that dependency is unintended.",
+        )
+    };
     vec![Finding {
         column: 0,
         end_line: 0,
         end_column: 0,
         rule: "DF036".into(),
-        severity: Severity::Warning,
+        severity: Severity::Info,
         line: 0,
-        message: "No CMD or ENTRYPOINT defined — the container has no default command".to_string(),
-        roast: "No CMD or ENTRYPOINT? This container starts, does nothing, and immediately exits \
-                like an intern on their first day who didn't read the onboarding docs. \
-                Tell it what to run."
-            .to_string(),
+        message: message.to_string(),
+        roast: roast.to_string(),
     }]
 }
 
@@ -1519,7 +1666,8 @@ fn rule_uncleaned_package_cache(instrs: &[Instruction], _raw: &str) -> Vec<Findi
         let has_apk = arg.contains("apk add") && !arg.contains("--no-cache");
         let cleans_apt_lists =
             arg.contains("rm -rf /var/lib/apt/lists") || apt_distclean.is_match(arg);
-        if has_apt && !cleans_apt_lists {
+        let apt_lists_are_ephemeral = has_ephemeral_mount_covering(i, "/var/lib/apt/lists");
+        if has_apt && !cleans_apt_lists && !apt_lists_are_ephemeral {
             findings.push(Finding {
                 column: 0,
                 end_line: 0,
@@ -1535,7 +1683,13 @@ fn rule_uncleaned_package_cache(instrs: &[Instruction], _raw: &str) -> Vec<Findi
                     .to_string(),
             });
         }
-        if has_yum && !arg.contains("yum clean all") && !arg.contains("dnf clean all") {
+        let rpm_cache_is_ephemeral = has_ephemeral_mount_covering(i, "/var/cache/dnf")
+            || has_ephemeral_mount_covering(i, "/var/cache/yum");
+        if has_yum
+            && !arg.contains("yum clean all")
+            && !arg.contains("dnf clean all")
+            && !rpm_cache_is_ephemeral
+        {
             findings.push(Finding {
                 column: 0,
                 end_line: 0,
@@ -1549,7 +1703,7 @@ fn rule_uncleaned_package_cache(instrs: &[Instruction], _raw: &str) -> Vec<Findi
                     .to_string(),
             });
         }
-        if has_apk {
+        if has_apk && !has_ephemeral_mount_covering(i, "/var/cache/apk") {
             findings.push(Finding {
                 column: 0,
                 end_line: 0,
@@ -2004,7 +2158,7 @@ fn rule_from_platform_flag(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             end_line: 0,
             end_column: 0,
             rule: "DF061".into(),
-            severity: Severity::Warning,
+            severity: Severity::Info,
             line: i.line,
             message: "FROM uses --platform flag — consider whether cross-platform targeting is intentional".to_string(),
             roast: "--platform in FROM forces a specific architecture. If you're building for \
@@ -2022,39 +2176,48 @@ fn rule_env_self_reference(_instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
 }
 
 fn rule_copy_relative_no_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let mut stage_workdirs: std::collections::HashMap<String, bool> =
-        std::collections::HashMap::new();
+    let mut stages = std::collections::HashMap::new();
     let mut current_alias: Option<String> = None;
-    let mut workdir_set = false;
+    let mut state = StageRuntimeState::default();
     let mut findings = Vec::new();
     for i in instrs {
         if i.instruction == "FROM" {
             if let Some(from) = parse_from_arguments(&i.arguments) {
-                workdir_set = stage_workdirs
-                    .get(&from.image.to_lowercase())
-                    .copied()
-                    .unwrap_or(false);
+                state = inherited_runtime_state(from, &stages);
                 current_alias = from.alias.map(str::to_lowercase);
-                if let Some(alias) = &current_alias {
-                    stage_workdirs.insert(alias.clone(), workdir_set);
-                }
             } else {
-                workdir_set = false;
+                state = StageRuntimeState::default();
                 current_alias = None;
             }
         } else if i.instruction == "WORKDIR" {
-            workdir_set = true;
-            if let Some(alias) = &current_alias {
-                stage_workdirs.insert(alias.clone(), true);
-            }
+            state.has_workdir = true;
         } else if i.instruction == "COPY" {
-            let args: Vec<&str> = i
-                .arguments
-                .split_whitespace()
-                .filter(|t| !t.starts_with("--"))
-                .collect();
+            let args = instruction_operands(i);
             if let Some(dest) = args.last() {
-                if !dest.starts_with('/') && !dest.starts_with('$') && !workdir_set {
+                if !dest.starts_with('/') && !dest.starts_with('$') && !state.has_workdir {
+                    let (message, roast) = if state.base_metadata_known {
+                        (
+                            format!(
+                                "COPY to relative destination '{}' but no WORKDIR has been set",
+                                dest
+                            ),
+                            format!(
+                                "COPY to '{}' with no WORKDIR set. Set WORKDIR explicitly before using relative paths.",
+                                dest
+                            ),
+                        )
+                    } else {
+                        (
+                            format!(
+                                "COPY to relative destination '{}' relies on the base image WORKDIR",
+                                dest
+                            ),
+                            format!(
+                                "COPY to '{}' inherits an external base image's working directory. Set WORKDIR explicitly if that dependency is unintended.",
+                                dest
+                            ),
+                        )
+                    };
                     findings.push(Finding {
                         column: 0,
                         end_line: 0,
@@ -2062,19 +2225,14 @@ fn rule_copy_relative_no_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Find
                         rule: "DF063".into(),
                         severity: Severity::Warning,
                         line: i.line,
-                        message: format!(
-                            "COPY to relative destination '{}' but no WORKDIR has been set",
-                            dest
-                        ),
-                        roast: format!(
-                            "COPY to '{}' with no WORKDIR set. Relative destinations depend on \
-                             the working directory, which defaults to /. \
-                             Set WORKDIR explicitly before using relative paths.",
-                            dest
-                        ),
+                        message,
+                        roast,
                     });
                 }
             }
+        }
+        if let Some(alias) = &current_alias {
+            stages.insert(alias.clone(), state.clone());
         }
     }
     findings
@@ -2107,45 +2265,11 @@ fn rule_useradd_no_l(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .collect()
 }
 
-fn rule_copy_archive_use_add(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    const ARCHIVE_EXTS: &[&str] = &[".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar.zst", ".tar"];
-    instrs_of(instrs, "COPY")
-        .into_iter()
-        .filter(|i| {
-            // Ignore multi-stage COPY --from=... (the source is a container path, not a local file)
-            if i.arguments.contains("--from=") || i.arguments.contains("--from =") {
-                return false;
-            }
-            let sources: Vec<&str> = i
-                .arguments
-                .split_whitespace()
-                .filter(|t| !t.starts_with("--"))
-                .collect();
-            // Need at least one source and one destination
-            if sources.len() < 2 {
-                return false;
-            }
-            // Check if any source (all but last) is an archive
-            sources[..sources.len() - 1]
-                .iter()
-                .any(|s| ARCHIVE_EXTS.iter().any(|ext| s.ends_with(ext)))
-        })
-        .map(|i| Finding {
-            column: 0,
-            end_line: 0,
-            end_column: 0,
-            rule: "DF067".into(),
-            severity: Severity::Info,
-            line: i.line,
-            message: "COPY of archive file — consider ADD which auto-extracts local tarballs"
-                .to_string(),
-            roast: "COPY drops the compressed archive as-is; you'll need a separate \
-                    RUN tar -xzf layer to unpack it. ADD auto-extracts local tarballs into \
-                    the destination directory and saves you the extra layer. \
-                    Yes, this is the one situation where ADD is actually the right choice."
-                .to_string(),
-        })
-        .collect()
+fn rule_copy_archive_use_add(_instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    // Whether ADD is safe depends on verification, destination layout,
+    // --strip-components, and whether the archive should remain compressed.
+    // Recommending it from the filename alone changes build semantics.
+    Vec::new()
 }
 
 fn rule_onbuild_forbidden(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -2185,27 +2309,77 @@ fn rule_onbuild_forbidden(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 }
 
 fn rule_bash_syntax_no_shell(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    // If an explicit SHELL instruction is present, the developer knows what they're doing
-    if has_instr(instrs, "SHELL") {
-        return vec![];
-    }
     // Patterns that are valid bash but not POSIX sh — meaningless or broken on /bin/sh
-    const BASH_ONLY: &[(&str, &str)] = &[
-        ("[[ ", "double-bracket conditional"),
-        ("source ", "source builtin (use '.' in POSIX sh)"),
-        ("declare ", "declare builtin"),
-        ("mapfile ", "mapfile builtin"),
-        ("readarray ", "readarray builtin"),
-        ("${!", "indirect variable expansion"),
+    const BASH_COMMANDS: &[(&str, &str)] = &[
+        ("[[", "double-bracket conditional"),
+        ("source", "source builtin (use '.' in POSIX sh)"),
+        ("declare", "declare builtin"),
+        ("mapfile", "mapfile builtin"),
+        ("readarray", "readarray builtin"),
     ];
+    let mut stages = std::collections::HashMap::new();
+    let mut current_alias = None;
+    let mut state = StageRuntimeState::default();
     let mut findings = Vec::new();
-    for i in instrs_of(instrs, "RUN") {
-        // `RUN` itself uses /bin/sh, but an explicit `bash -c` owns the quoted
-        // command that follows it. Ignore bash-only syntax inside that command
-        // while continuing to inspect the rest of the RUN instruction.
-        let command = command_without_bash_c_scripts(&i.arguments);
-        for (pattern, label) in BASH_ONLY {
-            if command.contains(pattern) {
+    for i in instrs {
+        if i.instruction == "FROM" {
+            if let Some(from) = parse_from_arguments(&i.arguments) {
+                state = inherited_runtime_state(from, &stages);
+                current_alias = from.alias.map(str::to_ascii_lowercase);
+            }
+        } else if i.instruction == "SHELL" {
+            state.has_explicit_shell = true;
+        } else if i.instruction == "RUN" && !state.has_explicit_shell {
+            // `RUN` itself uses /bin/sh, but an explicit `bash -c` owns the quoted
+            // command that follows it. Ignore bash-only syntax inside that command
+            // while continuing to inspect the rest of the RUN instruction.
+            let command = command_without_bash_c_scripts(&run_script(i));
+            let mut reported = false;
+            for (command_name, label) in BASH_COMMANDS {
+                if shell_invokes_command(&command, command_name) {
+                    let (message, roast) = if state.base_metadata_known {
+                        (
+                            format!(
+                                "RUN uses bash-specific syntax ({}) but no SHELL instruction is set",
+                                label
+                            ),
+                            format!(
+                                "'{}' is bash syntax, but this stage has no Bash SHELL. Set `SHELL [\"/bin/bash\", \"-c\"]` before this RUN.",
+                                command_name
+                            ),
+                        )
+                    } else {
+                        (
+                            format!(
+                                "RUN uses bash-specific syntax ({}) without an explicit SHELL in this stage",
+                                label
+                            ),
+                            format!(
+                                "'{}' requires Bash, but shell behavior currently depends on external base-image metadata. Declare the Bash SHELL explicitly.",
+                                command_name
+                            ),
+                        )
+                    };
+                    findings.push(Finding {
+                        column: 0,
+                        end_line: 0,
+                        end_column: 0,
+                        rule: "DF066".into(),
+                        severity: Severity::Warning,
+                        line: i.line,
+                        message,
+                        roast,
+                    });
+                    reported = true;
+                    break;
+                }
+            }
+            if !reported && command.contains("${!") {
+                let message = if state.base_metadata_known {
+                    "RUN uses bash-specific syntax (indirect variable expansion) but no SHELL instruction is set"
+                } else {
+                    "RUN uses bash-specific syntax (indirect variable expansion) without an explicit SHELL in this stage"
+                };
                 findings.push(Finding {
                     column: 0,
                     end_line: 0,
@@ -2213,23 +2387,28 @@ fn rule_bash_syntax_no_shell(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
                     rule: "DF066".into(),
                     severity: Severity::Warning,
                     line: i.line,
-                    message: format!(
-                        "RUN uses bash-specific syntax ({}) but no SHELL instruction is set",
-                        label
-                    ),
-                    roast: format!(
-                        "'{}' is bash syntax. The default shell is /bin/sh, which on Alpine, \
-                         Debian-slim, and distroless is NOT bash. Add \
-                         `SHELL [\"/bin/bash\", \"-c\"]` before this RUN or your build \
-                         will fail in ways that are confusing to debug.",
-                        pattern.trim()
-                    ),
+                    message: message.to_string(),
+                    roast: "'${!' is bash syntax. Set an explicit Bash SHELL before using it."
+                        .to_string(),
                 });
-                break;
             }
+        }
+        if let Some(alias) = &current_alias {
+            stages.insert(alias.clone(), state.clone());
         }
     }
     findings
+}
+
+/// Detect a command word at the start of a shell command or immediately after
+/// a shell control operator/keyword. This deliberately does not match package
+/// names, path components, option values, or group names containing the word.
+fn shell_invokes_command(script: &str, command: &str) -> bool {
+    let command = regex::escape(command);
+    let pattern = format!(
+        r"(?:^|[;&|(\n]\s*|\b(?:then|do|if|elif|while|until)\s+|!\s*){command}(?:\s|$)"
+    );
+    Regex::new(&pattern).expect("escaped command creates a valid regex").is_match(script)
 }
 
 fn command_without_bash_c_scripts(command: &str) -> String {
@@ -2296,77 +2475,34 @@ fn next_shell_token(command: &str, offset: usize) -> Option<(usize, usize, &str)
     Some((start, end, &command[start..end]))
 }
 
-fn rule_untrusted_registry(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    const TRUSTED: &[&str] = &[
-        "docker.io",
-        "registry-1.docker.io",
-        "ghcr.io",
-        "gcr.io",
-        "quay.io",
-        "mcr.microsoft.com",
-        "registry.access.redhat.com",
-        "public.ecr.aws",
-        "registry.k8s.io",
-        "k8s.gcr.io",
-        "dhi.io",
-    ];
-    let mut findings = Vec::new();
-    for i in instrs_of(instrs, "FROM") {
-        // Skip --platform=... flags to find the actual image reference
-        let image = match i
-            .arguments
-            .split_whitespace()
-            .find(|t| !t.starts_with("--"))
-        {
-            Some(img) => img,
-            None => continue,
-        };
-        if image.eq_ignore_ascii_case("scratch") {
-            continue;
-        }
-        // The registry is the first path component when it contains a dot or colon,
-        // or is the literal "localhost". Plain names like "ubuntu" or "ubuntu:22.04"
-        // with no slash imply docker.io — the colon there is the tag separator, not a port.
-        if !image.contains('/') {
-            continue;
-        }
-        let first = image
-            .split('@')
-            .next()
-            .unwrap_or(image)
-            .split('/')
-            .next()
-            .unwrap_or("");
-        if (first.contains('.') || first.contains(':') || first == "localhost")
-            && !TRUSTED.iter().any(|t| first.eq_ignore_ascii_case(t))
-        {
-            findings.push(Finding {
-                column: 0,
-                end_line: 0,
-                end_column: 0,
-                rule: "DF065".into(),
-                severity: Severity::Warning,
-                line: i.line,
-                message: format!("FROM pulls from unrecognised registry '{}'", first),
-                roast: format!(
-                    "Pulling base images from '{}' — a registry you don't hear about at \
-                     KubeCon. Supply-chain attacks love Dockerfiles that blindly trust \
-                     random registries. Verify this is intentional and pin to a digest.",
-                    first
-                ),
-            });
-        }
-    }
-    findings
+fn rule_untrusted_registry(_instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    // DF065 is emitted by policy::configured_findings only when the user
+    // supplies approved-registries. There is no universal trusted-registry set.
+    Vec::new()
 }
 
 fn rule_pipefail_missing(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    let mut stages = std::collections::HashMap::new();
+    let mut current_alias = None;
     let mut shell_has_pipefail = false;
+    let mut shell_metadata_known = false;
     let mut findings = Vec::new();
 
     for instruction in instrs {
         match instruction.instruction.as_str() {
-            "FROM" => shell_has_pipefail = false,
+            "FROM" => {
+                if let Some(from) = parse_from_arguments(&instruction.arguments) {
+                    (shell_has_pipefail, shell_metadata_known) = stages
+                        .get(&from.image.to_ascii_lowercase())
+                        .copied()
+                        .unwrap_or((false, from.image.eq_ignore_ascii_case("scratch")));
+                    current_alias = from.alias.map(str::to_ascii_lowercase);
+                } else {
+                    shell_has_pipefail = false;
+                    shell_metadata_known = false;
+                    current_alias = None;
+                }
+            }
             "SHELL" => {
                 shell_has_pipefail = match &instruction.form {
                     InstructionForm::Json(arguments) => {
@@ -2377,8 +2513,14 @@ fn rule_pipefail_missing(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     }
                     _ => false,
                 };
+                shell_metadata_known = true;
             }
             "RUN" if run_has_unprotected_pipeline(&instruction.command, shell_has_pipefail) => {
+                let message = if shell_metadata_known {
+                    "RUN with pipe but no pipefail — failed commands in the pipe are silently ignored"
+                } else {
+                    "RUN with pipe relies on external base-image SHELL behavior — declare pipefail explicitly"
+                };
                 findings.push(Finding {
                     column: 0,
                     end_line: 0,
@@ -2386,8 +2528,7 @@ fn rule_pipefail_missing(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     rule: "DF057".into(),
                     severity: Severity::Warning,
                     line: instruction.line,
-                    message: "RUN with pipe but no pipefail — failed commands in the pipe are silently ignored"
-                        .to_string(),
+                    message: message.to_string(),
                     roast: "A pipe in RUN without `set -o pipefail`. If the left side of that pipe fails, \
                             bash shrugs and moves on. The exit code is whatever the last command returns. \
                             Add `set -o pipefail` at the start of the RUN."
@@ -2395,6 +2536,9 @@ fn rule_pipefail_missing(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                 });
             }
             _ => {}
+        }
+        if let Some(alias) = &current_alias {
+            stages.insert(alias.clone(), (shell_has_pipefail, shell_metadata_known));
         }
     }
 
@@ -2532,6 +2676,7 @@ fn rule_yarn_cache_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             let a = &i.arguments;
             (a.contains("yarn install") || a.contains("yarn add"))
                 && !a.contains("yarn cache clean")
+                && !has_language_cache_mount(i, "yarn")
         })
         .map(|i| Finding {
             column: 0,
@@ -2660,7 +2805,7 @@ fn rule_apk_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
             end_line: 0,
             end_column: 0,
             rule: "DF052".into(),
-            severity: Severity::Warning,
+            severity: Severity::Info,
             line: i.line,
             message: "apk add without version pinning — use package=version for reproducibility"
                 .to_string(),
@@ -2770,11 +2915,7 @@ fn rule_copy_multi_arg_slash(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
     instrs_of(instrs, "COPY")
         .into_iter()
         .filter(|i| {
-            let args: Vec<&str> = i
-                .arguments
-                .split_whitespace()
-                .filter(|t| !t.starts_with("--"))
-                .collect();
+            let args = instruction_operands(i);
             if args.len() > 2 {
                 let dest = args.last().unwrap_or(&"");
                 !dest.ends_with('/')
@@ -2851,7 +2992,10 @@ fn rule_dnf_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .into_iter()
         .filter(|i| {
             let a = &i.arguments;
-            a.contains("dnf install") && !a.contains("dnf clean all") && !a.contains("dnf clean")
+            a.contains("dnf install")
+                && !a.contains("dnf clean all")
+                && !a.contains("dnf clean")
+                && !has_ephemeral_mount_covering(i, "/var/cache/dnf")
         })
         .map(|i| Finding {
             column: 0,
@@ -2874,7 +3018,10 @@ fn rule_yum_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .into_iter()
         .filter(|i| {
             let a = &i.arguments;
-            a.contains("yum install") && !a.contains("yum clean all") && !a.contains("yum clean")
+            a.contains("yum install")
+                && !a.contains("yum clean all")
+                && !a.contains("yum clean")
+                && !has_ephemeral_mount_covering(i, "/var/cache/yum")
         })
         .map(|i| Finding {
             column: 0,
@@ -3111,46 +3258,60 @@ fn rule_multiple_cmd(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 }
 
 fn rule_multiple_entrypoint(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let eps: Vec<_> = instrs_of(instrs, "ENTRYPOINT");
-    if eps.len() <= 1 {
-        return vec![];
+    let mut seen_in_stage = false;
+    let mut findings = Vec::new();
+    for instruction in instrs {
+        if instruction.instruction == "FROM" {
+            seen_in_stage = false;
+        } else if instruction.instruction == "ENTRYPOINT" {
+            if seen_in_stage {
+                findings.push(Finding {
+                    column: 0,
+                    end_line: 0,
+                    end_column: 0,
+                    rule: "DF039".into(),
+                    severity: Severity::Error,
+                    line: instruction.line,
+                    message: "Multiple ENTRYPOINT instructions — only the last one takes effect"
+                        .to_string(),
+                    roast: "Two ENTRYPOINTs. Bold. Only the last one runs; the first is just expensive \
+                        furniture. Delete it."
+                        .to_string(),
+                });
+            }
+            seen_in_stage = true;
+        }
     }
-    eps[1..]
-        .iter()
-        .map(|i| Finding {
-            column: 0,
-            end_line: 0,
-            end_column: 0,
-            rule: "DF039".into(),
-            severity: Severity::Error,
-            line: i.line,
-            message: "Multiple ENTRYPOINT instructions — only the last one takes effect"
-                .to_string(),
-            roast: "Two ENTRYPOINTs. Bold. Only the last one runs; the first is just expensive \
-                furniture. Delete it."
-                .to_string(),
-        })
-        .collect()
+    findings
 }
 
 fn rule_no_user_instruction(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    if has_instr(instrs, "USER") {
+    let Some(state) = final_runtime_state(instrs) else {
+        return vec![];
+    };
+    if state.effective_user.is_some() || (!state.has_command && state.base_metadata_known) {
         return vec![];
     }
-    if !has_instr(instrs, "CMD") && !has_instr(instrs, "ENTRYPOINT") {
-        return vec![];
-    }
+    let (message, roast) = if state.base_metadata_known {
+        (
+            "No USER instruction found — container will run as root by default",
+            "The final stage has no USER, so its process runs as root. Declare the intended runtime identity explicitly.",
+        )
+    } else {
+        (
+            "No USER declared in the final stage — the runtime user depends on the base image",
+            "The runtime identity comes from external image metadata. Declare USER explicitly if that dependency is unintended.",
+        )
+    };
     vec![Finding {
         column: 0,
         end_line: 0,
         end_column: 0,
         rule: "DF020".into(),
-        severity: Severity::Warning,
+        severity: Severity::Info,
         line: 0,
-        message: "No USER instruction found — container will run as root by default".to_string(),
-        roast: "No USER set? Bold strategy. Running everything as root in prod is a great way \
-                to ensure job security — for your incident response team."
-            .to_string(),
+        message: message.to_string(),
+        roast: roast.to_string(),
     }]
 }
 

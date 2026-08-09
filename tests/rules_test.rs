@@ -1,7 +1,7 @@
 //! Integration tests verifying each lint rule fires (or doesn't) correctly.
 
 use dockerfile_roast::parser;
-use dockerfile_roast::rules::{all_rules, Finding, ALL_CATEGORIES};
+use dockerfile_roast::rules::{all_rules, Finding, Severity, ALL_CATEGORIES};
 
 fn lint(dockerfile: &str) -> Vec<Finding> {
     let instrs = parser::parse(dockerfile);
@@ -109,6 +109,24 @@ fn df002_clear_when_root_is_only_used_for_setup() {
     assert!(no_rule(&lint(df), "DF002"));
 }
 
+#[test]
+fn df002_ignores_root_user_in_non_final_build_stage() {
+    let df = "FROM alpine:3.19 AS builder\nUSER root\nRUN echo build\nFROM alpine:3.19\nUSER appuser\nCMD [\"/app\"]\n";
+    assert!(no_rule(&lint(df), "DF002"));
+}
+
+#[test]
+fn df002_fires_when_final_stage_ends_as_root() {
+    let df = "FROM alpine:3.19 AS builder\nUSER appuser\nRUN echo build\nFROM alpine:3.19\nUSER root\nCMD [\"/app\"]\n";
+    assert!(has_rule(&lint(df), "DF002"));
+}
+
+#[test]
+fn df002_tracks_user_inherited_from_named_stage() {
+    let df = "FROM scratch AS base\nUSER root\nFROM base\nCMD [\"/app\"]\n";
+    assert!(has_rule(&lint(df), "DF002"));
+}
+
 // ─── DF003: many RUN layers ──────────────────────────────────────────────────
 
 #[test]
@@ -154,6 +172,18 @@ fn df004_clear_with_comment_inside_continuation() {
     // Docker strips comment lines inside continuations, so the trailing
     // cleanup still belongs to the same RUN (issue #11).
     let df = "FROM debian:bookworm-slim\nRUN apt-get update && \\\n    apt-get install -y --no-install-recommends \\\n        curl \\\n        # embedded comment\n        ca-certificates && \\\n    apt-get clean && \\\n    rm -rf /var/lib/apt/lists/*\nCMD [\"true\"]\n";
+    assert!(no_rule(&lint(df), "DF004"));
+}
+
+#[test]
+fn df004_clear_when_apt_state_is_on_buildkit_cache_mounts() {
+    let df = "# syntax=docker/dockerfile:1\nFROM ubuntu:24.04\nRUN --mount=type=cache,target=/var/lib/apt \\\n+    --mount=type=cache,target=/var/cache/apt \\\n+    apt-get update && apt-get install -y curl\n";
+    assert!(no_rule(&lint(df), "DF004"));
+}
+
+#[test]
+fn df004_clear_when_apt_lists_are_on_tmpfs() {
+    let df = "# syntax=docker/dockerfile:1\nFROM ubuntu:24.04\nRUN --mount=type=tmpfs,target=/var/lib/apt/lists \\\n+    apt-get update && apt-get install -y curl\n";
     assert!(no_rule(&lint(df), "DF004"));
 }
 
@@ -417,6 +447,14 @@ fn df030_uses_uv_no_cache_flag() {
     assert!(no_rule(&lint("FROM python:3.12\nRUN uv pip install --no-cache flask\n"), "DF030"));
 }
 
+#[test]
+fn df030_clear_when_pip_or_uv_cache_is_buildkit_mounted() {
+    let pip = "# syntax=docker/dockerfile:1\nFROM python:3.12\nRUN --mount=type=cache,target=/tmp/.cache pip install flask\n";
+    let uv = "# syntax=docker/dockerfile:1\nFROM python:3.12\nRUN --mount=type=cache,target=${HOME}/.cache/uv uv pip install flask\n";
+    assert!(no_rule(&lint(pip), "DF030"));
+    assert!(no_rule(&lint(uv), "DF030"));
+}
+
 // ─── DF005: unpinned package versions ────────────────────────────────────────
 
 #[test]
@@ -475,6 +513,22 @@ fn df010_fires_on_sudo() {
 fn df010_clear_without_sudo() {
     let df = "FROM ubuntu:22.04\nRUN apt-get install -y curl\n";
     assert!(no_rule(&lint(df), "DF010"));
+}
+
+#[test]
+fn df010_clear_when_sudo_is_a_package_or_group_name() {
+    let packages = "FROM ubuntu:24.04\nRUN apt-get install -y \\\n+        curl \\\n+        sudo \\\n+        tini\n";
+    let group = "FROM ubuntu:24.04\nRUN usermod -aG docker,sudo appuser\n";
+    assert!(no_rule(&lint(packages), "DF010"));
+    assert!(no_rule(&lint(group), "DF010"));
+}
+
+#[test]
+fn df010_fires_when_sudo_starts_a_chained_command() {
+    let chained = "FROM ubuntu:24.04\nRUN make bootstrap && sudo apt-get clean\n";
+    let heredoc = "FROM ubuntu:24.04\nRUN <<EOF\necho ready\nsudo apt-get clean\nEOF\n";
+    assert!(has_rule(&lint(chained), "DF010"));
+    assert!(has_rule(&lint(heredoc), "DF010"));
 }
 
 // ─── DF011: no multi-stage build for heavy images ────────────────────────────
@@ -571,6 +625,12 @@ fn df020_clear_with_user_set() {
     assert!(no_rule(&lint(df), "DF020"));
 }
 
+#[test]
+fn df020_clear_when_user_is_inherited_from_named_stage() {
+    let df = "FROM scratch AS base\nUSER appuser\nFROM base\nCMD [\"/app\"]\n";
+    assert!(no_rule(&lint(df), "DF020"));
+}
+
 // ─── DF022: no EXPOSE ────────────────────────────────────────────────────────
 
 #[test]
@@ -633,6 +693,20 @@ fn df026_clear_on_copy_to_subdir() {
     assert!(no_rule(&lint(df), "DF026"));
 }
 
+#[test]
+fn df026_clear_when_root_is_source_but_destination_is_subdir() {
+    let df = "FROM alpine:3.19 AS artifacts\nFROM alpine:3.19\nCOPY --from=artifacts / /usr/bin/\n";
+    assert!(no_rule(&lint(df), "DF026"));
+}
+
+#[test]
+fn df026_handles_json_copy_destination() {
+    let root = "FROM alpine:3.19\nCOPY [\"app\", \"/\"]\n";
+    let subdir = "FROM alpine:3.19\nCOPY [\"app\", \"/opt/app/\"]\n";
+    assert!(has_rule(&lint(root), "DF026"));
+    assert!(no_rule(&lint(subdir), "DF026"));
+}
+
 // ─── DF027: yum without -y ───────────────────────────────────────────────────
 
 #[test]
@@ -658,6 +732,12 @@ fn df029_fires_on_apk_without_no_cache() {
 #[test]
 fn df029_clear_on_apk_with_no_cache() {
     let df = "FROM alpine:3.19\nRUN apk add --no-cache curl\n";
+    assert!(no_rule(&lint(df), "DF029"));
+}
+
+#[test]
+fn df029_clear_when_apk_cache_is_buildkit_mounted() {
+    let df = "# syntax=docker/dockerfile:1\nFROM alpine:3.19\nRUN --mount=type=cache,target=/var/cache/apk apk add curl\n";
     assert!(no_rule(&lint(df), "DF029"));
 }
 
@@ -758,6 +838,12 @@ fn df036_clear_with_entrypoint() {
     assert!(no_rule(&lint(df), "DF036"));
 }
 
+#[test]
+fn df036_clear_when_command_is_inherited_from_named_stage() {
+    let df = "FROM scratch AS base\nENTRYPOINT [\"/app\"]\nFROM base\nCOPY app /app\n";
+    assert!(no_rule(&lint(df), "DF036"));
+}
+
 // ─── DF037: invalid instruction order ────────────────────────────────────────
 
 #[test]
@@ -810,6 +896,24 @@ fn df039_fires_on_multiple_entrypoint() {
 fn df039_clear_on_single_entrypoint() {
     let df = "FROM alpine:3.19\nENTRYPOINT [\"/only\"]\n";
     assert!(no_rule(&lint(df), "DF039"));
+}
+
+#[test]
+fn df039_clear_on_one_entrypoint_per_stage() {
+    let df = "FROM alpine:3.19 AS development\nENTRYPOINT [\"/dev\"]\nFROM alpine:3.19 AS production\nENTRYPOINT [\"/prod\"]\n";
+    assert!(no_rule(&lint(df), "DF039"));
+}
+
+#[test]
+fn df039_fires_only_for_duplicate_entrypoint_in_same_stage() {
+    let df = "FROM alpine:3.19 AS development\nENTRYPOINT [\"/dev\"]\nFROM alpine:3.19 AS production\nENTRYPOINT [\"/first\"]\nENTRYPOINT [\"/second\"]\n";
+    let findings = lint(df);
+    let duplicates: Vec<_> = findings
+        .iter()
+        .filter(|finding| finding.rule == "DF039")
+        .collect();
+    assert_eq!(duplicates.len(), 1);
+    assert_eq!(duplicates[0].line, 5);
 }
 
 // ─── DF040: EXPOSE port out of range ─────────────────────────────────────────
@@ -930,6 +1034,16 @@ fn df047_clear_on_yum_with_clean() {
     assert!(no_rule(&lint(df), "DF047"));
 }
 
+#[test]
+fn df046_and_df047_clear_when_rpm_caches_are_ephemeral_mounts() {
+    let dnf = "# syntax=docker/dockerfile:1\nFROM fedora:latest\nRUN --mount=type=tmpfs,target=/var/cache/dnf dnf install -y curl\n";
+    let yum = "# syntax=docker/dockerfile:1\nFROM centos:7\nRUN --mount=type=cache,target=/var/cache/yum yum install -y curl\n";
+    assert!(no_rule(&lint(dnf), "DF004"));
+    assert!(no_rule(&lint(dnf), "DF046"));
+    assert!(no_rule(&lint(yum), "DF004"));
+    assert!(no_rule(&lint(yum), "DF047"));
+}
+
 // ─── DF048: COPY multi-source without trailing slash ─────────────────────────
 
 #[test]
@@ -948,6 +1062,18 @@ fn df048_clear_on_multi_source_with_slash() {
 fn df048_clear_on_two_arg_copy() {
     let df = "FROM alpine:3.19\nCOPY app.py /app/app.py\n";
     assert!(no_rule(&lint(df), "DF048"));
+}
+
+#[test]
+fn df048_clear_on_quoted_json_destination_with_slash() {
+    let df = "FROM alpine:3.19\nCOPY [\"package.json\", \"lock.json\", \"./\"]\n";
+    assert!(no_rule(&lint(df), "DF048"));
+}
+
+#[test]
+fn df048_fires_on_json_multi_source_without_destination_slash() {
+    let df = "FROM alpine:3.19\nCOPY [\"package.json\", \"lock.json\", \"/app\"]\n";
+    assert!(has_rule(&lint(df), "DF048"));
 }
 
 // ─── DF049: COPY --from undefined stage ──────────────────────────────────────
@@ -1096,6 +1222,12 @@ fn df055_clear_on_yarn_install_with_clean() {
     assert!(no_rule(&lint(df), "DF055"));
 }
 
+#[test]
+fn df055_clear_when_yarn_cache_is_buildkit_mounted() {
+    let df = "# syntax=docker/dockerfile:1\nFROM node:20\nRUN --mount=type=cache,target=/usr/local/share/.cache/yarn yarn install\n";
+    assert!(no_rule(&lint(df), "DF055"));
+}
+
 // ─── DF056: wget without --progress ──────────────────────────────────────────
 
 #[test]
@@ -1193,6 +1325,12 @@ fn df057_shell_pipefail_resets_at_next_stage() {
         .collect();
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].line, 5);
+}
+
+#[test]
+fn df057_inherits_pipefail_shell_from_named_stage() {
+    let df = "FROM ubuntu:24.04 AS base\nSHELL [\"/bin/bash\", \"-o\", \"pipefail\", \"-c\"]\nFROM base\nRUN cat /etc/os-release | grep ID\n";
+    assert!(no_rule(&lint(df), "DF057"));
 }
 
 #[test]
@@ -1368,6 +1506,14 @@ fn df063_clear_on_absolute_dest_copy() {
 }
 
 #[test]
+fn df063_clear_on_quoted_or_variable_absolute_destination() {
+    let quoted = "FROM alpine:3.19\nCOPY app.py \"/opt/app.py\"\n";
+    let variable = "FROM alpine:3.19\nARG DEST=/opt/app.py\nCOPY app.py \"${DEST}\"\n";
+    assert!(no_rule(&lint(quoted), "DF063"));
+    assert!(no_rule(&lint(variable), "DF063"));
+}
+
+#[test]
 fn df063_clear_when_workdir_is_inherited_from_previous_stage() {
     let df = "FROM node:26.5.0-alpine@sha256:abc123 AS restore\nWORKDIR /tmp/foo/bar\nCOPY Dockerfile .\nFROM restore AS migrate\nCOPY Dockerfile .\n";
     assert!(no_rule(&lint(df), "DF063"));
@@ -1393,12 +1539,12 @@ fn df064_clear_on_useradd_with_no_log_init() {
     assert!(no_rule(&lint(df), "DF064"));
 }
 
-// ─── DF065: unrecognised registry ────────────────────────────────────────────
+// ─── DF065: configured registry policy ──────────────────────────────────────
 
 #[test]
-fn df065_fires_on_unknown_registry() {
+fn df065_is_inactive_without_an_approved_registry_policy() {
     let df = "FROM myregistry.internal.example.com/myimage:1.0\nCMD [\"/app\"]\n";
-    assert!(has_rule(&lint(df), "DF065"));
+    assert!(no_rule(&lint(df), "DF065"));
 }
 
 #[test]
@@ -1451,18 +1597,34 @@ fn df066_still_fires_on_bash_syntax_outside_bash_c() {
     assert!(has_rule(&lint(df), "DF066"));
 }
 
-// ─── DF067: COPY of archive (use ADD instead) ────────────────────────────────
-
 #[test]
-fn df067_fires_on_copy_of_tarball() {
-    let df = "FROM alpine:3.19\nCOPY app.tar.gz /tmp/\n";
-    assert!(has_rule(&lint(df), "DF067"));
+fn df066_does_not_confuse_source_paths_or_mount_options_with_builtin() {
+    let mount = "# syntax=docker/dockerfile:1\nFROM alpine:3.19\nRUN --mount=type=bind,source=/src,target=/src make\n";
+    let path = "FROM alpine:3.19\nRUN mkdir -p gpg/source && cp key gpg/source/key\n";
+    assert!(no_rule(&lint(mount), "DF066"));
+    assert!(no_rule(&lint(path), "DF066"));
 }
 
 #[test]
-fn df067_fires_on_copy_of_tgz() {
-    let df = "FROM alpine:3.19\nCOPY dist.tgz /opt/\n";
-    assert!(has_rule(&lint(df), "DF067"));
+fn df066_tracks_shell_per_stage_and_through_named_inheritance() {
+    let unrelated = "FROM ubuntu:24.04 AS bash-stage\nSHELL [\"/bin/bash\", \"-c\"]\nRUN source /etc/profile\nFROM ubuntu:24.04\nRUN source /etc/profile\n";
+    let inherited = "FROM ubuntu:24.04 AS bash-stage\nSHELL [\"/bin/bash\", \"-c\"]\nFROM bash-stage\nRUN source /etc/profile\n";
+    assert!(has_rule(&lint(unrelated), "DF066"));
+    assert!(no_rule(&lint(inherited), "DF066"));
+}
+
+// ─── DF067: reserved; archive handling is context-dependent ─────────────────
+
+#[test]
+fn df067_does_not_recommend_add_for_explicit_archive_handling() {
+    let df = "FROM alpine:3.19\nCOPY app.tar.gz /tmp/\n";
+    assert!(no_rule(&lint(df), "DF067"));
+}
+
+#[test]
+fn df067_does_not_replace_verified_or_custom_extraction_with_add() {
+    let df = "FROM alpine:3.19\nCOPY dist.tgz /tmp/dist.tgz\nRUN sha256sum -c dist.tgz.sha256 && tar -xzf /tmp/dist.tgz --strip-components=1 -C /opt\n";
+    assert!(no_rule(&lint(df), "DF067"));
 }
 
 #[test]
@@ -1645,12 +1807,20 @@ fn docker_key_value_and_stage_checks_accept_modern_forms() {
 
 #[test]
 fn docker_variable_checks_distinguish_declared_and_undefined_variables() {
-    let findings = lint("ARG TAG=3.20\nFROM alpine:${TAG} AS build\nCOPY ${MISSING} /app/\n");
+    let findings = lint("ARG TAG=3.20\nFROM scratch AS build\nCOPY ${MISSING} /app/\n");
     assert!(no_rule(&findings, "DF086"));
     assert!(has_rule(&findings, "DF087"));
 
     let findings = lint("FROM alpine:${TAG}\n");
     assert!(has_rule(&findings, "DF086"));
+}
+
+#[test]
+fn df087_accounts_for_named_stage_and_unknown_external_base_environment() {
+    let inherited = "FROM scratch AS base\nENV APP_ROOT=/app\nFROM base\nCOPY app ${APP_ROOT}/\n";
+    let external = "FROM public.example/runtime:1\nCOPY app ${RUNTIME_ROOT}/\n";
+    assert!(no_rule(&lint(inherited), "DF087"));
+    assert!(no_rule(&lint(external), "DF087"));
 }
 
 #[test]
@@ -1665,5 +1835,19 @@ fn every_rule_has_known_categories() {
                 category
             );
         }
+    }
+}
+
+#[test]
+fn broad_advisory_rules_are_info_severity() {
+    let cases = [
+        ("DF020", "FROM alpine:3.19\nCMD [\"app\"]\n"),
+        ("DF036", "FROM alpine:3.19\nWORKDIR /app\nCOPY app .\n"),
+        ("DF052", "FROM alpine:3.19\nRUN apk add --no-cache curl\n"),
+        ("DF061", "FROM --platform=linux/amd64 alpine:3.19\nCMD [\"sh\"]\n"),
+        ("DF082", "FROM alpine:3.19\nENV NAME value\n"),
+    ];
+    for (rule, dockerfile) in cases {
+        assert_eq!(finding(&lint(dockerfile), rule).severity, Severity::Info);
     }
 }

@@ -2158,8 +2158,8 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 | DF023 | warning | Give multiple `FROM` stages aliases |
 | DF024 | warning | Avoid `:latest` on aliased stages |
 | DF042 | error | Keep stage aliases unique |
-| DF061 | warning | Avoid fixed `--platform` in `FROM` unless required |
-| DF065 | warning | Review images from unrecognized registries |
+| DF061 | info | Avoid fixed `--platform` in `FROM` unless required |
+| DF065 | warning | Enforce `approved-registries` when that policy is configured |
 | DF069 | warning | Avoid package upgrades that make builds non-repeatable |
 | DF073 | error | Require external images approved by configured policy |
 
@@ -2171,7 +2171,7 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 | DF010 | warning | Do not use `sudo` inside a container |
 | DF013 | error | Do not store secrets in `ENV` |
 | DF014 | error | Do not hardcode passwords or tokens in `ARG` or `ENV` |
-| DF020 | warning | Set an explicit non-root `USER` |
+| DF020 | info | Set an explicit non-root `USER` |
 | DF021 | error | Do not pipe remote downloads directly to a shell |
 | DF034 | error | Do not use `chmod 777` |
 | DF057 | warning | Set `pipefail` for shell pipelines |
@@ -2192,7 +2192,7 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 | DF049 | warning | Reserved for invalid `COPY --from` stage references |
 | DF050 | error | Do not copy from the current stage |
 | DF063 | warning | Set `WORKDIR` before a relative `COPY` destination |
-| DF067 | info | Consider `ADD` when local tar auto-extraction is intended |
+| DF067 | info | Reserved; archive extraction policy is context-dependent |
 | DF070 | warning | Avoid a broad copy before dependency installation |
 
 ### Package managers and caches
@@ -2213,7 +2213,7 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 | DF046 | warning | Run `dnf clean all` after installation |
 | DF047 | warning | Run `yum clean all` after installation |
 | DF051 | warning | Pin versions installed by pip |
-| DF052 | warning | Pin versions installed by apk |
+| DF052 | info | Pin versions installed by apk |
 | DF053 | warning | Pin versions installed by gem |
 | DF054 | warning | Pin `go install` targets with `@version` |
 | DF055 | info | Clean the Yarn cache after installation |
@@ -2238,7 +2238,7 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 | DF022 | info | Document listening ports with `EXPOSE` |
 | DF025 | warning | Prefer JSON form for `CMD` and `ENTRYPOINT` |
 | DF032 | info | Set recommended Python runtime environment variables |
-| DF036 | warning | Give runnable images a `CMD` or `ENTRYPOINT` |
+| DF036 | info | Give runnable images a `CMD` or `ENTRYPOINT` |
 | DF038 | warning | Keep only one effective `CMD` |
 | DF039 | error | Keep only one effective `ENTRYPOINT` |
 | DF040 | error | Keep `EXPOSE` ports in the range 0 through 65535 |
