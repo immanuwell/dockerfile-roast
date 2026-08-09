@@ -1670,6 +1670,17 @@ fn df051_checks_each_pip_target_independently() {
 }
 
 #[test]
+fn df051_accepts_a_pinned_vcs_requirement_and_maps_the_pip_token() {
+    let pinned = "FROM python:3.12\nRUN echo preparing && pip install git+https://example.test/org/tool@v1.2.3\n";
+    assert!(no_rule(&lint(pinned), "DF051"));
+
+    let unpinned = "FROM python:3.12\nRUN echo preparing && \\\n    pip install --upgrade pip\n";
+    let findings = lint(unpinned);
+    let finding = finding(&findings, "DF051");
+    assert_eq!((finding.line, finding.column), (3, 5));
+}
+
+#[test]
 fn df051_accepts_local_archives_editable_directories_and_dist_globs() {
     for target in [
         "./package.tar.gz",

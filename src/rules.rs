@@ -3947,16 +3947,40 @@ fn instruction_character_span(
     character: char,
 ) -> SourceSpan {
     if character == '|' {
+        let physical = instruction.span.text(source);
+        // `command` is the parser's logical RUN text. When it occurs verbatim
+        // in the raw instruction, direct alignment avoids counting unrelated
+        // quoted pipes and case-pattern separators that precede the pipeline.
+        if let Some(command_start) = physical.find(logical) {
+            return instruction_match_span(
+                source,
+                instruction,
+                command_start + logical_offset,
+                command_start + logical_offset + character.len_utf8(),
+            );
+        }
+        // Parser-normalized RUN text can differ from the physical source
+        // around continuations and case syntax. Match the command introduced
+        // by this pipe before falling back to a global pipe ordinal.
+        if let Some(next) = next_pipeline_executable(&logical[logical_offset + 1..]) {
+            if let Some(offset) = shell_pipeline_offsets(physical)
+                .into_iter()
+                .find(|offset| next_pipeline_executable(&physical[offset + 1..]) == Some(next))
+            {
+                return instruction_match_span(source, instruction, offset, offset + 1);
+            }
+        }
         let ordinal = shell_pipeline_offsets(logical)
             .iter()
             .position(|offset| *offset == logical_offset);
         return ordinal
-            .and_then(|ordinal| {
-                shell_pipeline_offsets(&instruction.raw)
-                    .get(ordinal)
-                    .copied()
-            })
+            .and_then(|ordinal| shell_pipeline_offsets(physical).get(ordinal).copied())
             .map(|offset| instruction_match_span(source, instruction, offset, offset + 1))
+            .or_else(|| {
+                physical
+                    .rfind('|')
+                    .map(|offset| instruction_match_span(source, instruction, offset, offset + 1))
+            })
             .unwrap_or(instruction.span);
     }
     instruction
@@ -4299,28 +4323,31 @@ fn rule_wget_no_progress(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
         .collect()
 }
 
-fn rule_pip_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+fn rule_pip_version_pinning(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
+    let install = pip_install_regex();
     instrs_of(instrs, "RUN")
         .into_iter()
-        .filter(|i| {
-            let a = &i.arguments;
-            pip_install_has_unpinned_target(a)
+        .flat_map(|instruction| {
+            install
+                .captures_iter(&instruction.arguments)
+                .enumerate()
+                .filter_map(|(ordinal, capture)| {
+                    let matched = capture.get(0)?;
+                    let segment = shell_command_segments(&instruction.arguments)
+                        .into_iter()
+                        .find(|segment| segment.start <= matched.start() && matched.start() < segment.end)?;
+                    pip_install_has_unpinned_target(&instruction.arguments[matched.start()..segment.end])
+                        .then_some((instruction, ordinal))
+                })
+                .collect::<Vec<_>>()
         })
-        .map(|i| Finding {
-            column: 0,
-            end_line: 0,
-            end_column: 0,
-            rule: "DF051".into(),
-            severity: Severity::Warning,
-            line: i.line,
-            message:
-                "pip install without version pinning — use package==version for reproducibility"
-                    .to_string(),
-            roast: "pip install with no version pins. Every build pulls 'latest' and \
-                    one day something breaks and you spend three hours bisecting which \
-                    transitive dependency changed. Use package==version."
-                .to_string(),
-        })
+        .map(|(instruction, ordinal)| finding_at_span(
+            "DF051",
+            Severity::Warning,
+            pip_install_span(raw, instruction, &install, ordinal),
+            "pip install without version pinning — use package==version for reproducibility".to_string(),
+            "pip install with no version pins. Every build pulls 'latest' and one day something breaks and you spend three hours bisecting which transitive dependency changed. Use package==version.",
+        ))
         .collect()
 }
 
@@ -4351,6 +4378,10 @@ fn pip_install_has_unpinned_target(command: &str) -> bool {
                 && !target.ends_with(".whl")
                 && !target.contains('*')
                 && !target.starts_with('$')
+                && !(target.starts_with("git+")
+                    && target
+                        .rsplit_once('@')
+                        .is_some_and(|(_, reference)| !reference.is_empty()))
         })
     })
 }
