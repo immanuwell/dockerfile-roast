@@ -2156,7 +2156,7 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 | DF001 | warning | Use a specific base image tag instead of `latest` |
 | DF005 | info | Pin package versions for repeatable builds |
 | DF011 | info | Use multi-stage builds when they reduce the final image |
-| DF023 | warning | Give multiple `FROM` stages aliases |
+| DF023 | info | Give intermediate `FROM` stages aliases instead of numeric indexes |
 | DF024 | warning | Avoid `:latest` on aliased stages |
 | DF042 | error | Keep stage aliases unique |
 | DF061 | info | Avoid fixed `--platform` in `FROM` unless required |
@@ -2170,7 +2170,7 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 |---|---|---|
 | DF002 | error | Do not leave the final image running as root |
 | DF010 | warning | Do not use `sudo` inside a container |
-| DF013 | error | Do not store secrets in `ENV` |
+| DF013 | error | Do not hardcode credentials in `RUN` commands |
 | DF014 | error | Do not hardcode passwords or tokens in `ARG` or `ENV` |
 | DF020 | info | Set an explicit non-root `USER` |
 | DF021 | error | Do not execute unverified remote downloads with a shell or interpreter |
@@ -2200,7 +2200,7 @@ Run `droast --list-rules` for the authoritative list in the installed version. T
 
 | Rule | Severity | Check |
 |---|---|---|
-| DF004 | warning | Clean OS package caches in the same layer |
+| DF004 | warning | Clean apt/apk caches before they reach the final image |
 | DF015 | error | Pass `-y` to `apt-get` in non-interactive builds |
 | DF016 | info | Use `--no-install-recommends` with `apt-get` |
 | DF027 | error | Pass `-y` to `yum` |

@@ -409,11 +409,11 @@ droast completion fish | source
   DF001    WARN     correctness,reproducibility        Use specific base image tags instead of 'latest'
   DF002    ERROR    security                           Do not run as root
   DF011    INFO     performance                        Use multi-stage builds to reduce image size
-  DF013    ERROR    security                           Avoid storing secrets in ENV variables
+  DF013    ERROR    security                           Avoid hardcoded credentials in RUN commands
   DF014    ERROR    security                           Avoid hardcoding passwords or tokens in ARG/ENV
   DF020    INFO     security                           Set explicit non-root USER
   DF003    INFO     performance                        Combine RUN commands to reduce layers
-  DF004    WARN     performance                        Clean apt/yum/apk cache in the same RUN layer
+  DF004    WARN     performance                        Clean apt/apk cache before it reaches the final image
   DF005    INFO     correctness,reproducibility        Pin package versions for reproducibility
   DF006    WARN     maintainability,performance        Avoid ADD for local files; prefer COPY
   DF007    WARN     performance                        Do not copy the entire build context (COPY . .)
@@ -425,7 +425,7 @@ droast completion fish | source
   DF018    WARN     correctness,reliability            Avoid using shell form for ENTRYPOINT
   DF019    WARN     correctness,maintainability        Do not use deprecated MAINTAINER; use LABEL instead
   DF022    INFO     maintainability,reliability        Specify EXPOSE for documented ports
-  DF023    WARN     correctness,maintainability        Avoid multiple FROM without aliases (unintended multistage)
+  DF023    INFO     correctness,maintainability        Name intermediate stages instead of relying on numeric indexes
   DF024    WARN     correctness,reproducibility        Avoid using :latest in FROM even with aliases
   DF025    WARN     correctness,reliability            Use JSON array syntax for CMD/ENTRYPOINT
   DF026    WARN     maintainability,performance        Avoid broad local COPY to the filesystem root
@@ -507,7 +507,7 @@ the greatest hits:
 | DF002 | running explicitly as root |
 | DF004 | apt cache left in the image (you made a trash can) |
 | DF011 | shipping the entire build toolchain to prod |
-| DF013 | secrets in ENV vars (in your layers. forever. congrats) |
+| DF013 | hardcoded credentials in RUN commands |
 | DF021 | `curl \| sh` — no. |
 | DF028 | split `apt-get update` + install in separate RUN layers |
 | DF034 | `chmod 777` somewhere in there |

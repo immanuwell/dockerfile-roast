@@ -139,6 +139,23 @@ fn json_and_shell_forms_are_distinguished_and_validated() {
 }
 
 #[test]
+fn run_posix_test_command_is_not_misparsed_as_json() {
+    let source =
+        "FROM debian:trixie\nRUN [ ! -f /marker ] || touch /marker\nRUN [\"echo\", \"ok\"]\n";
+    let document = parse_document(source);
+
+    assert_eq!(document.instructions[1].form, InstructionForm::Shell);
+    assert_eq!(
+        document.instructions[2].form,
+        InstructionForm::Json(vec!["echo".into(), "ok".into()])
+    );
+    assert!(document
+        .diagnostics
+        .iter()
+        .all(|diagnostic| diagnostic.code != "P007"));
+}
+
+#[test]
 fn quotes_and_variable_expansions_are_structured() {
     let source = "FROM alpine:${VERSION:-3.20}\nENV A=$PLAIN B=\"${BRACED#prefix}\" C='$LITERAL' D=\\$ESCAPED\n";
     let document = parse_document(source);
@@ -236,12 +253,10 @@ fn empty_files_and_unterminated_continuations_report_diagnostics() {
 #[test]
 fn lone_continuation_token_is_reported_without_panicking() {
     let document = parse_document("\\\nFROM alpine:3.20\n");
-    assert!(
-        document
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "P004")
-    );
+    assert!(document
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "P004"));
 }
 
 #[test]
@@ -261,7 +276,11 @@ fn modern_fixture_parses_without_recovery_diagnostics() {
     let source = include_str!("fixtures/modern.Dockerfile");
     let document = parse_document(source);
 
-    assert!(document.diagnostics.is_empty(), "{:?}", document.diagnostics);
+    assert!(
+        document.diagnostics.is_empty(),
+        "{:?}",
+        document.diagnostics
+    );
     assert_eq!(document.instructions.len(), 6);
     assert_eq!(document.instructions[1].heredocs.len(), 1);
     assert_eq!(document.instructions[3].flags[0].name, "mount");

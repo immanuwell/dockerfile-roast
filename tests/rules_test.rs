@@ -164,7 +164,8 @@ fn df004_clear_when_cleanup_present() {
 #[test]
 fn df004_recognizes_cleanup_regardless_of_path_order_or_rm_flags() {
     let reordered = "FROM ubuntu:24.04\nRUN apt-get install -y curl && rm -rf /tmp/* /var/lib/apt/lists/* /var/log/*\n";
-    let package_lists = "FROM ubuntu:20.04\nRUN apt-get install -y curl && rm /var/lib/apt/lists/*_*\n";
+    let package_lists =
+        "FROM ubuntu:20.04\nRUN apt-get install -y curl && rm /var/lib/apt/lists/*_*\n";
     assert!(no_rule(&lint(reordered), "DF004"));
     assert!(no_rule(&lint(package_lists), "DF004"));
 }
@@ -177,6 +178,22 @@ fn package_cache_rules_ignore_disposable_stages_but_follow_inheritance() {
     assert!(no_rule(&lint(disposable), "DF004"));
     assert!(has_rule(&lint(inherited), "DF004"));
     assert!(has_rule(&lint(root_copy), "DF004"));
+}
+
+#[test]
+fn package_cache_cleanup_before_root_snapshot_prevents_runtime_findings() {
+    let df = "FROM registry.access.redhat.com/ubi9/ubi AS rootfs\nRUN microdnf install -y curl\nRUN microdnf clean all\nFROM scratch\nCOPY --from=rootfs / /\n";
+    let findings = lint(df);
+    assert!(no_rule(&findings, "DF004"));
+    assert!(no_rule(&findings, "DF046"));
+}
+
+#[test]
+fn df004_reports_the_install_token_on_its_physical_line() {
+    let df = "FROM ubuntu:24.04\nRUN set -eux; \\\n    apt-get update; \\\n    apt-get install -y curl\n";
+    let findings = lint(df);
+    let finding = finding(&findings, "DF004");
+    assert_eq!((finding.line, finding.column), (4, 5));
 }
 
 #[test]
@@ -322,9 +339,9 @@ fn df009_accepts_windows_absolute_workdirs() {
 // ─── DF013: secrets in ENV ───────────────────────────────────────────────────
 
 #[test]
-fn df013_fires_on_secret_env() {
+fn df013_ignores_secret_env_pass_through() {
     let df = "FROM alpine:3.19\nARG DATABASE_PASSWORD\nENV DATABASE_PASSWORD=$DATABASE_PASSWORD\n";
-    assert!(has_rule(&lint(df), "DF013"));
+    assert!(no_rule(&lint(df), "DF013"));
 }
 
 #[test]
@@ -346,6 +363,18 @@ fn df013_and_df014_ignore_secret_file_variables() {
     let findings = lint(df);
     assert!(no_rule(&findings, "DF013"));
     assert!(no_rule(&findings, "DF014"));
+}
+
+#[test]
+fn df013_reports_literal_run_credentials_at_the_value() {
+    let df = "FROM ubuntu:24.04\nRUN service postgresql start && psql -c \"ALTER USER postgres WITH PASSWORD 'postgres';\"\nRUN pkcs11-tool --slot 0 --init-token --so-pin 0000 --pin \"$HSM_PIN\"\n";
+    let findings: Vec<_> = lint(df)
+        .into_iter()
+        .filter(|finding| finding.rule == "DF013")
+        .collect();
+    assert_eq!(findings.len(), 2);
+    assert_eq!((findings[0].line, findings[0].column), (2, 77));
+    assert_eq!((findings[1].line, findings[1].column), (3, 48));
 }
 
 // ─── DF015: apt without -y ───────────────────────────────────────────────────
@@ -524,7 +553,8 @@ fn df030_fires_without_no_cache() {
 
 #[test]
 fn df030_clear_with_no_cache() {
-    let df = "FROM python:3.12\nRUN pip install --no-cache-dir flask\nCMD [\"python\", \"app.py\"]\n";
+    let df =
+        "FROM python:3.12\nRUN pip install --no-cache-dir flask\nCMD [\"python\", \"app.py\"]\n";
     assert!(no_rule(&lint(df), "DF030"));
 }
 
@@ -537,10 +567,23 @@ fn df030_clear_when_cache_is_purged_in_the_same_run() {
 }
 
 #[test]
+fn df030_ignores_cache_in_selectively_copied_builder_stages() {
+    let uv = "FROM python:3.13 AS build\nWORKDIR /app\nRUN uv pip install .\nFROM python:3.13-slim\nCOPY --from=build /app /app\n";
+    let pip = "FROM python:3.13 AS build\nRUN pip install flask\nFROM scratch\nCOPY --from=build /usr/local/lib/python3.13/site-packages /site-packages\n";
+    assert!(no_rule(&lint(uv), "DF030"));
+    assert!(no_rule(&lint(pip), "DF030"));
+}
+
+#[test]
 fn df030_clear_when_pip_no_cache_dir_environment_is_enabled() {
     for value in ["1", "true", "yes", "on"] {
-        let df = format!("FROM python:3.12\nENV PIP_NO_CACHE_DIR={value}\nRUN python -m pip install flask\n");
-        assert!(no_rule(&lint(&df), "DF030"), "value {value} should disable pip cache");
+        let df = format!(
+            "FROM python:3.12\nENV PIP_NO_CACHE_DIR={value}\nRUN python -m pip install flask\n"
+        );
+        assert!(
+            no_rule(&lint(&df), "DF030"),
+            "value {value} should disable pip cache"
+        );
     }
 }
 
@@ -548,7 +591,10 @@ fn df030_clear_when_pip_no_cache_dir_environment_is_enabled() {
 fn df030_fires_when_pip_no_cache_dir_environment_is_disabled_or_overridden() {
     for value in ["0", "false", "no", "off", "${CACHE_SETTING}"] {
         let df = format!("FROM python:3.12\nENV PIP_NO_CACHE_DIR={value}\nRUN pip install flask\n");
-        assert!(has_rule(&lint(&df), "DF030"), "value {value} must not suppress DF030");
+        assert!(
+            has_rule(&lint(&df), "DF030"),
+            "value {value} must not suppress DF030"
+        );
     }
     let overridden = "FROM python:3.12 AS build\nENV PIP_NO_CACHE_DIR=1\nENV PIP_NO_CACHE_DIR=0\nRUN pip install flask\n";
     assert!(has_rule(&lint(overridden), "DF030"));
@@ -564,8 +610,13 @@ fn df030_inherits_pip_no_cache_dir_from_named_parent_stage() {
 fn df030_uses_uv_no_cache_flag() {
     let flagged = lint("FROM python:3.12\nRUN uv pip install flask\n");
     assert!(has_rule(&flagged, "DF030"));
-    assert!(flagged.iter().any(|finding| finding.rule == "DF030" && finding.message.contains("--no-cache")));
-    assert!(no_rule(&lint("FROM python:3.12\nRUN uv pip install --no-cache flask\n"), "DF030"));
+    assert!(flagged
+        .iter()
+        .any(|finding| finding.rule == "DF030" && finding.message.contains("--no-cache")));
+    assert!(no_rule(
+        &lint("FROM python:3.12\nRUN uv pip install --no-cache flask\n"),
+        "DF030"
+    ));
 }
 
 #[test]
@@ -724,6 +775,25 @@ fn df014_clear_on_arg_with_env_reference() {
     assert!(no_rule(&lint(df), "DF014"));
 }
 
+#[test]
+fn df014_reports_each_hardcoded_secret_and_ignores_identifier_names() {
+    let df = "FROM alpine:3.19\nARG NEXTAUTH_SECRET=secret\nARG CALENDSO_ENCRYPTION_KEY=secret\nENV GITNESS_TOKEN_COOKIE_NAME=token HSM_TOKEN_LABEL=hydra HSM_PIN=1234\n";
+    let findings: Vec<_> = lint(df)
+        .into_iter()
+        .filter(|finding| finding.rule == "DF014")
+        .collect();
+    assert_eq!(findings.len(), 3);
+    assert!(findings
+        .iter()
+        .any(|finding| finding.message.contains("NEXTAUTH_SECRET")));
+    assert!(findings
+        .iter()
+        .any(|finding| finding.message.contains("CALENDSO_ENCRYPTION_KEY")));
+    assert!(findings
+        .iter()
+        .any(|finding| finding.message.contains("HSM_PIN")));
+}
+
 // ─── DF016: apt without --no-install-recommends ───────────────────────────────
 
 #[test]
@@ -778,6 +848,7 @@ fn df022_clear_with_expose() {
 fn df023_fires_on_from_without_alias() {
     let df = "FROM golang:1.21\nRUN go build ./...\nFROM alpine:3.19\nCOPY --from=0 /go/bin/app /app\nCMD [\"/app\"]\n";
     assert!(has_rule(&lint(df), "DF023"));
+    assert_eq!(finding(&lint(df), "DF023").severity, Severity::Info);
 }
 
 #[test]
@@ -843,7 +914,8 @@ fn df026_handles_json_copy_destination() {
 #[test]
 fn df026_ignores_scratch_and_cross_stage_root_composition() {
     let scratch = "FROM scratch\nCOPY rootfs /\n";
-    let cross_stage = "FROM alpine:3.19 AS rootfs\nRUN touch /app\nFROM alpine:3.19\nCOPY --from=rootfs / /\n";
+    let cross_stage =
+        "FROM alpine:3.19 AS rootfs\nRUN touch /app\nFROM alpine:3.19\nCOPY --from=rootfs / /\n";
     assert!(no_rule(&lint(scratch), "DF026"));
     assert!(no_rule(&lint(cross_stage), "DF026"));
 }
@@ -923,7 +995,8 @@ fn df031_clear_on_prefixed_package_managers() {
 
 #[test]
 fn df032_fires_on_python_without_env_vars() {
-    let df = "FROM python:3.12\nRUN pip install --no-cache-dir flask\nCMD [\"python\", \"app.py\"]\n";
+    let df =
+        "FROM python:3.12\nRUN pip install --no-cache-dir flask\nCMD [\"python\", \"app.py\"]\n";
     assert!(has_rule(&lint(df), "DF032"));
 }
 
@@ -1021,7 +1094,8 @@ fn df038_fires_on_multiple_cmd() {
 
 #[test]
 fn df038_clear_on_one_cmd_per_stage() {
-    let df = "FROM alpine:3.19 AS debug\nCMD [\"debug\"]\nFROM alpine:3.19 AS final\nCMD [\"app\"]\n";
+    let df =
+        "FROM alpine:3.19 AS debug\nCMD [\"debug\"]\nFROM alpine:3.19 AS final\nCMD [\"app\"]\n";
     assert!(no_rule(&lint(df), "DF038"));
 }
 
@@ -1168,6 +1242,16 @@ fn df046_clear_on_dnf_with_clean() {
 }
 
 #[test]
+fn df046_accepts_clean_options_and_does_not_duplicate_df004() {
+    let clean = "FROM registry.access.redhat.com/ubi9/ubi\nRUN dnf install -y curl && dnf clean --disableplugin=subscription-manager all\n";
+    let dirty = "FROM fedora:latest\nRUN dnf install -y curl\n";
+    assert!(no_rule(&lint(clean), "DF046"));
+    let findings = lint(dirty);
+    assert!(has_rule(&findings, "DF046"));
+    assert!(no_rule(&findings, "DF004"));
+}
+
+#[test]
 fn df046_recognizes_removed_rpm_cache_and_disposable_stages() {
     let removed = "FROM registry.access.redhat.com/ubi10/ubi-minimal\nRUN microdnf install -y tar && rm -rf /var/cache/yum\n";
     let disposable = "FROM fedora:latest AS build\nRUN dnf install -y tar\nFROM scratch\nCOPY --from=build /usr/bin/tar /tar\n";
@@ -1270,7 +1354,8 @@ fn df050_clear_on_copy_from_other_stage() {
 
 #[test]
 fn df051_fires_on_unpinned_pip() {
-    let df = "FROM python:3.12\nRUN pip install --no-cache-dir flask\nCMD [\"python\", \"app.py\"]\n";
+    let df =
+        "FROM python:3.12\nRUN pip install --no-cache-dir flask\nCMD [\"python\", \"app.py\"]\n";
     assert!(has_rule(&lint(df), "DF051"));
 }
 
@@ -1384,6 +1469,12 @@ fn df055_clear_when_yarn_cache_is_buildkit_mounted() {
     assert!(no_rule(&lint(df), "DF055"));
 }
 
+#[test]
+fn df055_ignores_cache_in_a_selectively_copied_builder() {
+    let df = "FROM node:20 AS build\nRUN yarn install\nRUN rm -rf .yarn/cache\nFROM node:20\nCOPY --from=build /app/node_modules /app/node_modules\n";
+    assert!(no_rule(&lint(df), "DF055"));
+}
+
 // ─── DF056: wget without --progress ──────────────────────────────────────────
 
 #[test]
@@ -1400,8 +1491,17 @@ fn df056_clear_on_wget_with_quiet() {
 
 #[test]
 fn df056_clear_on_wget_with_progress_flag() {
-    let df = "FROM alpine:3.19\nRUN wget --progress=dot:giga https://example.com/file -O /tmp/file\n";
+    let df =
+        "FROM alpine:3.19\nRUN wget --progress=dot:giga https://example.com/file -O /tmp/file\n";
     assert!(no_rule(&lint(df), "DF056"));
+}
+
+#[test]
+fn df056_accepts_no_verbose_wget_modes() {
+    for option in ["-nv", "--no-verbose"] {
+        let df = format!("FROM alpine:3.19\nRUN wget {option} https://example.com/file\n");
+        assert!(no_rule(&lint(&df), "DF056"));
+    }
 }
 
 #[test]
@@ -1440,8 +1540,8 @@ fn df057_fires_when_set_options_omit_pipefail() {
         .filter(|finding| finding.rule == "DF057")
         .collect();
     assert_eq!(findings.len(), 2);
-    assert_eq!(findings[0].line, 2);
-    assert_eq!(findings[1].line, 5);
+    assert_eq!(findings[0].line, 3);
+    assert_eq!(findings[1].line, 6);
 }
 
 #[test]
@@ -1482,6 +1582,20 @@ fn df057_clear_when_shell_instruction_enables_pipefail() {
 fn df057_clear_when_shell_instruction_uses_combined_pipefail_option() {
     let df = "FROM ubuntu:24.04\nSHELL [\"/bin/bash\", \"-opipefail\", \"-c\"]\nRUN cat /etc/os-release | grep ID\n";
     assert!(no_rule(&lint(df), "DF057"));
+}
+
+#[test]
+fn df057_ignores_non_posix_shell_pipelines() {
+    let df = "FROM mcr.microsoft.com/windows/servercore:ltsc2022\nSHELL [\"powershell\", \"-Command\", \"$ErrorActionPreference = 'Stop';\"]\nRUN New-Item -ItemType Directory C:/temp | Out-Null\n";
+    assert!(no_rule(&lint(df), "DF057"));
+}
+
+#[test]
+fn df057_reports_the_unprotected_pipe_token() {
+    let df = "FROM ubuntu:24.04\nRUN set -ex; \\\n    value=$(printf ok \\\n      | sed s/o/a/)\n";
+    let findings = lint(df);
+    let finding = finding(&findings, "DF057");
+    assert_eq!((finding.line, finding.column), (4, 7));
 }
 
 #[test]
@@ -1532,7 +1646,10 @@ fn df057_ignores_low_value_and_non_pipeline_shell_syntax() {
         "{ echo one; echo two; } | tee /tmp/config",
     ] {
         let df = format!("FROM ubuntu:24.04\nRUN {command}\n");
-        assert!(no_rule(&lint(&df), "DF057"), "unexpected DF057 for {command}");
+        assert!(
+            no_rule(&lint(&df), "DF057"),
+            "unexpected DF057 for {command}"
+        );
     }
 }
 
@@ -1558,7 +1675,8 @@ fn df058_clear_on_only_curl() {
 
 #[test]
 fn df058_is_an_info_level_advisory() {
-    let findings = lint("FROM alpine:3.19\nRUN wget https://a.test/file\nRUN curl https://b.test/file\n");
+    let findings =
+        lint("FROM alpine:3.19\nRUN wget https://a.test/file\nRUN curl https://b.test/file\n");
     assert_eq!(finding(&findings, "DF058").severity, Severity::Info);
 }
 
@@ -1580,7 +1698,7 @@ fn df059_clear_on_apt_get_install() {
 
 #[test]
 fn df060_fires_on_systemctl() {
-    let df = "FROM ubuntu:22.04\nRUN systemctl enable nginx\n";
+    let df = "FROM ubuntu:22.04\nRUN systemctl start nginx\n";
     assert!(has_rule(&lint(df), "DF060"));
 }
 
@@ -1610,6 +1728,16 @@ fn df060_ignores_package_names_paths_version_checks_and_symlink_targets() {
             "unexpected DF060 for {command}"
         );
     }
+}
+
+#[test]
+fn df060_accepts_offline_service_configuration_and_database_initialization() {
+    let systemd =
+        "FROM ubuntu:24.04\nRUN systemctl enable kubelet && systemctl mask systemd-binfmt\n";
+    let database =
+        "FROM ubuntu:24.04\nRUN service postgresql start && su postgres -c \"psql -c 'SELECT 1'\"\n";
+    assert!(no_rule(&lint(systemd), "DF060"));
+    assert!(no_rule(&lint(database), "DF060"));
 }
 
 // ─── DF061: --platform in FROM ────────────────────────────────────────────────
@@ -1878,7 +2006,8 @@ fn df067_clear_on_copy_of_non_archive() {
 
 #[test]
 fn df067_clear_on_copy_from_stage() {
-    let df = "FROM alpine:3.19 AS builder\nFROM alpine:3.19\nCOPY --from=builder /app.tar.gz /tmp/\n";
+    let df =
+        "FROM alpine:3.19 AS builder\nFROM alpine:3.19\nCOPY --from=builder /app.tar.gz /tmp/\n";
     assert!(no_rule(&lint(df), "DF067"));
 }
 
@@ -2012,9 +2141,8 @@ fn df071_does_not_treat_heredoc_script_as_dockerfile_syntax() {
 
 #[test]
 fn shell_rules_inspect_run_heredoc_contents() {
-    let findings = lint(
-        "FROM ubuntu:24.04\nRUN <<SCRIPT\napt-get update\napt-get install curl\nSCRIPT\n",
-    );
+    let findings =
+        lint("FROM ubuntu:24.04\nRUN <<SCRIPT\napt-get update\napt-get install curl\nSCRIPT\n");
 
     assert!(has_rule(&findings, "DF015"));
     assert!(has_rule(&findings, "DF016"));
@@ -2027,7 +2155,10 @@ fn shell_rules_inspect_run_heredoc_contents() {
 fn docker_casing_checks_report_token_spans() {
     let findings = lint("FROM alpine:3.20 as Build\nrun true\nEXPOSE 8080/TCP\n");
     let instruction = finding(&findings, "DF076");
-    assert_eq!((instruction.line, instruction.column, instruction.end_line), (2, 1, 2));
+    assert_eq!(
+        (instruction.line, instruction.column, instruction.end_line),
+        (2, 1, 2)
+    );
     let as_keyword = finding(&findings, "DF079");
     assert_eq!((as_keyword.line, as_keyword.column), (1, 18));
     let protocol = finding(&findings, "DF078");
@@ -2075,7 +2206,11 @@ fn df087_accounts_for_named_stage_and_unknown_external_base_environment() {
 #[test]
 fn every_rule_has_known_categories() {
     for rule in all_rules() {
-        assert!(!rule.categories().is_empty(), "{} has no categories", rule.id);
+        assert!(
+            !rule.categories().is_empty(),
+            "{} has no categories",
+            rule.id
+        );
         for category in rule.categories() {
             assert!(
                 ALL_CATEGORIES.contains(category),
@@ -2093,7 +2228,10 @@ fn broad_advisory_rules_are_info_severity() {
         ("DF020", "FROM alpine:3.19\nCMD [\"app\"]\n"),
         ("DF036", "FROM alpine:3.19\nWORKDIR /app\nCOPY app .\n"),
         ("DF052", "FROM alpine:3.19\nRUN apk add --no-cache curl\n"),
-        ("DF061", "FROM --platform=linux/amd64 alpine:3.19\nCMD [\"sh\"]\n"),
+        (
+            "DF061",
+            "FROM --platform=linux/amd64 alpine:3.19\nCMD [\"sh\"]\n",
+        ),
         ("DF082", "FROM alpine:3.19\nENV NAME value\n"),
     ];
     for (rule, dockerfile) in cases {

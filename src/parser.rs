@@ -929,7 +929,14 @@ fn parse_form(
         keyword,
         "ADD" | "CMD" | "COPY" | "ENTRYPOINT" | "RUN" | "SHELL" | "VOLUME"
     );
-    if !supports_json || !command.starts_with('[') {
+    // `[` is also the POSIX `test` command. Docker accepts shell-form commands
+    // such as `RUN [ ! -f /marker ] || touch /marker`; only treat RUN as a
+    // JSON candidate when the array begins like a JSON string array.
+    let run_shell_test = keyword == "RUN"
+        && command
+            .strip_prefix('[')
+            .is_some_and(|rest| !rest.trim_start().starts_with(['"', ']']));
+    if !supports_json || !command.starts_with('[') || run_shell_test {
         if keyword == "SHELL" && !command.is_empty() {
             let target = words
                 .get(command_word)
