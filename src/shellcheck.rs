@@ -280,14 +280,38 @@ fn scripts_for_run(
         start += character.len_utf8();
     }
     (start < instruction.span.end.offset)
-        .then(|| Script {
-            source: script_source(&content[start..instruction.span.end.offset], environment),
-            line_starts: source_line_starts(content, start, instruction.span.end.offset),
-            dialect,
-            preamble_lines: environment.len(),
+        .then(|| {
+            let (source, line_starts) =
+                logical_shell_source(content, start, instruction.span.end.offset);
+            Script {
+                source: script_source(&source, environment),
+                line_starts,
+                dialect,
+                preamble_lines: environment.len(),
+            }
         })
         .into_iter()
         .collect()
+}
+
+/// Docker permits comment-only lines between escaped continuation lines.  The
+/// comment is Dockerfile syntax, not part of the logical shell command; sending
+/// it to ShellCheck changes the meaning of the preceding backslash and causes
+/// a cascade of parser diagnostics.  Drop only those continuation comments and
+/// retain a source-start entry for every emitted logical line.
+fn logical_shell_source(content: &str, start: usize, end: usize) -> (String, Vec<SourcePosition>) {
+    let mut source = String::new();
+    let mut starts = Vec::new();
+    let mut offset = start;
+    for line in content[start..end].split_inclusive('\n') {
+        let comment = line.trim_start().starts_with('#');
+        if !comment {
+            starts.push(position_at(content, offset));
+            source.push_str(line);
+        }
+        offset += line.len();
+    }
+    (source, starts)
 }
 
 fn script_source(source: &str, environment: &HashSet<String>) -> String {
@@ -329,6 +353,7 @@ fn heredoc_line_starts(content: &str, heredoc: &Heredoc) -> Vec<SourcePosition> 
         .collect()
 }
 
+#[cfg(test)]
 fn source_line_starts(content: &str, start: usize, end: usize) -> Vec<SourcePosition> {
     let mut offset = start;
     content[start..end]
@@ -380,6 +405,21 @@ fn run(script: &Script, exclude: &[String]) -> anyhow::Result<Vec<Finding>> {
         serde_json::from_slice(&output.stdout).context("ShellCheck returned invalid JSON")?;
     Ok(diagnostics
         .into_iter()
+        // `chmod =2775 path` is a valid symbolic chmod mode meaning "set
+        // exactly these bits". ShellCheck mistakes it for a shell assignment.
+        .filter(|diagnostic| {
+            diagnostic.code != 2283
+                || !script.source.lines().any(|line| {
+                    let words = line.split_whitespace().collect::<Vec<_>>();
+                    words.first() == Some(&"chmod")
+                        && words.get(1).is_some_and(|mode| {
+                            mode.starts_with('=')
+                                && mode[1..]
+                                    .chars()
+                                    .all(|character| character.is_ascii_digit())
+                        })
+                })
+        })
         .filter_map(|diagnostic| {
             (diagnostic.line > script.preamble_lines)
                 .then(|| map_diagnostic(diagnostic, &script.line_starts, script.preamble_lines))
@@ -576,6 +616,15 @@ mod tests {
             0,
         );
         assert_eq!((finding.line, finding.column), (3, 3));
+    }
+
+    #[test]
+    fn omits_docker_continuation_comments_before_shellcheck() {
+        let source = "FROM alpine\nRUN echo one \\\n  # Dockerfile-only continuation comment\n  && echo $name\n";
+        let instruction = &parse(source)[1];
+        let scripts = scripts_for_run(source, instruction, "sh", &HashSet::new());
+        assert_eq!(scripts[0].source, "echo one \\\n  && echo $name");
+        assert_eq!(scripts[0].line_starts[1].line, 4);
     }
 
     #[test]

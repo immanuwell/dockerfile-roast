@@ -929,9 +929,9 @@ fn rule_parser_syntax(_instrs: &[Instruction], raw: &str) -> Vec<Finding> {
         .diagnostics
         .into_iter()
         .map(|diagnostic| Finding {
-            column: 0,
-            end_line: 0,
-            end_column: 0,
+            column: diagnostic.span.start.column,
+            end_line: diagnostic.span.end.line,
+            end_column: diagnostic.span.end.column,
             rule: "DF071".into(),
             severity: match diagnostic.severity {
                 DiagnosticSeverity::Warning => Severity::Warning,
@@ -1276,7 +1276,17 @@ fn cleans_apt_cache(command: &str) -> bool {
         Regex::new(r"\bapt-get\s+dist-?clean\b").expect("valid apt dist-clean regex");
     removes_cache_path(command, "/var/lib/apt/lists")
         || apt_distclean.is_match(command)
-        || removes_brace_expanded_apt_state(command)
+        // Docker's default shell is /bin/sh, where neither dash nor BusyBox
+        // ash expands braces.  Treat this shorthand as cleanup only when the
+        // RUN explicitly invokes Bash (the only portable signal available to
+        // this rule without image filesystem inspection).
+        || (invokes_bash(command) && removes_brace_expanded_apt_state(command))
+}
+
+fn invokes_bash(command: &str) -> bool {
+    Regex::new(r"(?i)(?:^|[;&|]\s*)(?:/[^\s]*/)?bash(?:\s|$)")
+        .expect("valid bash invocation regex")
+        .is_match(command)
 }
 
 fn cleans_dnf_cache(command: &str) -> bool {
@@ -2054,27 +2064,30 @@ fn rule_npm_install(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let npm_install = Regex::new(r"\bnpm\s+install\b").expect("valid npm install regex");
     instrs_of(instrs, "RUN")
         .into_iter()
-        .filter(|i| {
+        .filter_map(|i| {
             let a = &i.arguments;
-            npm_install.is_match(a)
-                && !a.contains("--production")
-                && !a.contains("--omit=dev")
-                && !Regex::new(r"(?:^|\s)--global(?:\s|$)|(?:^|\s)-g(?:\s|$)")
-                    .expect("valid npm global-install regex")
-                    .is_match(a)
+            if !npm_install.is_match(a) { return None; }
+            let global = Regex::new(r"(?:^|\s)--global(?:\s|$)|(?:^|\s)-g(?:\s|$)")
+                .expect("valid npm global-install regex").is_match(a);
+            if global {
+                return a.split_whitespace().skip_while(|word| *word != "install").skip(1)
+                    .any(|word| !word.starts_with('-') && !word.contains('@'))
+                    .then_some((i, true));
+            }
+            (!a.contains("--production") && !a.contains("--omit=dev")).then_some((i, false))
         })
-        .map(|i| Finding {
+        .map(|(i, global)| Finding {
             column: 0,
             end_line: 0,
             end_column: 0,
             rule: "DF031".into(),
             severity: Severity::Info,
             line: i.line,
-            message: "npm install used — consider npm ci for reproducible builds".to_string(),
-            roast: "`npm install` in a Dockerfile: non-deterministic, slower than `npm ci`, \
+            message: if global { "npm global install without version pinning" } else { "npm install used — consider npm ci for reproducible builds" }.to_string(),
+            roast: if global { "A global npm package without a version means this build installs whatever happens to be latest. Pin it with package@version." } else { "`npm install` in a Dockerfile: non-deterministic, slower than `npm ci`, \
                     and potentially installs different versions than your lockfile specifies. \
                     `npm ci` exists specifically for CI/CD and containers. Use it."
-                .to_string(),
+                }.to_string(),
         })
         .collect()
 }
@@ -2387,7 +2400,6 @@ fn removes_cache_path(command: &str, path: &str) -> bool {
 }
 
 fn rule_unpinned_packages(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let re_yum = Regex::new(r"yum install[^&|;]*").unwrap();
     let mut findings = Vec::new();
     for i in instrs_of(instrs, "RUN") {
         if apt_install_commands(&i.arguments)
@@ -2408,7 +2420,10 @@ fn rule_unpinned_packages(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     .to_string(),
             });
         }
-        if re_yum.find(&i.arguments).is_some() {
+        for manager in ["yum", "dnf", "microdnf", "zypper"] {
+            if !package_install_is_unpinned(&i.arguments, manager) {
+                continue;
+            }
             findings.push(Finding {
                 column: 0,
                 end_line: 0,
@@ -2416,14 +2431,31 @@ fn rule_unpinned_packages(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                 rule: "DF005".into(),
                 severity: Severity::Info,
                 line: i.line,
-                message: "yum install without pinned package versions".to_string(),
-                roast: "Your yum packages are pinned to 'whatever yum feels like today'. \
-                        Reproducibility called — it's going to voicemail."
-                    .to_string(),
+                message: format!("{manager} install without pinned package versions"),
+                roast: format!(
+                    "Your {manager} packages are pinned to 'whatever {manager} feels like today'. \
+                    Reproducibility called — it's going to voicemail."
+                ),
             });
         }
     }
     findings
+}
+
+fn package_install_is_unpinned(command: &str, manager: &str) -> bool {
+    command.split(['&', '|', ';']).any(|segment| {
+        let tokens = segment.split_whitespace().collect::<Vec<_>>();
+        let Some(index) = tokens.iter().position(|token| *token == manager) else {
+            return false;
+        };
+        let install = tokens[index + 1..]
+            .iter()
+            .position(|token| matches!(*token, "install" | "in"));
+        let Some(install) = install else { return false };
+        tokens[index + install + 2..]
+            .iter()
+            .any(|token| !token.starts_with('-') && !token.contains('=') && !token.contains('@'))
+    })
 }
 
 fn apt_install_commands(arguments: &str) -> Vec<(Vec<&str>, usize)> {
@@ -2964,6 +2996,19 @@ fn remote_script_matches(command: &str) -> Vec<std::ops::Range<usize>> {
                 .map(|matched| matched.start()..matched.end()),
         );
     }
+    // PowerShell's DownloadString/IEX flow is the direct analogue of a
+    // curl-to-shell pipeline, including when RUN uses JSON form.
+    let powershell_download = Regex::new(
+        r"(?is)\b(?:downloadstring|invoke-webrequest|invoke-restmethod)\b.*?\b(?:iex|invoke-expression)\b|\b(?:iex|invoke-expression)\b.*?\b(?:downloadstring|invoke-webrequest|invoke-restmethod)\b",
+    ).expect("valid PowerShell remote execution regex");
+    let iex = Regex::new(r"(?i)\b(?:iex|invoke-expression)\b").expect("valid IEX regex");
+    for flow in powershell_download.find_iter(command) {
+        matches.push(
+            iex.find(&command[flow.start()..flow.end()])
+                .map(|matched| flow.start() + matched.start()..flow.start() + matched.end())
+                .unwrap_or(flow.start()..flow.end()),
+        );
+    }
     matches.sort_by_key(|matched| matched.start);
     matches.dedup();
     matches
@@ -3016,7 +3061,7 @@ fn downloaded_script_matches(command: &str) -> Vec<(String, std::ops::Range<usiz
                     ..segment.start + whole.start() + capture["tool"].len(),
             ))
         })
-        .collect()
+        .collect::<Vec<_>>()
 }
 
 fn shell_command_segments(command: &str) -> Vec<std::ops::Range<usize>> {
@@ -4086,6 +4131,7 @@ fn pipeline_matches_low_value_pattern(script: &str, pipe: usize) -> bool {
         r"(?is)\bfind\b[^;&|\n]*\|\s*head\b[^;&|\n]*(?:\|\s*xargs\b[^;&|\n]*)?",
         r"(?is)\b(?:pip|pip3|uv\s+pip)\s+freeze\s*\|\s*grep\b[^;&\n]*",
         r"(?is)\bif\s+apt\s+list\b[^;&|\n]*\|\s*grep\b[^;&\n]*",
+        r"(?is)\b(?:if\s+)?cat\s+/etc/group\b[^;&|\n]*\|\s*grep\b[^;&\n]*",
         r"(?is)[`$]\(?\s*getent\s+group\b[^;&|\n]*\|\s*cut\b[^;&\n]*",
         r"(?is)\becho\b[^;&|\n]*\|\s*debconf-set-selections\b[^;&\n]*",
         r"(?is)\$\(\s*cat\b[^;&|\n]*\|\s*xargs\b[^;&\n]*\)",
@@ -4258,15 +4304,7 @@ fn rule_pip_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
         .into_iter()
         .filter(|i| {
             let a = &i.arguments;
-            (a.contains("pip install") || a.contains("pip3 install"))
-                && !a.contains("-r ")
-                && !a.contains("--requirement")
-                && !a.contains("==")
-                && !a.contains(">=")
-                && !a.contains("<=")
-                && !a.contains("~=")
-                && !a.contains(".txt")
-                && !is_local_pip_install(a)
+            pip_install_has_unpinned_target(a)
         })
         .map(|i| Finding {
             column: 0,
@@ -4284,6 +4322,37 @@ fn rule_pip_version_pinning(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
                 .to_string(),
         })
         .collect()
+}
+
+fn pip_install_has_unpinned_target(command: &str) -> bool {
+    command.split(['&', '|', ';']).any(|segment| {
+        if !(segment.contains("pip install") || segment.contains("pip3 install"))
+            || segment.contains("-r ")
+            || segment.contains("--requirement")
+            || segment.contains(".txt")
+            || is_local_pip_install(segment)
+        {
+            return false;
+        }
+        let Some(arguments) = pip_install_arguments(segment) else {
+            return false;
+        };
+        arguments.split_whitespace().any(|target| {
+            !target.starts_with('-')
+                && !target.contains("==")
+                && !target.contains(">=")
+                && !target.contains("<=")
+                && !target.contains("~=")
+                && !target.contains('=')
+                && !matches!(target, "." | "./")
+                && !target.starts_with("./")
+                && !target.starts_with("../")
+                && !target.starts_with('/')
+                && !target.ends_with(".whl")
+                && !target.contains('*')
+                && !target.starts_with('$')
+        })
+    })
 }
 
 fn is_local_pip_install(command: &str) -> bool {
@@ -4534,11 +4603,10 @@ fn rule_go_install_version(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
             }
             "RUN" => {
                 module_managed |= go_module.is_match(&instruction.arguments);
-                if instruction
-                    .arguments
-                    .split(['&', '|', ';'])
-                    .any(|segment| go_install_needs_version(segment, module_managed))
-                {
+                if instruction.arguments.split(['&', '|', ';']).any(|segment| {
+                    go_install_needs_version(segment, module_managed)
+                        || go_get_needs_version(segment, module_managed)
+                }) {
                     findings.push(finding_at_span(
                         "DF054",
                         Severity::Warning,
@@ -4555,6 +4623,22 @@ fn rule_go_install_version(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
         }
     }
     findings
+}
+
+fn go_get_needs_version(segment: &str, module_managed: bool) -> bool {
+    let words = segment.split_whitespace().collect::<Vec<_>>();
+    let Some(go) = words.iter().position(|word| *word == "go") else {
+        return false;
+    };
+    if words.get(go + 1) != Some(&"get") {
+        return false;
+    }
+    let packages = words[go + 2..]
+        .iter()
+        .filter(|word| !word.starts_with('-'))
+        .copied()
+        .collect::<Vec<_>>();
+    !module_managed && packages.iter().any(|package| !package.contains('@'))
 }
 
 fn go_install_needs_version(segment: &str, module_managed: bool) -> bool {
@@ -4893,7 +4977,10 @@ fn rule_zypper_no_y(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .into_iter()
         .filter(|i| {
             let a = &i.arguments;
-            (a.contains("zypper install") || a.contains("zypper in "))
+            (a.contains("zypper install")
+                || a.contains("zypper in ")
+                || a.contains("zypper -n install")
+                || a.contains("zypper -n in "))
                 && !a.contains("-y")
                 && !a.contains("--non-interactive")
                 && !a.contains(" -n ")
@@ -4940,17 +5027,38 @@ fn rule_zypper_dist_upgrade(instrs: &[Instruction], _raw: &str) -> Vec<Finding> 
 }
 
 fn rule_zypper_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    instrs_of(instrs, "RUN")
-        .into_iter()
-        .filter(|i| {
+    let persistent_stages = persistent_stage_indices(instrs);
+    let layer_stages = layer_persistent_stage_indices(instrs);
+    let instruction_stages = instruction_stage_indices(instrs);
+    instrs
+        .iter()
+        .enumerate()
+        .filter(|(index, i)| {
             let a = &i.arguments;
-            (a.contains("zypper install") || a.contains("zypper in "))
+            i.instruction == "RUN"
+                && (a.contains("zypper install")
+                    || a.contains("zypper in ")
+                    || a.contains("zypper -n install")
+                    || a.contains("zypper -n in "))
                 && !a.contains("zypper clean")
                 && !a.contains("zypper cc")
                 && !removes_cache_path(a, "/var/cache/zypp")
                 && !removes_cache_path(a, "/var/cache/zypper")
+                && cache_reaches_final_image(
+                    instrs,
+                    &instruction_stages,
+                    &persistent_stages,
+                    &layer_stages,
+                    *index,
+                    |command| {
+                        command.contains("zypper clean")
+                            || command.contains("zypper cc")
+                            || removes_cache_path(command, "/var/cache/zypp")
+                            || removes_cache_path(command, "/var/cache/zypper")
+                    },
+                )
         })
-        .map(|i| Finding {
+        .map(|(_, i)| Finding {
             column: 0,
             end_line: 0,
             end_column: 0,

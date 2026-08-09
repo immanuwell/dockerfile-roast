@@ -219,12 +219,12 @@ fn df004_clear_with_apt_get_distclean() {
 }
 
 #[test]
-fn df004_clear_with_apt_get_dist_clean_and_brace_expansion() {
+fn df004_clear_with_apt_get_dist_clean_but_not_sh_brace_expansion() {
     let dist_clean =
         "FROM debian:trixie\nRUN apt-get update && apt-get install -y curl && apt-get dist-clean\n";
     let brace_cleanup = "FROM debian:bookworm\nRUN apt-get update && apt-get install -y curl && rm -rf /var/lib/{apt,dpkg,cache,log}\n";
     assert!(no_rule(&lint(dist_clean), "DF004"));
-    assert!(no_rule(&lint(brace_cleanup), "DF004"));
+    assert!(has_rule(&lint(brace_cleanup), "DF004"));
 }
 
 #[test]
@@ -477,6 +477,17 @@ fn df019_fires_on_maintainer() {
 fn df021_fires_on_curl_pipe_sh() {
     let df = "FROM alpine:3.19\nRUN curl http://example.com/install.sh | sh\n";
     assert!(has_rule(&lint(df), "DF021"));
+}
+
+#[test]
+fn df021_detects_powershell_downloadstring_iex_in_shell_and_json_forms() {
+    for run in [
+        "RUN powershell -Command \"iex ((new-object net.webclient).DownloadString('https://example.test/install.ps1'))\"",
+        "RUN [\"powershell\", \"-Command\", \"iex ((new-object net.webclient).DownloadString('https://example.test/install.ps1'))\"]",
+    ] {
+        let df = format!("FROM mcr.microsoft.com/windows/nanoserver\n{run}\n");
+        assert!(has_rule(&lint(&df), "DF021"), "missed {run}");
+    }
 }
 
 #[test]
@@ -815,6 +826,18 @@ fn df005_fires_when_any_apt_package_is_unpinned() {
 fn df005_fires_on_unpinned_yum() {
     let df = "FROM centos:7\nRUN yum install -y curl && yum clean all\n";
     assert!(has_rule(&lint(df), "DF005"));
+}
+
+#[test]
+fn df005_covers_dnf_microdnf_and_zypper_with_options() {
+    for command in [
+        "dnf install -y curl",
+        "microdnf install -y curl",
+        "zypper -n install curl",
+    ] {
+        let df = format!("FROM example:1\nRUN {command}\n");
+        assert!(has_rule(&lint(&df), "DF005"), "missed {command}");
+    }
 }
 
 // ─── DF008: cd instead of WORKDIR ────────────────────────────────────────────
@@ -1175,6 +1198,12 @@ fn df031_clear_on_npm_global_install() {
 }
 
 #[test]
+fn df031_fires_on_unpinned_npm_global_install() {
+    let df = "FROM node:20\nRUN npm install -g yarn\n";
+    assert!(has_rule(&lint(df), "DF031"));
+}
+
+#[test]
 fn df031_clear_on_prefixed_package_managers() {
     for command in ["pnpm install --frozen-lockfile", "cnpm install"] {
         let df = format!("FROM node:20\nRUN {command}\nCMD [\"node\", \"app.js\"]\n");
@@ -1385,6 +1414,18 @@ fn df043_fires_on_zypper_without_y() {
 fn df043_clear_on_zypper_with_y() {
     let df = "FROM opensuse/leap:15.5\nRUN zypper install -y curl && zypper clean\n";
     assert!(no_rule(&lint(df), "DF043"));
+}
+
+#[test]
+fn df045_detects_noninteractive_zypper_install() {
+    let df = "FROM opensuse/leap:15.5\nRUN zypper -n install curl\n";
+    assert!(has_rule(&lint(df), "DF045"));
+}
+
+#[test]
+fn df045_ignores_disposable_zypper_builder_stages() {
+    let df = "FROM opensuse/leap:15.5 AS build\nRUN zypper install -y curl\nFROM scratch\nCOPY --from=build /artifact /artifact\n";
+    assert!(no_rule(&lint(df), "DF045"));
 }
 
 // ─── DF044: zypper dist-upgrade ──────────────────────────────────────────────
@@ -1623,6 +1664,12 @@ fn df051_still_fires_when_a_wheel_is_combined_with_an_unpinned_package() {
 }
 
 #[test]
+fn df051_checks_each_pip_target_independently() {
+    let df = "FROM python:3.12\nRUN pip install pinned==1.0 unpinned\n";
+    assert!(has_rule(&lint(df), "DF051"));
+}
+
+#[test]
 fn df051_accepts_local_archives_editable_directories_and_dist_globs() {
     for target in [
         "./package.tar.gz",
@@ -1730,6 +1777,12 @@ fn df054_clear_on_cargo_install() {
 #[test]
 fn df054_fires_on_go_install_after_a_shell_operator() {
     let df = "FROM golang:1.21\nRUN echo building && go install github.com/user/tool\n";
+    assert!(has_rule(&lint(df), "DF054"));
+}
+
+#[test]
+fn df054_fires_on_legacy_unversioned_go_get() {
+    let df = "FROM golang:1.21\nRUN go get example.com/tool\n";
     assert!(has_rule(&lint(df), "DF054"));
 }
 
