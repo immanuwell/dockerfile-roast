@@ -78,6 +78,22 @@ fn df001_clear_when_the_image_reference_is_a_build_argument() {
 }
 
 #[test]
+fn df001_resolves_known_global_arg_defaults() {
+    let nested = "ARG REGISTRY=quay.io\nARG OWNER=jupyter\nARG IMAGE=$REGISTRY/$OWNER/minimal-notebook\nFROM $IMAGE\n";
+    let composed = "ARG VERSION=3-latest\nARG PYTHON=3.12\nFROM prefecthq/prefect:${VERSION}-python${PYTHON}\n";
+    let pinned = "ARG IMAGE=ubuntu:24.04\nFROM ${IMAGE}\n";
+    assert!(has_rule(&lint(nested), "DF001"));
+    assert!(has_rule(&lint(composed), "DF001"));
+    assert!(no_rule(&lint(pinned), "DF001"));
+}
+
+#[test]
+fn df001_resolves_quoted_global_arg_images() {
+    let df = "ARG BASE_IMAGE=\"rayproject/ray:latest\"\nFROM \"$BASE_IMAGE\"\n";
+    assert!(has_rule(&lint(df), "DF001"));
+}
+
+#[test]
 fn df001_still_fires_when_only_the_platform_is_a_build_argument() {
     let df = "FROM --platform=$BUILDPLATFORM alpine:latest\n";
     assert!(has_rule(&lint(df), "DF001"));
@@ -469,6 +485,24 @@ fn df021_covers_interpreters_assignments_and_shell_substitutions() {
 }
 
 #[test]
+fn df021_detects_env_wrappers_and_download_then_execute_flows() {
+    let wrapped = "FROM ubuntu:24.04\nRUN wget -qO- https://example.com/install.sh | sudo -E env TOOL_HOME=/opt sh\n";
+    let same_run = "FROM ubuntu:24.04\nRUN curl -fsSL https://example.com/install.sh -o /tmp/tool.sh && sh /tmp/tool.sh\n";
+    let later_run =
+        "FROM ubuntu:24.04\nRUN curl -fsSLO https://example.com/tool.sh\nRUN ./tool.sh\n";
+    let copied = "FROM ubuntu:24.04 AS download\nRUN curl -fsSL https://example.com/install.sh > install.sh\nFROM ubuntu:24.04\nCOPY --from=download install.sh .\nRUN sh install.sh\n";
+    for dockerfile in [wrapped, same_run, later_run, copied] {
+        assert!(has_rule(&lint(dockerfile), "DF021"), "missed {dockerfile}");
+    }
+}
+
+#[test]
+fn df021_ignores_checksum_verified_download_then_execute() {
+    let df = "FROM ubuntu:24.04\nRUN curl -fsSL -o /tmp/tool.sh https://example.com/tool.sh && echo 'abc  /tmp/tool.sh' | sha256sum -c - && sh /tmp/tool.sh\n";
+    assert!(no_rule(&lint(df), "DF021"));
+}
+
+#[test]
 fn df021_reports_the_executed_downloader_on_its_physical_line() {
     let df = "FROM ubuntu:24.04\nRUN echo 'installing curl' \\\n+    && curl -fsSL https://example.com/bootstrap.py | python3\n";
     let findings = lint(df);
@@ -517,6 +551,18 @@ fn df028_clear_on_combined() {
 fn df034_fires_on_chmod_777() {
     let df = "FROM alpine:3.19\nRUN chmod 777 /app\n";
     assert!(has_rule(&lint(df), "DF034"));
+}
+
+#[test]
+fn df034_detects_equivalent_world_writable_modes_but_not_sticky_directories() {
+    for mode in ["0777", "a+w", "a+rwx", "a+rwX", "ugo+w", "o+w"] {
+        let df = format!("FROM alpine:3.19\nRUN chmod {mode} /app\n");
+        assert!(has_rule(&lint(&df), "DF034"), "missed chmod {mode}");
+    }
+    assert!(no_rule(
+        &lint("FROM alpine:3.19\nRUN chmod 1777 /tmp/shared\n"),
+        "DF034"
+    ));
 }
 
 #[test]
@@ -627,6 +673,12 @@ fn df030_clear_when_pip_or_uv_cache_is_buildkit_mounted() {
     assert!(no_rule(&lint(uv), "DF030"));
 }
 
+#[test]
+fn df030_respects_uv_cache_dir_backed_by_a_cache_mount() {
+    let df = "FROM python:3.12\nENV UV_CACHE_DIR=/opt/uv/cache\nRUN --mount=type=cache,target=/opt/uv/cache uv pip install flask\n";
+    assert!(no_rule(&lint(df), "DF030"));
+}
+
 // ─── DF005: unpinned package versions ────────────────────────────────────────
 
 #[test]
@@ -677,8 +729,9 @@ fn df008_clear_with_workdir() {
 
 #[test]
 fn df010_fires_on_sudo() {
-    let df = "FROM ubuntu:22.04\nRUN sudo apt-get install -y curl\n";
+    let df = "FROM ubuntu:22.04\nUSER root\nRUN sudo apt-get install -y curl\n";
     assert!(has_rule(&lint(df), "DF010"));
+    assert_eq!(finding(&lint(df), "DF010").severity, Severity::Warning);
 }
 
 #[test]
@@ -697,10 +750,21 @@ fn df010_clear_when_sudo_is_a_package_or_group_name() {
 
 #[test]
 fn df010_fires_when_sudo_starts_a_chained_command() {
-    let chained = "FROM ubuntu:24.04\nRUN make bootstrap && sudo apt-get clean\n";
-    let heredoc = "FROM ubuntu:24.04\nRUN <<EOF\necho ready\nsudo apt-get clean\nEOF\n";
+    let chained = "FROM ubuntu:24.04\nUSER root\nRUN make bootstrap && sudo apt-get clean\n";
+    let heredoc = "FROM ubuntu:24.04\nUSER root\nRUN <<EOF\necho ready\nsudo apt-get clean\nEOF\n";
     assert!(has_rule(&lint(chained), "DF010"));
     assert!(has_rule(&lint(heredoc), "DF010"));
+}
+
+#[test]
+fn df010_respects_user_state_and_shell_arrays() {
+    let non_root = "FROM ubuntu:24.04\nUSER app\nRUN sudo apt-get update\n";
+    let unknown = "FROM custom/image:1\nRUN sudo apt-get update\n";
+    let array = "FROM ubuntu:24.04\nRUN <<EOF\nPACKAGES=(\n  sudo\n  ssh\n)\nprintf '%s' \"${PACKAGES[@]}\"\nEOF\n";
+    assert!(no_rule(&lint(non_root), "DF010"));
+    assert_eq!(finding(&lint(unknown), "DF010").severity, Severity::Info);
+    assert!(no_rule(&lint(array), "DF010"));
+    assert!(no_rule(&lint(array), "DF060"));
 }
 
 // ─── DF011: no multi-stage build for heavy images ────────────────────────────
@@ -792,6 +856,12 @@ fn df014_reports_each_hardcoded_secret_and_ignores_identifier_names() {
     assert!(findings
         .iter()
         .any(|finding| finding.message.contains("HSM_PIN")));
+}
+
+#[test]
+fn df014_ignores_tokenizer_cache_configuration_and_public_posthog_keys() {
+    let df = "FROM alpine:3.19\nENV TIKTOKEN_CACHE_DIR=/cache TOKENIZERS_PARALLELISM=false POSTHOG_TOKEN=phc_public\n";
+    assert!(no_rule(&lint(df), "DF014"));
 }
 
 // ─── DF016: apt without --no-install-recommends ───────────────────────────────
@@ -951,6 +1021,12 @@ fn df029_clear_on_apk_with_no_cache() {
 #[test]
 fn df029_clear_when_apk_cache_is_buildkit_mounted() {
     let df = "# syntax=docker/dockerfile:1\nFROM alpine:3.19\nRUN --mount=type=cache,target=/var/cache/apk apk add curl\n";
+    assert!(no_rule(&lint(df), "DF029"));
+}
+
+#[test]
+fn df029_clear_when_apk_cache_is_removed_in_the_same_run() {
+    let df = "FROM alpine:3.19\nRUN apk add curl && rm -rf /var/cache/apk/*\n";
     assert!(no_rule(&lint(df), "DF029"));
 }
 
@@ -1227,6 +1303,12 @@ fn df045_clear_on_zypper_with_clean() {
     assert!(no_rule(&lint(df), "DF045"));
 }
 
+#[test]
+fn df045_clear_when_zypper_cache_paths_are_removed() {
+    let df = "FROM opensuse/tumbleweed\nRUN zypper in -y curl && rm -rf /var/cache/zypp /var/cache/zypper\n";
+    assert!(no_rule(&lint(df), "DF045"));
+}
+
 // ─── DF046: dnf clean all missing ────────────────────────────────────────────
 
 #[test]
@@ -1296,6 +1378,14 @@ fn df048_fires_on_multi_source_no_slash() {
 fn df048_clear_on_multi_source_with_slash() {
     let df = "FROM alpine:3.19\nCOPY file1.txt file2.txt /app/\n";
     assert!(no_rule(&lint(df), "DF048"));
+}
+
+#[test]
+fn df048_accepts_current_directory_as_a_multi_source_destination() {
+    let shell = "FROM alpine:3.19\nWORKDIR /app\nCOPY go.mod go.sum .\n";
+    let json = "FROM alpine:3.19\nWORKDIR /app\nCOPY [\"go.mod\", \"go.sum\", \".\"]\n";
+    assert!(no_rule(&lint(shell), "DF048"));
+    assert!(no_rule(&lint(json), "DF048"));
 }
 
 #[test]
@@ -1389,6 +1479,31 @@ fn df051_still_fires_when_a_wheel_is_combined_with_an_unpinned_package() {
     assert!(has_rule(&lint(df), "DF051"));
 }
 
+#[test]
+fn df051_accepts_local_archives_editable_directories_and_dist_globs() {
+    for target in [
+        "./package.tar.gz",
+        "dist/text_generation_server*.tar.gz",
+        "-e ./src/project",
+        "/wheels/*.whl",
+        "$(realpath dist/*.whl)",
+    ] {
+        let df = format!("FROM python:3.12\nRUN pip install {target}\n");
+        assert!(
+            no_rule(&lint(&df), "DF051"),
+            "unexpected DF051 for {target}"
+        );
+    }
+}
+
+#[test]
+fn df051_does_not_claim_dynamic_install_targets_are_unpinned() {
+    let dynamic = "FROM python:3.12\nARG EXTRA_PIP_PACKAGES\nRUN [ -z \"$EXTRA_PIP_PACKAGES\" ] || pip install \"$EXTRA_PIP_PACKAGES\"\n";
+    let local_with_index = "FROM python:3.12\nRUN uv pip install dist/*.whl --extra-index-url https://example.test/cu$(echo 12 | tr -d .)\n";
+    assert!(no_rule(&lint(dynamic), "DF051"));
+    assert!(no_rule(&lint(local_with_index), "DF051"));
+}
+
 // ─── DF052: apk version pinning ──────────────────────────────────────────────
 
 #[test]
@@ -1449,6 +1564,12 @@ fn df054_fires_on_go_install_after_a_shell_operator() {
     assert!(has_rule(&lint(df), "DF054"));
 }
 
+#[test]
+fn df054_accepts_module_managed_go_tool_install() {
+    let df = "FROM golang:1.24\nCOPY go.mod go.sum ./\nRUN go install tool\n";
+    assert!(no_rule(&lint(df), "DF054"));
+}
+
 // ─── DF055: yarn cache not cleaned ───────────────────────────────────────────
 
 #[test]
@@ -1466,6 +1587,12 @@ fn df055_clear_on_yarn_install_with_clean() {
 #[test]
 fn df055_clear_when_yarn_cache_is_buildkit_mounted() {
     let df = "# syntax=docker/dockerfile:1\nFROM node:20\nRUN --mount=type=cache,target=/usr/local/share/.cache/yarn yarn install\n";
+    assert!(no_rule(&lint(df), "DF055"));
+}
+
+#[test]
+fn df055_respects_inline_yarn_cache_folder_mounts() {
+    let df = "FROM node:20\nARG TARGETPLATFORM\nRUN --mount=type=cache,target=/root/.yarn/${TARGETPLATFORM} YARN_CACHE_FOLDER=/root/.yarn/${TARGETPLATFORM} yarn install\n";
     assert!(no_rule(&lint(df), "DF055"));
 }
 
@@ -1551,7 +1678,7 @@ fn df057_fires_on_pipelines_without_spaces_or_with_pipefail_text() {
 
     let substitution =
         "FROM debian:bookworm\nRUN arch=\"$(dpkg --print-architecture | awk -F- '{ print $NF }')\"\n";
-    assert!(has_rule(&lint(substitution), "DF057"));
+    assert!(no_rule(&lint(substitution), "DF057"));
 }
 
 #[test]
@@ -1644,6 +1771,9 @@ fn df057_ignores_low_value_and_non_pipeline_shell_syntax() {
         "rm -f /tmp/missing | :",
         "case x in x86_64) true ;; arm64 | aarch64) true ;; esac",
         "{ echo one; echo two; } | tee /tmp/config",
+        "arch=$(uname -m | sed s/x86_64/amd64/)",
+        "value=$(echo abc | cut -c1 | tr a-z A-Z)",
+        "echo \"$([ x = y ] || echo fallback)\"",
     ] {
         let df = format!("FROM ubuntu:24.04\nRUN {command}\n");
         assert!(
@@ -1651,6 +1781,18 @@ fn df057_ignores_low_value_and_non_pipeline_shell_syntax() {
             "unexpected DF057 for {command}"
         );
     }
+}
+
+#[test]
+fn df057_recognizes_inherited_powershell_syntax_and_maps_the_real_pipe() {
+    let powershell = "FROM external/windows-base:latest\nRUN Invoke-WebRequest https://example.test/a | Out-File C:/a\n";
+    assert!(no_rule(&lint(powershell), "DF057"));
+
+    let mapped =
+        "FROM ubuntu:24.04\nRUN test -f /x || true; \\\n    printf ok \\\n      | sed s/o/a/\n";
+    let findings = lint(mapped);
+    let finding = finding(&findings, "DF057");
+    assert_eq!((finding.line, finding.column), (4, 7));
 }
 
 // ─── DF058: wget and curl both used ──────────────────────────────────────────
@@ -1691,6 +1833,12 @@ fn df059_fires_on_apt_install() {
 #[test]
 fn df059_clear_on_apt_get_install() {
     let df = "FROM ubuntu:22.04\nRUN apt-get install -y curl && rm -rf /var/lib/apt/lists/*\n";
+    assert!(no_rule(&lint(df), "DF059"));
+}
+
+#[test]
+fn df059_ignores_apt_paths_keys_and_heredoc_comments() {
+    let df = "FROM ubuntu:24.04\nRUN <<EOF\n#!/bin/bash\n# avoid apt update issues\necho /etc/apt/keyrings apt-key\nEOF\n";
     assert!(no_rule(&lint(df), "DF059"));
 }
 
@@ -1738,6 +1886,12 @@ fn df060_accepts_offline_service_configuration_and_database_initialization() {
         "FROM ubuntu:24.04\nRUN service postgresql start && su postgres -c \"psql -c 'SELECT 1'\"\n";
     assert!(no_rule(&lint(systemd), "DF060"));
     assert!(no_rule(&lint(database), "DF060"));
+}
+
+#[test]
+fn df060_ignores_commands_named_inside_shell_arrays() {
+    let df = "FROM ubuntu:24.04\nRUN packages=(\n    curl\n    ssh\n    vim\n)\n";
+    assert!(no_rule(&lint(df), "DF060"));
 }
 
 // ─── DF061: --platform in FROM ────────────────────────────────────────────────
@@ -1874,6 +2028,12 @@ fn df063_clear_when_workdir_is_inherited_from_previous_stage() {
     assert!(no_rule(&lint(df), "DF063"));
 }
 
+#[test]
+fn df063_is_informational_when_external_workdir_metadata_is_unknown() {
+    let findings = lint("FROM external/image:1\nCOPY app.py app.py\n");
+    assert_eq!(finding(&findings, "DF063").severity, Severity::Info);
+}
+
 // ─── DF064: useradd without -l ────────────────────────────────────────────────
 
 #[test]
@@ -1974,6 +2134,12 @@ fn df066_does_not_confuse_source_paths_or_mount_options_with_builtin() {
     let path = "FROM alpine:3.19\nRUN mkdir -p gpg/source && cp key gpg/source/key\n";
     assert!(no_rule(&lint(mount), "DF066"));
     assert!(no_rule(&lint(path), "DF066"));
+}
+
+#[test]
+fn df066_respects_a_bash_shebang_in_run_heredocs() {
+    let df = "FROM ubuntu:24.04\nRUN <<'SCRIPT'\n#!/bin/bash\nif [[ -f /tmp/x ]]; then source /etc/profile; fi\nSCRIPT\n";
+    assert!(no_rule(&lint(df), "DF066"));
 }
 
 #[test]

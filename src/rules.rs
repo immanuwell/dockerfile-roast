@@ -261,7 +261,7 @@ pub fn all_rules() -> Vec<Rule> {
         Rule {
             id: "DF034",
             severity: Severity::Error,
-            description: "Avoid chmod 777 — overly permissive",
+            description: "Avoid persistent world-writable chmod modes",
             func: rule_chmod_777,
         },
         Rule {
@@ -670,6 +670,38 @@ fn instruction_substring_span(
             })
         })
         .unwrap_or(instruction.span)
+}
+
+fn shell_command_span(source: &str, instruction: &Instruction, command: &str) -> SourceSpan {
+    let script = mask_shell_comments(&mask_shell_array_bodies(&instruction.raw));
+    let escaped = regex::escape(command);
+    let pattern = Regex::new(&format!(
+        r"(?im)(?:^\s*RUN(?:\s+--[^\s]+)*\s+|[;&|()]\s*|^\s*|\b(?:then|do|if|elif|while|until)\s+|!\s*)(?:sudo(?:\s+-\S+)*\s+)?(?:(?:/usr/bin/)?env(?:\s+(?:-\S+|[A-Za-z_][A-Za-z0-9_]*=\S+))*\s+)?(?P<command>{escaped})(?:\s|$)"
+    ))
+    .expect("escaped command creates a valid invocation regex");
+    pattern
+        .captures(&script)
+        .and_then(|capture| capture.name("command"))
+        .map(|matched| instruction_match_span(source, instruction, matched.start(), matched.end()))
+        .unwrap_or(instruction.span)
+}
+
+fn mask_shell_comments(script: &str) -> String {
+    let mut masked = script.as_bytes().to_vec();
+    let mut offset = 0;
+    for line in script.split_inclusive('\n') {
+        let content = line.trim_start();
+        if content.starts_with('#') && !content.starts_with("#!") {
+            let start = offset + line.len() - content.len();
+            for byte in &mut masked[start..offset + line.len()] {
+                if *byte != b'\n' && *byte != b'\r' {
+                    *byte = b' ';
+                }
+            }
+        }
+        offset += line.len();
+    }
+    String::from_utf8(masked).expect("masking preserves UTF-8")
 }
 
 fn rule_consistent_instruction_casing(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
@@ -1279,13 +1311,19 @@ fn persistent_run_instructions(instrs: &[Instruction]) -> Vec<&Instruction> {
 
 fn rule_latest_tag(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let mut stage_aliases = std::collections::HashSet::new();
+    let global_args = global_arg_defaults(instrs);
     let mut findings = Vec::new();
 
     for instruction in instrs_of(instrs, "FROM") {
         let Some(from) = parse_from_arguments(&instruction.arguments) else {
             continue;
         };
-        let base = from.image;
+        let unresolved_base = from.image;
+        let resolved_base = expand_known_build_args(unresolved_base, &global_args);
+        let base = resolved_base
+            .as_deref()
+            .unwrap_or(unresolved_base)
+            .trim_matches(['\'', '"']);
         // A build argument can supply either a tagged image or a digest at
         // build time. Do not claim it is unpinned when that value is unknown.
         if base.contains('$') {
@@ -1297,7 +1335,7 @@ fn rule_latest_tag(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         let is_previous_stage = stage_aliases.contains(&base.to_lowercase());
         if !is_previous_stage
             && !base.eq_ignore_ascii_case("scratch")
-            && (base.ends_with(":latest") || (!base.contains(':') && !base.contains('@')))
+            && (image_uses_latest_tag(base) || (!image_has_tag(base) && !base.contains('@')))
         {
             findings.push(Finding {
                 column: 0,
@@ -1318,6 +1356,65 @@ fn rule_latest_tag(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     }
 
     findings
+}
+
+fn image_has_tag(image: &str) -> bool {
+    image
+        .rsplit_once('/')
+        .map_or(image, |(_, name)| name)
+        .contains(':')
+}
+
+fn image_uses_latest_tag(image: &str) -> bool {
+    let name = image.rsplit_once('/').map_or(image, |(_, name)| name);
+    let Some((_, tag)) = name.rsplit_once(':') else {
+        return false;
+    };
+    tag.split(['-', '_', '.'])
+        .any(|component| component.eq_ignore_ascii_case("latest"))
+}
+
+fn global_arg_defaults(instrs: &[Instruction]) -> std::collections::HashMap<String, String> {
+    instrs
+        .iter()
+        .take_while(|instruction| instruction.instruction != "FROM")
+        .filter(|instruction| instruction.instruction == "ARG")
+        .filter_map(|instruction| instruction.words.first())
+        .filter_map(|word| word.value.split_once('='))
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect()
+}
+
+fn expand_known_build_args(
+    value: &str,
+    defaults: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let variable = Regex::new(
+        r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))",
+    )
+    .expect("valid build argument regex");
+    let mut expanded = value.to_string();
+    for _ in 0..8 {
+        let mut unresolved = false;
+        let next = variable
+            .replace_all(&expanded, |captures: &regex::Captures<'_>| {
+                let name = captures
+                    .name("braced")
+                    .or_else(|| captures.name("plain"))
+                    .expect("variable capture exists")
+                    .as_str();
+                defaults.get(name).cloned().unwrap_or_else(|| {
+                    unresolved = true;
+                    captures[0].to_string()
+                })
+            })
+            .into_owned();
+        if next == expanded {
+            return (!unresolved).then_some(next);
+        }
+        expanded = next;
+    }
+    (!expanded.contains('$')).then_some(expanded)
 }
 
 fn rule_running_as_root(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -1553,23 +1650,55 @@ fn rule_relative_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .collect()
 }
 
-fn rule_sudo_usage(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    instrs_of(instrs, "RUN")
-        .into_iter()
-        .filter(|i| shell_invokes_command(&run_script(i), "sudo"))
-        .map(|i| Finding {
-            column: 0,
-            end_line: 0,
-            end_column: 0,
-            rule: "DF010".into(),
-            severity: Severity::Warning,
-            line: i.line,
-            message: "sudo used inside a container — likely unnecessary".to_string(),
-            roast: "sudo inside a Docker container? You're already root (probably). sudo is \
-                    just a formality at this point, like putting a 'Wet Floor' sign in the ocean."
-                .to_string(),
-        })
-        .collect()
+fn rule_sudo_usage(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
+    let mut stages = std::collections::HashMap::new();
+    let mut current_alias = None;
+    let mut state = StageRuntimeState::default();
+    let mut findings = Vec::new();
+    for instruction in instrs {
+        match instruction.instruction.as_str() {
+            "FROM" => {
+                if let Some(from) = parse_from_arguments(&instruction.arguments) {
+                    state = inherited_runtime_state(from, &stages);
+                    current_alias = from.alias.map(str::to_ascii_lowercase);
+                }
+            }
+            "USER" => {
+                state.effective_user =
+                    Some((instruction.arguments.trim().to_string(), instruction.line));
+            }
+            "RUN" if shell_invokes_command(&run_script(instruction), "sudo") => {
+                let explicitly_non_root = state
+                    .effective_user
+                    .as_ref()
+                    .is_some_and(|(user, _)| !is_root_user(user));
+                if explicitly_non_root {
+                    continue;
+                }
+                let metadata_unknown = state.effective_user.is_none() && !state.base_metadata_known;
+                findings.push(finding_at_span(
+                    "DF010",
+                    if metadata_unknown {
+                        Severity::Info
+                    } else {
+                        Severity::Warning
+                    },
+                    shell_command_span(raw, instruction, "sudo"),
+                    if metadata_unknown {
+                        "sudo use depends on the external base image's runtime user".to_string()
+                    } else {
+                        "sudo used while the build is already running as root".to_string()
+                    },
+                    "Use sudo only when the effective build user is non-root; otherwise invoke the command directly.",
+                ));
+            }
+            _ => {}
+        }
+        if let Some(alias) = &current_alias {
+            stages.insert(alias.clone(), state.clone());
+        }
+    }
+    findings
 }
 
 fn rule_no_healthcheck(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -1764,8 +1893,10 @@ fn rule_copy_root(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 
 fn rule_pip_no_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let mut stage_cache_settings = std::collections::HashMap::new();
+    let mut stage_uv_cache_dirs = std::collections::HashMap::<String, Option<String>>::new();
     let mut current_stage = None;
     let mut pip_cache_disabled = false;
+    let mut uv_cache_dir: Option<String> = None;
     let persistent_runs = persistent_run_instructions(instrs)
         .into_iter()
         .map(|instruction| instruction.span.start.offset)
@@ -1775,11 +1906,15 @@ fn rule_pip_no_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .iter()
         .filter(|instruction| match instruction.instruction.as_str() {
             "FROM" => {
-                let base = instruction.words.first().map(|word| word.value.as_str());
+                let base = parse_from_arguments(&instruction.arguments).map(|from| from.image);
                 pip_cache_disabled = base
                     .and_then(|base| stage_cache_settings.get(base))
                     .copied()
                     .unwrap_or(false);
+                uv_cache_dir = base
+                    .and_then(|base| stage_uv_cache_dirs.get(base))
+                    .cloned()
+                    .flatten();
                 current_stage = instruction
                     .words
                     .iter()
@@ -1788,16 +1923,20 @@ fn rule_pip_no_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     .map(|word| word.value.clone());
                 if let Some(stage) = &current_stage {
                     stage_cache_settings.insert(stage.clone(), pip_cache_disabled);
+                    stage_uv_cache_dirs.insert(stage.clone(), uv_cache_dir.clone());
                 }
                 false
             }
             "ENV" => {
-                for word in &instruction.words {
-                    if let Some(value) = word.value.strip_prefix("PIP_NO_CACHE_DIR=") {
+                for (name, value, _) in instruction_assignments(instruction) {
+                    if name == "PIP_NO_CACHE_DIR" {
                         pip_cache_disabled = pip_boolean(value);
-                        if let Some(stage) = &current_stage {
-                            stage_cache_settings.insert(stage.clone(), pip_cache_disabled);
-                        }
+                    } else if name == "UV_CACHE_DIR" {
+                        uv_cache_dir = Some(value.trim_matches(['\'', '"']).to_string());
+                    }
+                    if let Some(stage) = &current_stage {
+                        stage_cache_settings.insert(stage.clone(), pip_cache_disabled);
+                        stage_uv_cache_dirs.insert(stage.clone(), uv_cache_dir.clone());
                     }
                 }
                 false
@@ -1811,6 +1950,9 @@ fn rule_pip_no_cache(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     !arguments.contains("--no-cache")
                         && !arguments.contains("uv cache clean")
                         && !has_language_cache_mount(instruction, "uv")
+                        && !uv_cache_dir.as_deref().is_some_and(|directory| {
+                            has_ephemeral_mount_covering(instruction, directory)
+                        })
                 } else {
                     (arguments.contains("pip install") || arguments.contains("pip3 install"))
                         && !arguments.contains("--no-cache-dir")
@@ -1938,7 +2080,8 @@ fn rule_no_dockerignore(_instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 
 fn rule_chmod_777(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
     let re =
-        Regex::new(r"\bchmod\b(?:\s+-[^\s]+)*\s+(?P<mode>777)\b").expect("valid chmod mode regex");
+        Regex::new(r"\bchmod\b(?:\s+-[^\s]+)*\s+(?P<mode>0?777|(?:a|ugo|o)\+[rwxX]*w[rwxX]*)\b")
+            .expect("valid world-writable chmod regex");
     instrs_of(instrs, "RUN")
         .into_iter()
         .flat_map(|instruction| {
@@ -1957,8 +2100,10 @@ fn rule_chmod_777(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
                         "DF034",
                         Severity::Error,
                         instruction_match_span(raw, instruction, mode.start(), mode.end()),
-                        "chmod 777 grants world-writable permissions — overly permissive"
-                            .to_string(),
+                        format!(
+                            "chmod {} grants world-writable permissions — overly permissive",
+                            mode.as_str()
+                        ),
                         "chmod 777? Giving everyone read, write, and execute access is the filesystem equivalent of leaving your front door open with a sign that says 'free stuff inside'. Minimum permissions, please.",
                     ))
                 })
@@ -1992,7 +2137,7 @@ fn chmod_is_removed_temporary_directory(raw: &str, chmod_start: usize, mode_end:
     removed
 }
 
-fn rule_curl_no_fail(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+fn rule_curl_no_fail(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
     instrs_of(instrs, "RUN")
         .into_iter()
         .filter(|i| {
@@ -2018,19 +2163,16 @@ fn rule_curl_no_fail(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     found
                 }
         })
-        .map(|i| Finding {
-            column: 0,
-            end_line: 0,
-            end_column: 0,
-            rule: "DF035".into(),
-            severity: Severity::Info,
-            line: i.line,
-            message: "curl without --fail — HTTP errors won't cause the RUN step to fail"
-                .to_string(),
-            roast: "curl without --fail means a 404 or 500 response silently succeeds. \
+        .map(|i| {
+            finding_at_span(
+                "DF035",
+                Severity::Info,
+                shell_command_span(raw, i, "curl"),
+                "curl without --fail — HTTP errors won't cause the RUN step to fail".to_string(),
+                "curl without --fail means a 404 or 500 response silently succeeds. \
                     Your build will happily continue after downloading an error page and \
-                    treating it as a binary. Add --fail and save yourself a 2am debugging session."
-                .to_string(),
+                    treating it as a binary. Add --fail and save yourself a 2am debugging session.",
+            )
         })
         .collect()
 }
@@ -2099,6 +2241,7 @@ fn rule_uncleaned_package_cache(instrs: &[Instruction], raw: &str) -> Vec<Findin
             ));
         }
         if has_apk
+            && !removes_cache_path(arg, "/var/cache/apk")
             && !has_ephemeral_mount_covering(i, "/var/cache/apk")
             && cache_reaches_final_image(
                 instrs,
@@ -2476,7 +2619,10 @@ fn rule_hardcoded_secrets(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     {
         for (name, value, span) in instruction_assignments(i) {
             let value = value.trim();
-            if sensitive_variable_pattern(name).is_some() && hardcoded_secret_value(value) {
+            if sensitive_variable_pattern(name).is_some()
+                && hardcoded_secret_value(value)
+                && !known_public_credential(name, value)
+            {
                 findings.push(finding_at_span(
                     "DF014",
                     Severity::Error,
@@ -2522,45 +2668,153 @@ fn sensitive_variable_pattern(name: &str) -> Option<&'static str> {
     if lower.ends_with("_file") || lower.ends_with("_name") || lower.ends_with("_label") {
         return None;
     }
+    let words = lower
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    let has = |word: &str| words.contains(&word);
+    if has("password") || has("passwd") || has("secret") || has("token") || has("apikey") {
+        return Some("credential");
+    }
     [
-        "password",
-        "passwd",
-        "secret",
-        "token",
-        "api_key",
-        "apikey",
-        "private_key",
-        "auth_token",
-        "access_key",
-        "secret_key",
-        "encryption_key",
-        "db_pass",
-        "database_password",
-        "hsm_pin",
-        "so_pin",
+        (["api", "key"], "api_key"),
+        (["private", "key"], "private_key"),
+        (["access", "key"], "access_key"),
+        (["encryption", "key"], "encryption_key"),
+        (["db", "pass"], "db_pass"),
+        (["database", "password"], "database_password"),
+        (["hsm", "pin"], "hsm_pin"),
+        (["so", "pin"], "so_pin"),
     ]
     .into_iter()
-    .find(|pattern| lower.contains(pattern))
+    .find_map(|(required, label)| required.into_iter().all(has).then_some(label))
+}
+
+fn known_public_credential(name: &str, value: &str) -> bool {
+    name.eq_ignore_ascii_case("POSTHOG_TOKEN")
+        && value.trim().trim_matches(['\'', '"']).starts_with("phc_")
 }
 
 fn rule_curl_pipe_sh(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
-    instrs_of(instrs, "RUN")
-        .into_iter()
-        .flat_map(|instruction| {
-            remote_script_matches(&instruction.raw)
-                .into_iter()
-                .map(|matched| {
-                    finding_at_span(
-                        "DF021",
-                        Severity::Error,
-                        instruction_match_span(raw, instruction, matched.start, matched.end),
-                        "Executing a remotely downloaded script without verifying it".to_string(),
-                        "Executing a remote script directly: the technical equivalent of 'hold my beer'. You're downloading code from the internet and executing it blind, inside your container, and shipping it to prod. Your threat model is vibes.",
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect()
+    let mut findings = Vec::new();
+    let mut stages = Vec::<std::collections::HashMap<String, SourceSpan>>::new();
+    let mut aliases = std::collections::HashMap::<String, usize>::new();
+    let mut current_stage = None;
+
+    for instruction in instrs {
+        match instruction.instruction.as_str() {
+            "FROM" => {
+                let inherited = parse_from_arguments(&instruction.arguments)
+                    .and_then(|from| aliases.get(&from.image.to_ascii_lowercase()).copied())
+                    .and_then(|index| stages.get(index).cloned())
+                    .unwrap_or_default();
+                let index = stages.len();
+                stages.push(inherited);
+                current_stage = Some(index);
+                if let Some(alias) =
+                    parse_from_arguments(&instruction.arguments).and_then(|from| from.alias)
+                {
+                    aliases.insert(alias.to_ascii_lowercase(), index);
+                }
+            }
+            "COPY" => {
+                let Some(stage) = current_stage else { continue };
+                let source_stage = instruction
+                    .flags
+                    .iter()
+                    .find(|flag| flag.name.eq_ignore_ascii_case("from"))
+                    .and_then(|flag| flag.value.as_deref())
+                    .and_then(|source| {
+                        aliases
+                            .get(&source.to_ascii_lowercase())
+                            .copied()
+                            .or_else(|| source.parse::<usize>().ok())
+                    });
+                let Some(source_stage) = source_stage else {
+                    continue;
+                };
+                let operands = instruction_operands(instruction);
+                let Some(destination) = operands.last() else {
+                    continue;
+                };
+                let copied = operands[..operands.len().saturating_sub(1)]
+                    .iter()
+                    .filter_map(|source| {
+                        let basename = script_basename(source);
+                        stages
+                            .get(source_stage)?
+                            .get(*source)
+                            .or_else(|| stages.get(source_stage)?.get(basename))
+                            .copied()
+                            .map(|span| (basename.to_string(), span))
+                    })
+                    .collect::<Vec<_>>();
+                for (basename, span) in copied {
+                    let target = if matches!(*destination, "." | "./") || destination.ends_with('/')
+                    {
+                        basename
+                    } else {
+                        destination.to_string()
+                    };
+                    stages[stage].insert(target.clone(), span);
+                    stages[stage].insert(script_basename(&target).to_string(), span);
+                }
+            }
+            "RUN" => {
+                for matched in remote_script_matches(&instruction.raw) {
+                    findings.push(df021_finding(instruction_match_span(
+                        raw,
+                        instruction,
+                        matched.start,
+                        matched.end,
+                    )));
+                }
+
+                let Some(stage) = current_stage else { continue };
+                for (path, range) in downloaded_script_matches(&instruction.raw) {
+                    let span = instruction_match_span(raw, instruction, range.start, range.end);
+                    stages[stage].insert(path.clone(), span);
+                    stages[stage].insert(script_basename(&path).to_string(), span);
+                }
+
+                let downloads = stages[stage]
+                    .iter()
+                    .map(|(path, span)| (path.clone(), *span))
+                    .collect::<Vec<_>>();
+                let mut consumed = Vec::new();
+                for (path, span) in downloads {
+                    let Some(execution) = script_execution_offset(&instruction.raw, &path) else {
+                        continue;
+                    };
+                    if script_is_verified_before(&instruction.raw, &path, execution) {
+                        consumed.push(path);
+                        continue;
+                    }
+                    findings.push(df021_finding(span));
+                    consumed.push(path);
+                }
+                for path in consumed {
+                    stages[stage].remove(&path);
+                }
+            }
+            _ => {}
+        }
+    }
+    findings.sort_by_key(|finding| (finding.line, finding.column));
+    findings.dedup_by(|left, right| {
+        left.line == right.line && left.column == right.column && left.rule == right.rule
+    });
+    findings
+}
+
+fn df021_finding(span: SourceSpan) -> Finding {
+    finding_at_span(
+        "DF021",
+        Severity::Error,
+        span,
+        "Executing a remotely downloaded script without verifying it".to_string(),
+        "Executing a remote script directly: the technical equivalent of 'hold my beer'. You're downloading code from the internet and executing it blind, inside your container, and shipping it to prod. Your threat model is vibes.",
+    )
 }
 
 fn executes_remote_script(command: &str) -> bool {
@@ -2569,7 +2823,7 @@ fn executes_remote_script(command: &str) -> bool {
 
 fn remote_script_matches(command: &str) -> Vec<std::ops::Range<usize>> {
     let pipe = Regex::new(
-        r"(?i)\b(?:curl|wget)\b[^|;]*\|\s*(?:\\\r?\n\s*)*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:/usr/bin/env\s+)?(?:/[^\s]*/)?(?:ba|a|z|fi)?sh\b|\b(?:curl|wget)\b[^|;]*\|\s*(?:\\\r?\n\s*)*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:/usr/bin/env\s+)?python(?:[0-9]+(?:\.[0-9]+)?)?\b",
+        r"(?i)\b(?:curl|wget)\b[^|;]*\|\s*(?:\\\r?\n\s*)*(?:sudo(?:\s+-\S+)*\s+)?(?:(?:/usr/bin/)?env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:/[^\s]*/)?(?:ba|a|z|fi)?sh\b|\b(?:curl|wget)\b[^|;]*\|\s*(?:\\\r?\n\s*)*(?:sudo(?:\s+-\S+)*\s+)?(?:(?:/usr/bin/)?env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*python(?:[0-9]+(?:\.[0-9]+)?)?\b",
     )
     .expect("valid remote script pipeline regex");
     let downloader = Regex::new(r"(?i)\b(?:curl|wget)\b").expect("valid downloader regex");
@@ -2602,31 +2856,109 @@ fn remote_script_matches(command: &str) -> Vec<std::ops::Range<usize>> {
     matches
 }
 
-fn rule_apt_instead_of_apt_get(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    let re =
-        Regex::new(r"\bapt\s+(install|remove|update|upgrade|list|search|show|purge)\b").unwrap();
-    instrs_of(instrs, "RUN")
-        .into_iter()
-        .filter(|i| re.is_match(&i.arguments))
-        .map(|i| Finding {
-            column: 0,
-            end_line: 0,
-            end_column: 0,
-            rule: "DF059".into(),
-            severity: Severity::Warning,
-            line: i.line,
-            message:
-                "apt used instead of apt-get — apt is an end-user tool, not suited for scripts"
-                    .to_string(),
-            roast: "`apt` is designed for humans: it has progress bars, color output, and a \
-                    warning that says 'do not use in scripts'. You are in a script. \
-                    Use apt-get or apt-cache instead."
-                .to_string(),
+fn downloaded_script_matches(command: &str) -> Vec<(String, std::ops::Range<usize>)> {
+    let invocation = Regex::new(r"(?i)\b(?P<tool>curl|wget)\b(?P<body>[^;&|]*)")
+        .expect("valid downloader invocation regex");
+    let output = Regex::new(
+        r#"(?i)(?:^|\s)(?:-o|--output(?:=|\s+)|-O|--output-document(?:=|\s+))\s*["']?(?P<path>[^\s"']+)"#,
+    )
+    .expect("valid downloader output regex");
+    let redirect =
+        Regex::new(r#">\s*["']?(?P<path>[^\s"']+)"#).expect("valid downloader redirect regex");
+    let url = Regex::new(r#"https?://[^\s"']+"#).expect("valid URL regex");
+    invocation
+        .captures_iter(command)
+        .filter_map(|capture| {
+            let whole = capture.get(0)?;
+            let body = capture.name("body")?.as_str();
+            let mut path = output
+                .captures(body)
+                .and_then(|capture| capture.name("path"))
+                .map(|path| path.as_str().to_string())
+                .or_else(|| {
+                    redirect
+                        .captures(body)
+                        .and_then(|capture| capture.name("path"))
+                        .map(|path| path.as_str().to_string())
+                });
+            if path.as_deref() == Some("-") {
+                path = None;
+            }
+            if path.is_none() {
+                path = url.find(body).and_then(|url| {
+                    let path = url.as_str().split(['?', '#']).next().unwrap_or_default();
+                    path.rsplit('/').next().map(str::to_string)
+                });
+            }
+            let path = path?
+                .trim_end_matches(['\\', ';'])
+                .trim_matches(['\'', '"'])
+                .to_string();
+            script_basename(&path)
+                .to_ascii_lowercase()
+                .ends_with(".sh")
+                .then_some((path, whole.start()..whole.start() + capture["tool"].len()))
         })
         .collect()
 }
 
-fn rule_useless_commands(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+fn script_basename(path: &str) -> &str {
+    path.trim_matches(['\'', '"'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path)
+}
+
+fn script_execution_offset(command: &str, path: &str) -> Option<usize> {
+    let basename = regex::escape(script_basename(path));
+    let shell = Regex::new(&format!(
+        r#"(?im)(?:^\s*RUN\s+|[;&|]\s*|\n\s*)(?:sudo(?:\s+-\S+)*\s+)?(?:(?:/usr/bin/)?env(?:\s+(?:-\S+|[A-Za-z_][A-Za-z0-9_]*=\S+))*\s+)?(?:/[^\s]*/)?(?:ba|a|z|fi)?sh(?:\s+-\S+)*\s+["']?(?:[^\s"']*/)?{basename}["']?"#
+    ))
+    .expect("escaped script name creates a valid shell execution regex");
+    if let Some(matched) = shell.find(command) {
+        return Some(matched.start());
+    }
+    Regex::new(&format!(
+        r#"(?im)(?:^\s*RUN\s+|[;&|]\s*|\n\s*)["']?(?:\./|[^\s"']*/){basename}["']?(?:\s|$)"#
+    ))
+    .expect("escaped script name creates a valid direct execution regex")
+    .find(command)
+    .map(|matched| matched.start())
+}
+
+fn script_is_verified_before(command: &str, path: &str, execution: usize) -> bool {
+    let before = &command[..execution];
+    let basename = script_basename(path);
+    before.contains(basename)
+        && (before.contains("sha256sum -c")
+            || before.contains("sha256sum --check")
+            || before.contains("shasum -a 256"))
+}
+
+fn rule_apt_instead_of_apt_get(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
+    let re = Regex::new(
+        r"(?im)(?:^\s*RUN(?:\s+--[^\s]+)*\s+|[;&|]\s*|^\s*|\bsudo\s+)apt\s+(?:install|remove|update|upgrade|list|search|show|purge)\b",
+    )
+    .expect("valid apt command regex");
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|i| re.is_match(&mask_shell_comments(&i.raw)))
+        .map(|i| {
+            finding_at_span(
+                "DF059",
+                Severity::Warning,
+                shell_command_span(raw, i, "apt"),
+                "apt used instead of apt-get — apt is an end-user tool, not suited for scripts"
+                    .to_string(),
+                "`apt` is designed for humans: it has progress bars, color output, and a \
+                    warning that says 'do not use in scripts'. You are in a script. \
+                    Use apt-get or apt-cache instead.",
+            )
+        })
+        .collect()
+}
+
+fn rule_useless_commands(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
     let useless = [
         "ssh",
         "vim",
@@ -2651,21 +2983,18 @@ fn rule_useless_commands(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             if shell_invokes_command(&script, cmd)
                 && !meaningful_system_service_command(&script, cmd)
             {
-                findings.push(Finding {
-                    column: 0,
-                    end_line: 0,
-                    end_column: 0,
-                    rule: "DF060".into(),
-                    severity: Severity::Info,
-                    line: i.line,
-                    message: format!("Command '{}' makes little sense inside a container", cmd),
-                    roast: format!(
+                findings.push(finding_at_span(
+                    "DF060",
+                    Severity::Info,
+                    shell_command_span(raw, i, cmd),
+                    format!("Command '{}' makes little sense inside a container", cmd),
+                    &format!(
                         "`{}` in a Dockerfile: you're running a command that assumes a full \
                          interactive OS environment inside a container. It doesn't apply here. \
                          Containers are not VMs.",
                         cmd
                     ),
-                });
+                ));
                 break;
             }
         }
@@ -2781,7 +3110,11 @@ fn rule_copy_relative_no_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Find
                         end_line: 0,
                         end_column: 0,
                         rule: "DF063".into(),
-                        severity: Severity::Warning,
+                        severity: if state.base_metadata_known {
+                            Severity::Warning
+                        } else {
+                            Severity::Info
+                        },
                         line: i.line,
                         message,
                         roast,
@@ -2898,7 +3231,7 @@ fn rule_onbuild_forbidden(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     findings
 }
 
-fn rule_bash_syntax_no_shell(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+fn rule_bash_syntax_no_shell(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
     // Patterns that are valid bash but not POSIX sh — meaningless or broken on /bin/sh
     const BASH_COMMANDS: &[(&str, &str)] = &[
         ("[[", "double-bracket conditional"),
@@ -2919,7 +3252,10 @@ fn rule_bash_syntax_no_shell(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
             }
         } else if i.instruction == "SHELL" {
             state.has_explicit_shell = true;
-        } else if i.instruction == "RUN" && !state.has_explicit_shell {
+        } else if i.instruction == "RUN"
+            && !state.has_explicit_shell
+            && !heredoc_has_bash_interpreter(i)
+        {
             // `RUN` itself uses /bin/sh, but an explicit `bash -c` owns the quoted
             // command that follows it. Ignore bash-only syntax inside that command
             // while continuing to inspect the rest of the RUN instruction.
@@ -2950,16 +3286,13 @@ fn rule_bash_syntax_no_shell(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
                             ),
                         )
                     };
-                    findings.push(Finding {
-                        column: 0,
-                        end_line: 0,
-                        end_column: 0,
-                        rule: "DF066".into(),
-                        severity: Severity::Warning,
-                        line: i.line,
+                    findings.push(finding_at_span(
+                        "DF066",
+                        Severity::Warning,
+                        shell_command_span(raw, i, command_name),
                         message,
-                        roast,
-                    });
+                        &roast,
+                    ));
                     reported = true;
                     break;
                 }
@@ -2970,17 +3303,13 @@ fn rule_bash_syntax_no_shell(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
                 } else {
                     "RUN uses bash-specific syntax (indirect variable expansion) without an explicit SHELL in this stage"
                 };
-                findings.push(Finding {
-                    column: 0,
-                    end_line: 0,
-                    end_column: 0,
-                    rule: "DF066".into(),
-                    severity: Severity::Warning,
-                    line: i.line,
-                    message: message.to_string(),
-                    roast: "'${!' is bash syntax. Set an explicit Bash SHELL before using it."
-                        .to_string(),
-                });
+                findings.push(finding_at_span(
+                    "DF066",
+                    Severity::Warning,
+                    instruction_substring_span(raw, i, &["${!"]),
+                    message.to_string(),
+                    "'${!' is bash syntax. Set an explicit Bash SHELL before using it.",
+                ));
             }
         }
         if let Some(alias) = &current_alias {
@@ -2990,16 +3319,42 @@ fn rule_bash_syntax_no_shell(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
     findings
 }
 
+fn heredoc_has_bash_interpreter(instruction: &Instruction) -> bool {
+    instruction.heredocs.iter().any(|heredoc| {
+        heredoc.content.lines().next().is_some_and(|line| {
+            let shebang = line.trim();
+            shebang == "#!/bin/bash"
+                || shebang == "#!/usr/bin/bash"
+                || shebang.starts_with("#!/usr/bin/env bash")
+        })
+    })
+}
+
 /// Detect a command word at the start of a shell command or immediately after
 /// a shell control operator/keyword. This deliberately does not match package
 /// names, path components, option values, or group names containing the word.
 fn shell_invokes_command(script: &str, command: &str) -> bool {
+    let script = mask_shell_array_bodies(script);
     let command = regex::escape(command);
     let pattern =
         format!(r"(?:^|[;&|(\n]\s*|\b(?:then|do|if|elif|while|until)\s+|!\s*){command}(?:\s|$)");
     Regex::new(&pattern)
         .expect("escaped command creates a valid regex")
-        .is_match(script)
+        .is_match(&script)
+}
+
+fn mask_shell_array_bodies(script: &str) -> String {
+    let array = Regex::new(r"(?ms)\b[A-Za-z_][A-Za-z0-9_]*=\(\s*.*?^\s*\)")
+        .expect("valid shell array regex");
+    let mut masked = script.as_bytes().to_vec();
+    for matched in array.find_iter(script) {
+        for byte in &mut masked[matched.start()..matched.end()] {
+            if *byte != b'\n' && *byte != b'\r' {
+                *byte = b' ';
+            }
+        }
+    }
+    String::from_utf8(masked).expect("masking preserves UTF-8")
 }
 
 fn command_without_bash_c_scripts(command: &str) -> String {
@@ -3130,6 +3485,11 @@ fn rule_pipefail_missing(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
                 };
             }
             "RUN" if !executes_remote_script(&instruction.command) => {
+                if matches!(shell, ShellPipelineBehavior::Unknown)
+                    && looks_like_powershell(&instruction.command)
+                {
+                    continue;
+                }
                 let (initial_pipefail, metadata_known) = match shell {
                     ShellPipelineBehavior::Unknown => (false, false),
                     ShellPipelineBehavior::Posix { pipefail } => (pipefail, true),
@@ -3184,9 +3544,19 @@ fn unprotected_pipeline_offset(script: &str, initial_pipefail_enabled: bool) -> 
                 && character == '|'
                 && unclosed_command_substitution(&script[..index])
             {
+                if chars.peek().is_some_and(|(_, next)| *next == '|') {
+                    chars.next();
+                    current_word.push_str("||");
+                    continue;
+                }
                 let producer = command_substitution_producer(&script[..index]);
-                let low_value = matches!(producer, Some("yes" | "echo"))
-                    || next_pipeline_executable(&script[index + 1..]) == Some(":");
+                let low_value = matches!(
+                    producer,
+                    Some("yes" | "echo" | "uname" | "dpkg" | "readlink")
+                ) || matches!(
+                    next_pipeline_executable(&script[index + 1..]),
+                    Some(":" | "sha256sum" | "shasum")
+                );
                 if !pipefail_enabled && !low_value {
                     return Some(index);
                 }
@@ -3251,18 +3621,69 @@ fn instruction_character_span(
     logical_offset: usize,
     character: char,
 ) -> SourceSpan {
-    let ordinal = logical[..=logical_offset]
-        .chars()
-        .filter(|candidate| *candidate == character)
-        .count();
+    if character == '|' {
+        let ordinal = shell_pipeline_offsets(logical)
+            .iter()
+            .position(|offset| *offset == logical_offset);
+        return ordinal
+            .and_then(|ordinal| {
+                shell_pipeline_offsets(&instruction.raw)
+                    .get(ordinal)
+                    .copied()
+            })
+            .map(|offset| instruction_match_span(source, instruction, offset, offset + 1))
+            .unwrap_or(instruction.span);
+    }
     instruction
         .raw
         .match_indices(character)
-        .nth(ordinal.saturating_sub(1))
-        .map(|(offset, matched)| {
+        .next()
+        .map_or(instruction.span, |(offset, matched)| {
             instruction_match_span(source, instruction, offset, offset + matched.len())
         })
-        .unwrap_or(instruction.span)
+}
+
+fn shell_pipeline_offsets(script: &str) -> Vec<usize> {
+    let bytes = script.as_bytes();
+    let mut offsets = Vec::new();
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if byte == b'\\' && quote != Some(b'\'') {
+            escaped = true;
+            continue;
+        }
+        if matches!(byte, b'\'' | b'"') {
+            if quote == Some(byte) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(byte);
+            }
+            continue;
+        }
+        if byte == b'|'
+            && quote != Some(b'\'')
+            && bytes.get(index.wrapping_sub(1)) != Some(&b'|')
+            && bytes.get(index + 1) != Some(&b'|')
+        {
+            offsets.push(index);
+        }
+    }
+    offsets
+}
+
+fn looks_like_powershell(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    lower.contains("invoke-webrequest")
+        || lower.contains("invoke-restmethod")
+        || lower.contains("out-file")
+        || lower.contains("write-host")
+        || lower.contains("$env:")
+        || lower.contains("$erroractionpreference")
 }
 
 fn unclosed_command_substitution(before: &str) -> bool {
@@ -3275,7 +3696,7 @@ fn command_substitution_producer(before: &str) -> Option<&str> {
     let open = before.rfind("$(")? + 2;
     before[open..]
         .split([';', '&', '|'])
-        .next_back()?
+        .next()?
         .split_whitespace()
         .find(|word| !word.contains('='))
 }
@@ -3305,10 +3726,22 @@ fn case_pattern_separator(script: &str, pipe: usize) -> bool {
 }
 
 fn pipeline_has_low_value_producer(script: &str, pipe: usize, words: &[String]) -> bool {
-    if matches!(shell_executable(words), Some("yes" | "echo")) {
+    if matches!(
+        command_substitution_producer(&script[..pipe]),
+        Some("yes" | "echo" | "uname" | "dpkg" | "readlink")
+    ) {
         return true;
     }
-    if next_pipeline_executable(&script[pipe + 1..]) == Some(":") {
+    if matches!(
+        shell_executable(words),
+        Some("yes" | "echo" | "uname" | "dpkg" | "readlink")
+    ) {
+        return true;
+    }
+    if matches!(
+        next_pipeline_executable(&script[pipe + 1..]),
+        Some(":" | "sha256sum" | "shasum")
+    ) {
         return true;
     }
     if words.last().is_some_and(|word| word == "}") {
@@ -3412,6 +3845,8 @@ fn rule_yarn_cache_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             (a.contains("yarn install") || a.contains("yarn add"))
                 && !a.contains("yarn cache clean")
                 && !has_language_cache_mount(i, "yarn")
+                && !shell_assignment_value(a, "YARN_CACHE_FOLDER")
+                    .is_some_and(|directory| has_ephemeral_mount_covering(i, &directory))
         })
         .map(|i| Finding {
             column: 0,
@@ -3430,7 +3865,18 @@ fn rule_yarn_cache_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         .collect()
 }
 
-fn rule_wget_no_progress(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+fn shell_assignment_value(command: &str, name: &str) -> Option<String> {
+    Regex::new(&format!(
+        r#"(?:^|\s){}=["']?(?P<value>[^\s"']+)"#,
+        regex::escape(name)
+    ))
+    .expect("escaped variable name creates a valid assignment regex")
+    .captures(command)
+    .and_then(|capture| capture.name("value"))
+    .map(|value| value.as_str().trim_end_matches([';', '\\']).to_string())
+}
+
+fn rule_wget_no_progress(instrs: &[Instruction], raw: &str) -> Vec<Finding> {
     instrs_of(instrs, "RUN")
         .into_iter()
         .filter(|i| {
@@ -3444,19 +3890,17 @@ fn rule_wget_no_progress(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
                     .any(|token| token == "-nv" || token == "--no-verbose")
                 && (a.contains("http://") || a.contains("https://") || a.contains("ftp://"))
         })
-        .map(|i| Finding {
-            column: 0,
-            end_line: 0,
-            end_column: 0,
-            rule: "DF056".into(),
-            severity: Severity::Info,
-            line: i.line,
-            message: "wget without --progress flag produces verbose progress output in build logs"
-                .to_string(),
-            roast: "wget without --progress=dot:giga will spam your build logs with a progress \
+        .map(|i| {
+            finding_at_span(
+                "DF056",
+                Severity::Info,
+                shell_command_span(raw, i, "wget"),
+                "wget without --progress flag produces verbose progress output in build logs"
+                    .to_string(),
+                "wget without --progress=dot:giga will spam your build logs with a progress \
                     bar that looks great locally and fills 50MB of CI log storage. \
-                    Use --progress=dot:giga or -q to stay quiet."
-                .to_string(),
+                    Use --progress=dot:giga or -q to stay quiet.",
+            )
         })
         .collect()
 }
@@ -3498,21 +3942,67 @@ fn is_local_pip_install(command: &str) -> bool {
     let Some(arguments) = pip_install_arguments(command) else {
         return false;
     };
-    let targets = arguments
+    let words = arguments
         .split(['&', '|', ';'])
         .next()
         .unwrap_or_default()
         .split_whitespace()
-        .filter(|argument| !argument.starts_with('-'))
         .collect::<Vec<_>>();
-    !targets.is_empty()
+    let mut targets = Vec::new();
+    let mut skip_option_value = false;
+    let mut dynamic_target = false;
+    for word in words {
+        if skip_option_value {
+            skip_option_value = false;
+            continue;
+        }
+        let argument = word.trim_matches(['\'', '"', '(', ')']);
+        if matches!(argument, "-e" | "--editable") {
+            continue;
+        }
+        if argument.starts_with('$') && !argument.contains('/') {
+            dynamic_target = true;
+            continue;
+        }
+        if argument.starts_with("$(") || argument == "realpath" {
+            continue;
+        }
+        if matches!(
+            argument,
+            "-f" | "--find-links"
+                | "-i"
+                | "--trusted-host"
+                | "--python"
+                | "--target"
+                | "--prefix"
+                | "--root"
+        ) {
+            skip_option_value = true;
+            continue;
+        }
+        if argument == "--extra-index-url" || argument == "--index-url" {
+            break;
+        }
+        if argument.starts_with('-') || argument.contains('=') && !argument.contains('/') {
+            continue;
+        }
+        targets.push(argument);
+    }
+    (dynamic_target || !targets.is_empty())
         && targets.iter().all(|argument| {
             matches!(*argument, "." | "./")
                 || argument.starts_with("./")
                 || argument.starts_with("../")
                 || argument.starts_with('/')
+                || argument.starts_with("~/")
                 || argument.starts_with("file:")
-                || (argument.ends_with(".whl") && !argument.contains("://"))
+                || (!argument.contains("://")
+                    && (argument.contains('/')
+                        || argument.contains('*')
+                        || argument.ends_with(".whl")
+                        || argument.ends_with(".tar.gz")
+                        || argument.ends_with(".tgz")
+                        || argument.ends_with(".zip")))
         })
 }
 
@@ -3645,6 +4135,7 @@ fn rule_go_install_version(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
 
                 executable == Some("go")
                     && words.next() == Some("install")
+                    && words.clone().next() != Some("tool")
                     && !segment.contains('@')
             })
         })
@@ -3671,7 +4162,7 @@ fn rule_copy_multi_arg_slash(instrs: &[Instruction], _raw: &str) -> Vec<Finding>
             let args = instruction_operands(i);
             if args.len() > 2 {
                 let dest = args.last().unwrap_or(&"");
-                !dest.ends_with('/')
+                !dest.ends_with('/') && !matches!(*dest, "." | "./")
             } else {
                 false
             }
@@ -3865,6 +4356,8 @@ fn rule_zypper_clean(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
             (a.contains("zypper install") || a.contains("zypper in "))
                 && !a.contains("zypper clean")
                 && !a.contains("zypper cc")
+                && !removes_cache_path(a, "/var/cache/zypp")
+                && !removes_cache_path(a, "/var/cache/zypper")
         })
         .map(|i| Finding {
             column: 0,

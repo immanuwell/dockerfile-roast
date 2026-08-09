@@ -433,7 +433,7 @@ droast completion fish | source
   DF031    INFO     performance                        Avoid npm install without ci/--production for prod images
   DF032    INFO     maintainability,reliability        Set PYTHONDONTWRITEBYTECODE and PYTHONUNBUFFERED for Python images
   DF033    INFO     performance,security               Use an effective .dockerignore for each build context
-  DF034    ERROR    security                           Avoid chmod 777 — overly permissive
+  DF034    ERROR    security                           Avoid persistent world-writable chmod modes
   DF035    INFO     maintainability,reliability        Avoid using curl without --fail flags
   DF036    INFO     maintainability,reliability        Avoid Dockerfile with no CMD or ENTRYPOINT
   DF015    ERROR    correctness,reliability            Avoid using apt-get without -y flag
