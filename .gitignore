@@ -1,2 +1,7 @@
 /target
 /docs/pkg
+
+# Dockerfiles rehydrated by corpus/rehydrate.sh. They stay under their
+# upstream licenses and are never redistributed from this repository.
+/corpus/files/
+/corpus/results/
