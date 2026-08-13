@@ -850,25 +850,92 @@ pub fn ignored_copy_sources(
 ) -> std::io::Result<Vec<(usize, String)>> {
     let Some(ignorefile) = effective_ignorefile(dockerfile, context, engine) else { return Ok(Vec::new()); };
     let mut builder = GitignoreBuilder::new(context);
-    builder.add(ignorefile);
+    builder.add(&ignorefile);
     let matcher = builder.build().map_err(std::io::Error::other)?;
+    let root_excluded = context_root_excluded(&std::fs::read_to_string(&ignorefile)?);
     let content = std::fs::read_to_string(dockerfile)?;
     let document = crate::parser::parse_document(&content);
     let mut ignored = Vec::new();
     for instruction in document.instructions.iter().filter(|instruction| matches!(instruction.instruction.as_str(), "COPY" | "ADD")) {
+        // Sources of a staged or named-context copy never come from the build
+        // context, so the ignore file says nothing about them.
+        if instruction.words.iter().any(|word| word.value.to_ascii_lowercase().starts_with("--from=")) {
+            continue;
+        }
         let words = instruction.words.iter().filter(|word| !word.value.starts_with("--")).collect::<Vec<_>>();
         let source_count = words.len().saturating_sub(1);
         for source in words.into_iter().take(source_count) {
-            if source.value.contains("://") || source.value.contains('*') || source.value.contains('?') || source.value.starts_with('/') {
+            if source.value.contains("://") || source.value.contains('*') || source.value.contains('?') {
                 continue;
             }
-            let candidate = context.join(&source.value);
+            let cleaned = clean_context_path(&source.value);
+            if cleaned == "." || cleaned == "/" {
+                // The build-context root is not a regular entry that a pattern
+                // can exclude; only a catch-all leaves nothing to copy.
+                if root_excluded {
+                    ignored.push((instruction.line, source.value.clone()));
+                }
+                continue;
+            }
+            if cleaned.starts_with('/') {
+                continue;
+            }
+            let candidate = context.join(&cleaned);
             if matcher.matched_path_or_any_parents(&candidate, false).is_ignore() {
                 ignored.push((instruction.line, source.value.clone()));
             }
         }
     }
     Ok(ignored)
+}
+
+/// Whether the ignore file excludes every entry at the build-context root.
+/// Docker cleans each pattern before matching, so `*`, `/*`, `./*`, and `*/`
+/// are the same catch-all, while any negation can bring root entries back.
+fn context_root_excluded(content: &str) -> bool {
+    let mut catch_all = false;
+    for (index, line) in content.lines().enumerate() {
+        let line = if index == 0 { line.trim_start_matches('\u{feff}') } else { line };
+        let pattern = line.trim();
+        if pattern.is_empty() || pattern.starts_with('#') {
+            continue;
+        }
+        if pattern.starts_with('!') {
+            return false;
+        }
+        if matches!(clean_context_path(pattern).trim_start_matches('/'), "*" | "**" | "**/*") {
+            catch_all = true;
+        }
+    }
+    catch_all
+}
+
+/// Lexically clean a build-context path the way Docker does before matching it,
+/// collapsing `.` and `..` components and redundant separators.
+fn clean_context_path(value: &str) -> String {
+    let rooted = value.starts_with('/');
+    let mut parts: Vec<&str> = Vec::new();
+    for part in value.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if parts.last().is_some_and(|last| *last != "..") {
+                    parts.pop();
+                } else if !rooted {
+                    parts.push("..");
+                }
+            }
+            part => parts.push(part),
+        }
+    }
+    let joined = parts.join("/");
+    if rooted {
+        format!("/{joined}")
+    } else if joined.is_empty() {
+        ".".to_string()
+    } else {
+        joined
+    }
 }
 
 /// Whether the effective ignore file excludes the common broad-copy hazards
@@ -1117,7 +1184,10 @@ fn relative_to_current_directory(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{has_exclusion_pattern, interpolate_path, is_dockerfile_name};
+    use super::{
+        clean_context_path, context_root_excluded, has_exclusion_pattern, interpolate_path,
+        is_dockerfile_name,
+    };
     use std::collections::HashMap;
     use std::path::Path;
 
@@ -1142,6 +1212,37 @@ mod tests {
             "Containerfile.release.dockerignore",
         ] {
             assert!(!is_dockerfile_name(Path::new(name)), "{name}");
+        }
+    }
+
+    #[test]
+    fn context_paths_are_cleaned_like_docker() {
+        for (value, cleaned) in [
+            (".", "."),
+            ("./", "."),
+            ("./.", "."),
+            ("", "."),
+            ("/", "/"),
+            ("./src", "src"),
+            ("src/", "src"),
+            ("./src//app/", "src/app"),
+            ("src/../app", "app"),
+            ("../app", "../app"),
+            ("./*", "*"),
+            ("*/", "*"),
+            ("/*", "/*"),
+        ] {
+            assert_eq!(clean_context_path(value), cleaned, "{value}");
+        }
+    }
+
+    #[test]
+    fn only_catch_all_patterns_exclude_the_context_root() {
+        for content in ["*\n", "**\n", "**/*\n", "/*\n", "./*\n", "*/\n", "# c\nsrc\n*\n"] {
+            assert!(context_root_excluded(content), "{content:?}");
+        }
+        for content in [".*\n", ".\n", "src\n", "*.txt\n", "**/*.txt\n", "*\n!src\n", ""] {
+            assert!(!context_root_excluded(content), "{content:?}");
         }
     }
 

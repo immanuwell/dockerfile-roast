@@ -513,6 +513,79 @@ fn copy_ignored_file_uses_the_effective_build_context_ignore_file() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// The build-context root is not an entry that a pattern can exclude, so only a
+/// catch-all that empties the root makes `COPY .` copy nothing. This mirrors
+/// BuildKit's `CopyIgnoredFile` behaviour.
+#[test]
+fn copy_ignored_file_treats_the_build_context_root_as_a_root() {
+    for (name, ignore, source, expected) in [
+        ("root-dotfiles", ".*\n", ".", 0),
+        ("root-dot-pattern", ".\n", ".", 0),
+        ("root-star", "*\n", ".", 1),
+        ("root-double-star", "**\n", ".", 1),
+        ("root-double-star-slash", "**/*\n", ".", 1),
+        ("root-anchored-star", "/*\n", ".", 1),
+        ("root-star-negated", "*\n!src\n", ".", 0),
+        ("root-trailing-slash", ".*\n", "./", 0),
+        ("root-relative-child", ".*\n", "./src", 0),
+        ("root-relative-dotfile", ".*\n", "./.env", 1),
+        ("root-child-trailing-slash", "src\n", "src/", 1),
+    ] {
+        let root = policy_fixture(name);
+        let dockerfile = root.join("Dockerfile");
+        std::fs::write(&dockerfile, format!("FROM scratch\nCOPY {source} /out\n")).unwrap();
+        std::fs::write(root.join(".dockerignore"), ignore).unwrap();
+
+        let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+            .args([
+                dockerfile.to_str().unwrap(),
+                "--only", "DF077",
+                "--format", "json",
+                "--no-fail",
+                "--check-dockerignore=false",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            result["findings"].as_array().unwrap().len(),
+            expected,
+            "{name}: ignore {ignore:?} with source {source:?} produced {result}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// Sources of a staged copy come from another stage, so the build-context
+/// ignore file must not be applied to them even when they are relative.
+#[test]
+fn copy_from_stage_ignores_relative_sources_in_the_ignore_file() {
+    let root = policy_fixture("copy-from-stage-relative");
+    let dockerfile = root.join("Dockerfile");
+    std::fs::write(
+        &dockerfile,
+        "FROM alpine:3.20 AS build\nWORKDIR /src\nFROM scratch\nCOPY --from=build dist /out\n",
+    )
+    .unwrap();
+    std::fs::write(root.join(".dockerignore"), "dist\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--only", "DF077",
+            "--format", "json",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(result["findings"].as_array().unwrap().is_empty(), "{result}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn copy_from_stage_is_not_checked_against_the_build_context_ignore_file() {
     let root = policy_fixture("copy-from-stage");
