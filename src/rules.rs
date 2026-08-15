@@ -791,12 +791,29 @@ fn rule_legacy_key_value_format(instrs: &[Instruction], _raw: &str) -> Vec<Findi
 }
 
 fn rule_redundant_target_platform(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
-    instrs_of(instrs, "FROM").into_iter().flat_map(|instruction| instruction.flags.iter().filter_map(|flag| {
-        (flag.name.eq_ignore_ascii_case("platform") && flag.value.as_deref() == Some("$TARGETPLATFORM"))
-            .then(|| finding_at_span("DF083", Severity::Warning, flag.span,
-                "FROM --platform=$TARGETPLATFORM is redundant because it is the default".into(),
-                "That platform flag repeats Docker's default. The Dockerfile is narrating what Docker already knows."))
-    }).collect::<Vec<_>>()).collect()
+    instrs_of(instrs, "FROM")
+        .into_iter()
+        .flat_map(|instruction| {
+            instruction
+                .flags
+                .iter()
+                .filter(|flag| {
+                    flag.name.eq_ignore_ascii_case("platform")
+                        && flag.value.as_deref() == Some("$TARGETPLATFORM")
+                })
+                .map(|flag| {
+                    finding_at_span(
+                        "DF083",
+                        Severity::Warning,
+                        flag.span,
+                        "FROM --platform=$TARGETPLATFORM is redundant because it is the default"
+                            .into(),
+                        "That platform flag repeats Docker's default. The Dockerfile is narrating what Docker already knows.",
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 fn rule_reserved_stage_name(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
@@ -854,11 +871,31 @@ fn known_build_variable(name: &str) -> bool {
 
 fn rule_undefined_arg_in_from(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     let declared = global_args(instrs);
-    instrs_of(instrs, "FROM").into_iter().flat_map(|instruction| instruction.variables.iter().filter_map(|variable| {
-        (!declared.contains(&variable.name) && !known_build_variable(&variable.name)).then(|| finding_at_span("DF086", Severity::Error, variable.span,
-            format!("FROM references undefined ARG '{}'; declare it before the first FROM", variable.name),
-            "This FROM variable has no global ARG declaration. Docker cannot build an image from vibes."))
-    }).collect::<Vec<_>>()).collect()
+    instrs_of(instrs, "FROM")
+        .into_iter()
+        .flat_map(|instruction| {
+            instruction
+                .variables
+                .iter()
+                .filter(|variable| {
+                    !declared.contains(&variable.name)
+                        && !known_build_variable(&variable.name)
+                })
+                .map(|variable| {
+                    finding_at_span(
+                        "DF086",
+                        Severity::Error,
+                        variable.span,
+                        format!(
+                            "FROM references undefined ARG '{}'; declare it before the first FROM",
+                            variable.name
+                        ),
+                        "This FROM variable has no global ARG declaration. Docker cannot build an image from vibes.",
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 fn rule_undefined_variable(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {

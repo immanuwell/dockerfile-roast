@@ -1,4 +1,8 @@
-use dockerfile_roast::{config, hadolint, hadolint_compat, linter, messages, output, repository, rules, shellcheck};
+use dockerfile_roast::{
+    config, fixes, hadolint, hadolint_compat, linter, messages, output, repository, rules,
+    shellcheck,
+};
+use std::collections::HashSet;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process;
@@ -196,6 +200,14 @@ struct Cli {
     #[arg(short, long, value_name = "FORMAT")]
     format: Option<String>,
 
+    /// Apply safe deterministic fixes; optionally limit them to comma-separated rule IDs
+    #[arg(long, value_name = "RULE,...", num_args = 0..=1, default_missing_value = "all", conflicts_with = "hadolint_compatible")]
+    fix: Option<String>,
+
+    /// Plan fixes without changing files
+    #[arg(long, requires = "fix")]
+    dry_run: bool,
+
     /// Accept Hadolint configuration, flags, environment variables, rule IDs, and output formats
     #[arg(long)]
     hadolint_compatible: bool,
@@ -209,7 +221,12 @@ struct Cli {
     file_path_in_report: Option<PathBuf>,
 
     /// Write Hadolint-compatible output to this file
-    #[arg(short = 'o', long, value_name = "PATH", requires = "hadolint_compatible")]
+    #[arg(
+        short = 'o',
+        long,
+        value_name = "PATH",
+        requires = "hadolint_compatible"
+    )]
     output: Vec<PathBuf>,
 
     /// Do not colorize Hadolint-compatible terminal output
@@ -257,7 +274,12 @@ struct Cli {
     disable_ignore_pragma: bool,
 
     /// Hadolint failure threshold: error, warning, info, style, ignore, or none
-    #[arg(short = 't', long, value_name = "THRESHOLD", requires = "hadolint_compatible")]
+    #[arg(
+        short = 't',
+        long,
+        value_name = "THRESHOLD",
+        requires = "hadolint_compatible"
+    )]
     failure_threshold: Option<String>,
 
     /// Minimum severity to report [default: info] [possible values: info, warning, error]
@@ -322,6 +344,7 @@ fn main() -> Result<()> {
     // version flag uses -V. Translate only in compatibility mode so normal
     // droast invocations keep their established -V behavior.
     let mut args = std::env::args_os().collect::<Vec<_>>();
+    normalize_fix_args(&mut args);
     let compatibility = args.iter().any(|arg| arg == "--hadolint-compatible");
     if compatibility {
         for arg in &mut args {
@@ -333,6 +356,13 @@ fn main() -> Result<()> {
         }
     }
     let cli = Cli::from_arg_matches(&command.get_matches_from(args))?;
+
+    if cli.fix.is_some() && cli.command.is_some() {
+        anyhow::bail!("--fix cannot be combined with a subcommand");
+    }
+    if cli.fix.is_some() && cli.list_rules {
+        anyhow::bail!("--fix cannot be combined with --list-rules");
+    }
 
     match cli.command {
         Some(Commands::Completion { shell }) => {
@@ -348,7 +378,9 @@ fn main() -> Result<()> {
         Some(Commands::Init { from_hadolint }) => {
             return cmd_init(from_hadolint.as_deref());
         }
-        Some(Commands::Messages { command }) => return cmd_messages(command, cli.messages.as_deref()),
+        Some(Commands::Messages { command }) => {
+            return cmd_messages(command, cli.messages.as_deref())
+        }
         None => {}
     }
 
@@ -380,6 +412,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    let fix_rules = normalize_fix_request(&cli)?;
+
     if cli.list_rules {
         if cli.format.as_deref() == Some("json") {
             print_rule_list_json();
@@ -402,20 +436,26 @@ fn main() -> Result<()> {
     let engine = cli
         .engine
         .map(Into::into)
-        .unwrap_or(repository::ContainerEngine::parse(cfg.workflow.engine.as_deref())?);
+        .unwrap_or(repository::ContainerEngine::parse(
+            cfg.workflow.engine.as_deref(),
+        )?);
 
     let mut global_settings = cfg.settings.clone();
     if cli.preset.is_some() {
         global_settings.merge(config::preset_settings(cli.preset.as_deref())?);
     }
 
-    let format: OutputFormat = cli
-        .format
-        .as_deref()
-        .map(parse_cli_format)
-        .transpose()?
-        .or_else(|| parse_format(global_settings.format.as_deref()))
-        .unwrap_or(OutputFormat::Terminal);
+    let diff_format = cli.format.as_deref() == Some("diff");
+    let format: OutputFormat = if diff_format {
+        OutputFormat::Terminal
+    } else {
+        cli.format
+            .as_deref()
+            .map(parse_cli_format)
+            .transpose()?
+            .or_else(|| parse_format(global_settings.format.as_deref()))
+            .unwrap_or(OutputFormat::Terminal)
+    };
 
     // --no-roast on CLI always wins; config can also enable it.
     let no_roast = cli.no_roast || global_settings.no_roast.unwrap_or(false);
@@ -450,6 +490,18 @@ fn main() -> Result<()> {
         exit(1);
     }
 
+    if let Some(selected_rules) = &fix_rules {
+        validate_fix_cli(&cli, format, diff_format)?;
+        let prepared = prepare_fixes(&files, &cfg, &cli, shellcheck_mode, engine, selected_rules)?;
+        if cli.dry_run {
+            print_fix_preview(&prepared, format, diff_format)?;
+            return Ok(());
+        }
+        apply_prepared_fixes(&prepared)?;
+    } else if diff_format {
+        anyhow::bail!("--format diff requires --fix --dry-run");
+    }
+
     let mut any_error = false;
     let mut total_findings = 0usize;
 
@@ -458,7 +510,13 @@ fn main() -> Result<()> {
         let mut all_results: Vec<linter::LintResult> = Vec::new();
         for file in &files {
             let settings = effective_settings(&cfg, &cli, &file.dockerfile)?;
-            let opts = lint_options(&settings, &cli, shellcheck_mode, &cfg.shellcheck.exclude, engine)?;
+            let opts = lint_options(
+                &settings,
+                &cli,
+                shellcheck_mode,
+                &cfg.shellcheck.exclude,
+                engine,
+            )?;
             let file_no_fail = cli.no_fail || settings.no_fail.unwrap_or(no_fail);
             match lint_one(file, &opts) {
                 Ok(mut result) => {
@@ -487,7 +545,10 @@ fn main() -> Result<()> {
             .map(|r| (r.file.as_str(), r.findings.as_slice()))
             .collect();
         if cli.write_baseline {
-            dockerfile_roast::baseline::write(cli.baseline.as_ref().expect("clap requires --baseline"), &pairs)?;
+            dockerfile_roast::baseline::write(
+                cli.baseline.as_ref().expect("clap requires --baseline"),
+                &pairs,
+            )?;
         }
         if format == OutputFormat::Sarif {
             output::print_sarif(&pairs);
@@ -497,7 +558,13 @@ fn main() -> Result<()> {
     } else {
         for file in &files {
             let settings = effective_settings(&cfg, &cli, &file.dockerfile)?;
-            let opts = lint_options(&settings, &cli, shellcheck_mode, &cfg.shellcheck.exclude, engine)?;
+            let opts = lint_options(
+                &settings,
+                &cli,
+                shellcheck_mode,
+                &cfg.shellcheck.exclude,
+                engine,
+            )?;
             let file_no_roast = cli.no_roast || settings.no_roast.unwrap_or(no_roast);
             let file_no_fail = cli.no_fail || settings.no_fail.unwrap_or(no_fail);
             match lint_one(file, &opts) {
@@ -516,10 +583,20 @@ fn main() -> Result<()> {
                         });
                     }
                     total_findings += result.findings.len();
-                    if cli.only_new && finding_count_before_filtering > 0 && result.findings.is_empty() && format == OutputFormat::Terminal {
+                    if cli.only_new
+                        && finding_count_before_filtering > 0
+                        && result.findings.is_empty()
+                        && format == OutputFormat::Terminal
+                    {
                         output::print_no_new_findings(&result.file);
                     } else {
-                        print_findings(&result.file, &result.findings, format, file_no_roast, &message_overrides);
+                        print_findings(
+                            &result.file,
+                            &result.findings,
+                            format,
+                            file_no_roast,
+                            &message_overrides,
+                        );
                     }
                 }
                 Err(e) => {
@@ -534,12 +611,24 @@ fn main() -> Result<()> {
             let mut baseline_results = Vec::new();
             for file in &files {
                 let settings = effective_settings(&cfg, &cli, &file.dockerfile)?;
-                let opts = lint_options(&settings, &cli, shellcheck_mode, &cfg.shellcheck.exclude, engine)?;
+                let opts = lint_options(
+                    &settings,
+                    &cli,
+                    shellcheck_mode,
+                    &cfg.shellcheck.exclude,
+                    engine,
+                )?;
                 let result = lint_one(file, &opts)?;
                 baseline_results.push(result);
             }
-            let pairs = baseline_results.iter().map(|result| (result.file.as_str(), result.findings.as_slice())).collect::<Vec<_>>();
-            dockerfile_roast::baseline::write(cli.baseline.as_ref().expect("clap requires --baseline"), &pairs)?;
+            let pairs = baseline_results
+                .iter()
+                .map(|result| (result.file.as_str(), result.findings.as_slice()))
+                .collect::<Vec<_>>();
+            dockerfile_roast::baseline::write(
+                cli.baseline.as_ref().expect("clap requires --baseline"),
+                &pairs,
+            )?;
         }
         if files.len() > 1 && format == OutputFormat::Terminal {
             println!(
@@ -739,7 +828,12 @@ fn cmd_messages(command: MessageCommands, explicit: Option<&std::path::Path>) ->
                 .find(|candidate| candidate.id == id)
                 .ok_or_else(|| anyhow::anyhow!("Unknown rule ID '{}'", rule))?;
             let overrides = messages::MessageOverrides::load(explicit)?;
-            println!("{} {} — {}", rule.id.bold(), rule.severity, rule.description);
+            println!(
+                "{} {} — {}",
+                rule.id.bold(),
+                rule.severity,
+                rule.description
+            );
             println!("Mode: {}", overrides.mode);
             if let Some(custom) = overrides.get(rule.id) {
                 println!("Message: {}", custom.message);
@@ -916,6 +1010,201 @@ fn lint_one(
     } else {
         linter::lint_file_with_context(&input.dockerfile, &input.context, opts)
     }
+}
+
+#[derive(Debug)]
+struct PreparedFixes {
+    path: PathBuf,
+    source: String,
+    plan: fixes::FixPlan,
+}
+
+fn normalize_fix_request(cli: &Cli) -> anyhow::Result<Option<HashSet<String>>> {
+    let Some(value) = cli.fix.clone() else {
+        return Ok(None);
+    };
+    if value == "all" {
+        return Ok(Some(HashSet::new()));
+    }
+
+    let rules = value
+        .split(',')
+        .map(str::trim)
+        .filter(|rule| !rule.is_empty())
+        .map(str::to_ascii_uppercase)
+        .collect::<HashSet<_>>();
+    if rules.is_empty() {
+        anyhow::bail!("--fix requires at least one rule ID when a value is supplied");
+    }
+    for rule in &rules {
+        if !fixes::SAFE_FIX_RULES.contains(&rule.as_str()) {
+            anyhow::bail!(
+                "Rule '{}' has no safe deterministic fixer; available fixers: {}",
+                rule,
+                fixes::SAFE_FIX_RULES.join(", ")
+            );
+        }
+    }
+    Ok(Some(rules))
+}
+
+/// clap cannot distinguish the optional value in `--fix [RULE,...]` from the
+/// first positional path. A non-rule token after `--fix` is unambiguously a
+/// path, so make the implicit `all` value explicit before argument parsing.
+fn normalize_fix_args(args: &mut [std::ffi::OsString]) {
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--fix" {
+            let next_is_path = match args.get(index + 1) {
+                Some(argument) => match argument.to_str() {
+                    Some(argument) => !argument.starts_with('-') && !looks_like_rule_list(argument),
+                    None => true,
+                },
+                None => false,
+            };
+            if next_is_path {
+                args[index] = "--fix=all".into();
+            }
+        }
+        index += 1;
+    }
+}
+
+fn looks_like_rule_list(value: &str) -> bool {
+    value.split(',').all(|value| {
+        let bytes = value.trim().as_bytes();
+        bytes.len() == 5
+            && bytes[..2].iter().all(u8::is_ascii_alphabetic)
+            && bytes[2..].iter().all(u8::is_ascii_digit)
+    })
+}
+
+fn validate_fix_cli(cli: &Cli, format: OutputFormat, diff_format: bool) -> anyhow::Result<()> {
+    if cli.baseline.is_some() || cli.write_baseline || cli.only_new {
+        anyhow::bail!("--fix cannot be combined with baseline operations");
+    }
+    if cli
+        .files
+        .iter()
+        .any(|path| path == std::path::Path::new("-"))
+    {
+        anyhow::bail!("--fix cannot rewrite stdin; pass a regular Dockerfile path");
+    }
+    for path in &cli.files {
+        if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+            anyhow::bail!(
+                "Refusing to rewrite symlink '{}'; pass the resolved file explicitly",
+                path.display()
+            );
+        }
+    }
+    if diff_format && !cli.dry_run {
+        anyhow::bail!("--format diff requires --fix --dry-run");
+    }
+    if cli.dry_run
+        && matches!(
+            format,
+            OutputFormat::Github | OutputFormat::Compact | OutputFormat::Sarif
+        )
+    {
+        anyhow::bail!(
+            "--fix --dry-run supports terminal, diff, or json output; got {:?}",
+            format
+        );
+    }
+    Ok(())
+}
+
+fn prepare_fixes(
+    inputs: &[repository::BuildInput],
+    config: &DroastConfig,
+    cli: &Cli,
+    shellcheck_mode: shellcheck::Mode,
+    engine: repository::ContainerEngine,
+    selected_rules: &HashSet<String>,
+) -> anyhow::Result<Vec<PreparedFixes>> {
+    let mut seen = HashSet::new();
+    let mut prepared = Vec::new();
+    for input in inputs {
+        if !seen.insert(input.dockerfile.clone()) {
+            continue;
+        }
+        fixes::validate_rewrite_target(&input.dockerfile)?;
+        let source = std::fs::read_to_string(&input.dockerfile).map_err(|error| {
+            anyhow::anyhow!("Failed to read '{}': {error}", input.dockerfile.display())
+        })?;
+        let settings = effective_settings(config, cli, &input.dockerfile)?;
+        let opts = lint_options(
+            &settings,
+            cli,
+            shellcheck_mode,
+            &config.shellcheck.exclude,
+            engine,
+        )?;
+        let filename = input.dockerfile.display().to_string();
+        let result = linter::lint_content(&source, &filename, &opts);
+        let plan = fixes::plan(&filename, &source, &result.findings, selected_rules)?;
+        prepared.push(PreparedFixes {
+            path: input.dockerfile.clone(),
+            source,
+            plan,
+        });
+    }
+    Ok(prepared)
+}
+
+fn print_fix_preview(
+    prepared: &[PreparedFixes],
+    format: OutputFormat,
+    diff_format: bool,
+) -> anyhow::Result<()> {
+    if diff_format {
+        for item in prepared {
+            let applied = fixes::apply(&item.source, &item.plan)?;
+            print!(
+                "{}",
+                fixes::unified_diff(&item.plan.file, &item.source, &applied.content)
+            );
+        }
+        return Ok(());
+    }
+    match format {
+        OutputFormat::Json => {
+            if let [item] = prepared {
+                println!("{}", serde_json::to_string_pretty(&item.plan)?);
+            } else {
+                let plans = prepared.iter().map(|item| &item.plan).collect::<Vec<_>>();
+                println!("{}", serde_json::to_string_pretty(&plans)?);
+            }
+        }
+        OutputFormat::Terminal => {
+            for item in prepared {
+                println!(
+                    "{}: {} safe fix(es), {} edit(s) would be applied",
+                    item.path.display(),
+                    item.plan.fixes.len(),
+                    item.plan.edit_count()
+                );
+            }
+        }
+        _ => unreachable!("unsupported fix preview format was validated earlier"),
+    }
+    Ok(())
+}
+
+fn apply_prepared_fixes(prepared: &[PreparedFixes]) -> anyhow::Result<()> {
+    for item in prepared {
+        let applied = fixes::apply_file(&item.path, &item.plan)?;
+        if applied.edit_count > 0 {
+            eprintln!(
+                "Applied {} safe fix(es) ({} edit(s)) to {}",
+                applied.fix_count,
+                applied.edit_count,
+                item.path.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 fn print_rule_list() {

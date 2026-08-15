@@ -259,6 +259,7 @@ fn boolean(mapping: &Mapping, key: &str) -> anyhow::Result<Option<bool>> {
         .transpose()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render(
     skip: &BTreeSet<String>,
     overrides: &BTreeMap<String, String>,

@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/immanuwell/dockerfile-roast/blob/main/schemas/droast-fix-plan-v1.schema.json",
+  "title": "droast fix plan protocol v1",
+  "oneOf": [
+    { "$ref": "#/$defs/plan" },
+    {
+      "type": "array",
+      "items": { "$ref": "#/$defs/plan" }
+    }
+  ],
+  "$defs": {
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "column"],
+      "properties": {
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "edit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start_byte",
+        "end_byte",
+        "start",
+        "end",
+        "original",
+        "replacement"
+      ],
+      "properties": {
+        "start_byte": { "type": "integer", "minimum": 0 },
+        "end_byte": { "type": "integer", "minimum": 0 },
+        "start": { "$ref": "#/$defs/position" },
+        "end": { "$ref": "#/$defs/position" },
+        "original": { "type": "string" },
+        "replacement": { "type": "string" }
+      }
+    },
+    "impact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["behavioral", "syntax", "cache"],
+      "properties": {
+        "behavioral": { "$ref": "#/$defs/impactValue" },
+        "syntax": { "$ref": "#/$defs/impactValue" },
+        "cache": { "$ref": "#/$defs/impactValue" }
+      }
+    },
+    "impactValue": {
+      "type": "string",
+      "enum": ["none", "formatting", "semantics_preserving", "may_invalidate"]
+    },
+    "fix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "rule",
+        "applicability",
+        "title",
+        "rationale",
+        "source_hash",
+        "impact",
+        "edits"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "integer", "minimum": 1 },
+        "rule": { "type": "string", "pattern": "^DF[0-9]{3}$" },
+        "applicability": {
+          "type": "string",
+          "enum": ["safe", "review", "none"]
+        },
+        "title": { "type": "string", "minLength": 1 },
+        "rationale": { "type": "string", "minLength": 1 },
+        "source_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "impact": { "$ref": "#/$defs/impact" },
+        "edits": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/edit" }
+        }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "file", "source_hash", "fixes"],
+      "properties": {
+        "protocol_version": { "const": 1 },
+        "file": { "type": "string", "minLength": 1 },
+        "source_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "fixes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/fix" }
+        }
+      }
+    }
+  }
+}

@@ -162,11 +162,44 @@ droast --format github Dockerfile    # github actions annotations
 droast --format json Dockerfile      # machine-readable
 droast --format compact Dockerfile   # one line per finding
 droast --format sarif Dockerfile     # SARIF 2.1.0 for GitHub Advanced Security / IDEs
+
+# preview and apply deterministic fixes
+droast --fix --dry-run --format diff Dockerfile
+droast --fix Dockerfile
+droast --fix DF076,DF079 Dockerfile
 ```
 
 When given a directory—or no path at all—droast recursively discovers `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `*.dockerfile`, `Containerfile`, and `Containerfile.*`. It also reads Compose YAML and Docker Bake HCL/JSON files to find non-standard Dockerfile paths and their declared build contexts. In Podman mode, it additionally follows Quadlet `.build`/`.kube` units and local-image `*.kube.yaml` layouts. Repository ignore rules are respected, while hidden project directories such as `.devcontainer` remain discoverable.
 
 For `DF033`, Docker mode uses the effective ignore file Docker would use: `<Dockerfile>.dockerignore` beside the Dockerfile takes precedence over `.dockerignore` at the build-context root. Podman mode instead prefers `.containerignore`, then falls back to `.dockerignore`. Select it with `--engine podman` or `[workflow] engine = "podman"`. Missing, empty, comment-only, and negation-only ignore files are reported; use `--check-ignorefile=false` to disable this context check.
+
+## safe fixes
+
+Fixing is opt-in. `--fix` currently changes only four mechanical findings:
+
+| rule | deterministic change |
+|---|---|
+| `DF076` | Match instruction keywords to the file's first established upper- or lowercase convention |
+| `DF078` | Lowercase literal `TCP` and `UDP` protocol suffixes in `EXPOSE` |
+| `DF079` | Match the case-insensitive `AS` keyword to an unambiguously upper- or lowercase `FROM` |
+| `DF083` | Remove the exact redundant `FROM --platform=$TARGETPLATFORM` flag |
+
+Preview the exact patch before changing anything:
+
+```bash
+droast --fix --dry-run --format diff .
+```
+
+Apply every available safe fix, or select particular fixers:
+
+```bash
+droast --fix Dockerfile
+droast --fix DF076,DF079 Dockerfile
+```
+
+Only reported findings are eligible, so configuration, `--only`, `--skip`, severity filtering, and inline suppressions are respected. Ambiguous casing and non-literal protocols are left unchanged. Files are hash-checked, edits must not overlap, and regular files are replaced atomically with their permissions preserved. Stdin, symlinks, and hard-linked files are deliberately not rewritten. After applying fixes, droast lints the updated files and bases its exit status on the findings that remain.
+
+For tooling, `droast --fix --dry-run --format json` emits the versioned fix protocol with applicability, stable fix ID and version, source hash, impact metadata, original text, replacement text, zero-based UTF-8 byte ranges, and one-based line/column positions. See [safe deterministic fixes](DOCS.md#safe-deterministic-fixes) for the complete contract and refusal behavior.
 
 ## configuration
 

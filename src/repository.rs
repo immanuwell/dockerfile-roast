@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use hcl::eval::{Context, Evaluate};
 use hcl::{BlockLabel, Body, Expression, Value as HclValue};
-use ignore::WalkBuilder;
 use ignore::gitignore::GitignoreBuilder;
+use ignore::WalkBuilder;
 use serde_yaml::Value as YamlValue;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,7 +69,12 @@ pub fn discover(requested: &[PathBuf], engine: ContainerEngine) -> Discovery {
                     .push(format!("invalid path pattern {pattern:?}: {error}")),
             }
         } else {
-            discover_path(&requested_path, engine, &mut inputs, &mut discovery.warnings);
+            discover_path(
+                &requested_path,
+                engine,
+                &mut inputs,
+                &mut discovery.warnings,
+            );
         }
     }
 
@@ -391,7 +396,10 @@ fn discover_quadlet_build(
     let content = match std::fs::read_to_string(unit) {
         Ok(content) => content,
         Err(error) => {
-            warnings.push(format!("cannot read Quadlet build unit '{}': {error}", unit.display()));
+            warnings.push(format!(
+                "cannot read Quadlet build unit '{}': {error}",
+                unit.display()
+            ));
             return;
         }
     };
@@ -403,7 +411,11 @@ fn discover_quadlet_build(
     let working_directory = quadlet_values(&content, "Build", "SetWorkingDirectory")
         .into_iter()
         .last()
-        .or_else(|| quadlet_values(&content, "Service", "WorkingDirectory").into_iter().last());
+        .or_else(|| {
+            quadlet_values(&content, "Service", "WorkingDirectory")
+                .into_iter()
+                .last()
+        });
 
     if files.is_empty() {
         let Some(context) = quadlet_context(base, None, working_directory.as_deref()) else {
@@ -440,7 +452,8 @@ fn discover_quadlet_build(
             ));
             continue;
         };
-        let Some(context) = quadlet_context(base, Some(&dockerfile), working_directory.as_deref()) else {
+        let Some(context) = quadlet_context(base, Some(&dockerfile), working_directory.as_deref())
+        else {
             warnings.push(format!(
                 "Quadlet build unit '{}' has a non-local build context",
                 unit.display()
@@ -459,7 +472,10 @@ fn discover_quadlet_kube(
     let content = match std::fs::read_to_string(unit) {
         Ok(content) => content,
         Err(error) => {
-            warnings.push(format!("cannot read Quadlet kube unit '{}': {error}", unit.display()));
+            warnings.push(format!(
+                "cannot read Quadlet kube unit '{}': {error}",
+                unit.display()
+            ));
             return;
         }
     };
@@ -495,14 +511,20 @@ fn discover_kube_play(
     let content = match std::fs::read_to_string(yaml_file) {
         Ok(content) => content,
         Err(error) => {
-            warnings.push(format!("cannot read Kubernetes YAML '{}': {error}", yaml_file.display()));
+            warnings.push(format!(
+                "cannot read Kubernetes YAML '{}': {error}",
+                yaml_file.display()
+            ));
             return;
         }
     };
     let document: YamlValue = match serde_yaml::from_str(&content) {
         Ok(document) => document,
         Err(error) => {
-            warnings.push(format!("cannot parse Kubernetes YAML '{}': {error}", yaml_file.display()));
+            warnings.push(format!(
+                "cannot parse Kubernetes YAML '{}': {error}",
+                yaml_file.display()
+            ));
             return;
         }
     };
@@ -515,7 +537,14 @@ fn discover_kube_play(
         let Some(dockerfile) = default_containerfile(&context) else {
             continue;
         };
-        insert_referenced(inputs, dockerfile, context, "Podman kube play", yaml_file, warnings);
+        insert_referenced(
+            inputs,
+            dockerfile,
+            context,
+            "Podman kube play",
+            yaml_file,
+            warnings,
+        );
     }
 }
 
@@ -527,14 +556,19 @@ fn quadlet_values(content: &str, target_section: &str, target_key: &str) -> Vec<
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
             continue;
         }
-        if let Some(name) = line.strip_prefix('[').and_then(|name| name.strip_suffix(']')) {
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|name| name.strip_suffix(']'))
+        {
             section = name.trim();
             continue;
         }
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        if section.eq_ignore_ascii_case(target_section) && key.trim().eq_ignore_ascii_case(target_key) {
+        if section.eq_ignore_ascii_case(target_section)
+            && key.trim().eq_ignore_ascii_case(target_key)
+        {
             values.push(value.trim().to_string());
         }
     }
@@ -807,7 +841,11 @@ pub fn ignorefile_problem_for_engine(
 ) -> std::io::Result<Option<DockerignoreProblem>> {
     let effective = match effective_ignorefile(dockerfile, context, engine) {
         Some(path) => path,
-        None => return Ok(Some(DockerignoreProblem::Missing { expected: expected_ignorefile(dockerfile, context, engine) })),
+        None => {
+            return Ok(Some(DockerignoreProblem::Missing {
+                expected: expected_ignorefile(dockerfile, context, engine),
+            }))
+        }
     };
     let content = std::fs::read_to_string(&effective)?;
     if has_exclusion_pattern(&content) {
@@ -824,11 +862,21 @@ fn expected_ignorefile(_dockerfile: &Path, context: &Path, engine: ContainerEngi
     }
 }
 
-fn effective_ignorefile(dockerfile: &Path, context: &Path, engine: ContainerEngine) -> Option<PathBuf> {
-    let specific = dockerfile.parent().unwrap_or_else(|| Path::new(".")).join(format!(
-        "{}.dockerignore",
-        dockerfile.file_name().unwrap_or_else(|| OsStr::new("Dockerfile")).to_string_lossy()
-    ));
+fn effective_ignorefile(
+    dockerfile: &Path,
+    context: &Path,
+    engine: ContainerEngine,
+) -> Option<PathBuf> {
+    let specific = dockerfile
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!(
+            "{}.dockerignore",
+            dockerfile
+                .file_name()
+                .unwrap_or_else(|| OsStr::new("Dockerfile"))
+                .to_string_lossy()
+        ));
     let root = context.join(".dockerignore");
     let container = context.join(".containerignore");
     match engine {
@@ -848,7 +896,9 @@ pub fn ignored_copy_sources(
     context: &Path,
     engine: ContainerEngine,
 ) -> std::io::Result<Vec<(usize, String)>> {
-    let Some(ignorefile) = effective_ignorefile(dockerfile, context, engine) else { return Ok(Vec::new()); };
+    let Some(ignorefile) = effective_ignorefile(dockerfile, context, engine) else {
+        return Ok(Vec::new());
+    };
     let mut builder = GitignoreBuilder::new(context);
     builder.add(&ignorefile);
     let matcher = builder.build().map_err(std::io::Error::other)?;
@@ -856,16 +906,31 @@ pub fn ignored_copy_sources(
     let content = std::fs::read_to_string(dockerfile)?;
     let document = crate::parser::parse_document(&content);
     let mut ignored = Vec::new();
-    for instruction in document.instructions.iter().filter(|instruction| matches!(instruction.instruction.as_str(), "COPY" | "ADD")) {
+    for instruction in document
+        .instructions
+        .iter()
+        .filter(|instruction| matches!(instruction.instruction.as_str(), "COPY" | "ADD"))
+    {
         // Sources of a staged or named-context copy never come from the build
         // context, so the ignore file says nothing about them.
-        if instruction.words.iter().any(|word| word.value.to_ascii_lowercase().starts_with("--from=")) {
+        if instruction
+            .words
+            .iter()
+            .any(|word| word.value.to_ascii_lowercase().starts_with("--from="))
+        {
             continue;
         }
-        let words = instruction.words.iter().filter(|word| !word.value.starts_with("--")).collect::<Vec<_>>();
+        let words = instruction
+            .words
+            .iter()
+            .filter(|word| !word.value.starts_with("--"))
+            .collect::<Vec<_>>();
         let source_count = words.len().saturating_sub(1);
         for source in words.into_iter().take(source_count) {
-            if source.value.contains("://") || source.value.contains('*') || source.value.contains('?') {
+            if source.value.contains("://")
+                || source.value.contains('*')
+                || source.value.contains('?')
+            {
                 continue;
             }
             let cleaned = clean_context_path(&source.value);
@@ -881,7 +946,10 @@ pub fn ignored_copy_sources(
                 continue;
             }
             let candidate = context.join(&cleaned);
-            if matcher.matched_path_or_any_parents(&candidate, false).is_ignore() {
+            if matcher
+                .matched_path_or_any_parents(&candidate, false)
+                .is_ignore()
+            {
                 ignored.push((instruction.line, source.value.clone()));
             }
         }
@@ -895,7 +963,11 @@ pub fn ignored_copy_sources(
 fn context_root_excluded(content: &str) -> bool {
     let mut catch_all = false;
     for (index, line) in content.lines().enumerate() {
-        let line = if index == 0 { line.trim_start_matches('\u{feff}') } else { line };
+        let line = if index == 0 {
+            line.trim_start_matches('\u{feff}')
+        } else {
+            line
+        };
         let pattern = line.trim();
         if pattern.is_empty() || pattern.starts_with('#') {
             continue;
@@ -903,7 +975,10 @@ fn context_root_excluded(content: &str) -> bool {
         if pattern.starts_with('!') {
             return false;
         }
-        if matches!(clean_context_path(pattern).trim_start_matches('/'), "*" | "**" | "**/*") {
+        if matches!(
+            clean_context_path(pattern).trim_start_matches('/'),
+            "*" | "**" | "**/*"
+        ) {
             catch_all = true;
         }
     }
@@ -959,7 +1034,11 @@ pub fn ignores_common_copy_all_hazards(
         ("dist", true),
     ]
     .into_iter()
-    .all(|(path, is_dir)| matcher.matched_path_or_any_parents(context.join(path), is_dir).is_ignore()))
+    .all(|(path, is_dir)| {
+        matcher
+            .matched_path_or_any_parents(context.join(path), is_dir)
+            .is_ignore()
+    }))
 }
 
 fn has_exclusion_pattern(content: &str) -> bool {
@@ -1238,10 +1317,26 @@ mod tests {
 
     #[test]
     fn only_catch_all_patterns_exclude_the_context_root() {
-        for content in ["*\n", "**\n", "**/*\n", "/*\n", "./*\n", "*/\n", "# c\nsrc\n*\n"] {
+        for content in [
+            "*\n",
+            "**\n",
+            "**/*\n",
+            "/*\n",
+            "./*\n",
+            "*/\n",
+            "# c\nsrc\n*\n",
+        ] {
             assert!(context_root_excluded(content), "{content:?}");
         }
-        for content in [".*\n", ".\n", "src\n", "*.txt\n", "**/*.txt\n", "*\n!src\n", ""] {
+        for content in [
+            ".*\n",
+            ".\n",
+            "src\n",
+            "*.txt\n",
+            "**/*.txt\n",
+            "*\n!src\n",
+            "",
+        ] {
             assert!(!context_root_excluded(content), "{content:?}");
         }
     }

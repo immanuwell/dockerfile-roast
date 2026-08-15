@@ -184,18 +184,17 @@ pub fn user_messages_path() -> PathBuf {
         let base = std::env::var_os("APPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
-        return base.join("droast").join("messages.yaml");
+        base.join("droast").join("messages.yaml")
     }
     #[cfg(target_os = "macos")]
     {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
-        return home
-            .join("Library")
+        home.join("Library")
             .join("Application Support")
             .join("droast")
-            .join("messages.yaml");
+            .join("messages.yaml")
     }
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     {

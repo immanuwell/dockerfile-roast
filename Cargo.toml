@@ -38,6 +38,7 @@ semver = "1"
 spdx = "0.10"
 time = { version = "0.3", features = ["parsing"] }
 sha2 = "0.10"
+similar = "2"
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 wasm-bindgen = "0.2"

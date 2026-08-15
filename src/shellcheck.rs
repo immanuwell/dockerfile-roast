@@ -342,10 +342,11 @@ fn heredoc_line_starts(content: &str, heredoc: &Heredoc) -> Vec<SourcePosition> 
     let mut offset = heredoc.content_span.start.offset;
     raw.split_inclusive('\n')
         .map(|line| {
-            let stripped_tabs = heredoc
-                .strip_tabs
-                .then(|| line.bytes().take_while(|byte| *byte == b'\t').count())
-                .unwrap_or(0);
+            let stripped_tabs = if heredoc.strip_tabs {
+                line.bytes().take_while(|byte| *byte == b'\t').count()
+            } else {
+                0
+            };
             let start = position_at(content, offset + stripped_tabs);
             offset += line.len();
             start

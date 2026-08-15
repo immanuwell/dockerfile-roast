@@ -204,8 +204,15 @@ pub(crate) fn rule_id_enabled(opts: &LintOptions, id: &str) -> bool {
 
 fn finalize_findings(content: &str, findings: &mut Vec<Finding>, opts: &LintOptions) {
     let document = parser::parse_document(content);
-    for finding in findings.iter_mut().filter(|finding| finding.line > 0 && finding.column == 0) {
-        if let Some(instruction) = document.instructions.iter().find(|instruction| instruction.line == finding.line) {
+    for finding in findings
+        .iter_mut()
+        .filter(|finding| finding.line > 0 && finding.column == 0)
+    {
+        if let Some(instruction) = document
+            .instructions
+            .iter()
+            .find(|instruction| instruction.line == finding.line)
+        {
             finding.column = instruction.span.start.column;
             finding.end_line = instruction.span.end.line;
             finding.end_column = instruction.span.end.column;
@@ -230,7 +237,8 @@ fn add_ignorefile_finding(
     if !rule_id_enabled(opts, "DF033") {
         return;
     }
-    let problem = match repository::ignorefile_problem_for_engine(dockerfile, context, opts.engine) {
+    let problem = match repository::ignorefile_problem_for_engine(dockerfile, context, opts.engine)
+    {
         Ok(problem) => problem,
         Err(error) => {
             result.findings.push(Finding {
@@ -272,7 +280,12 @@ fn add_ignorefile_finding(
     });
 }
 
-fn add_copy_ignored_findings(result: &mut LintResult, dockerfile: &Path, context: &Path, opts: &LintOptions) {
+fn add_copy_ignored_findings(
+    result: &mut LintResult,
+    dockerfile: &Path,
+    context: &Path,
+    opts: &LintOptions,
+) {
     let ignored = match repository::ignored_copy_sources(dockerfile, context, opts.engine) {
         Ok(ignored) => ignored,
         Err(_) => return,
@@ -292,11 +305,18 @@ fn contextualize_copy_all_findings(
     context: &Path,
     opts: &LintOptions,
 ) {
-    if !repository::ignores_common_copy_all_hazards(dockerfile, context, opts.engine).unwrap_or(false) {
+    if !repository::ignores_common_copy_all_hazards(dockerfile, context, opts.engine)
+        .unwrap_or(false)
+    {
         return;
     }
-    for finding in result.findings.iter_mut().filter(|finding| finding.rule == "DF007") {
-        finding.message = "COPY . uses a protected build context but still broadens cache invalidation".into();
+    for finding in result
+        .findings
+        .iter_mut()
+        .filter(|finding| finding.rule == "DF007")
+    {
+        finding.message =
+            "COPY . uses a protected build context but still broadens cache invalidation".into();
         finding.roast = "Your ignore file keeps .git, node_modules, .env, and dist out of the build context. Nice. COPY . still makes every included file part of this layer's cache key, so prefer explicit copies when practical.".into();
     }
 }

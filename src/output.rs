@@ -1,5 +1,5 @@
-use crate::rules::{Finding, Severity};
 use crate::messages::{self, MessageMode, MessageOverrides};
+use crate::rules::{Finding, Severity};
 use colored::*;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -54,7 +54,13 @@ struct JsonOutput {
     findings: Vec<JsonFinding>,
 }
 
-pub fn print_findings(file: &str, findings: &[Finding], format: OutputFormat, no_roast: bool, messages: &MessageOverrides) {
+pub fn print_findings(
+    file: &str,
+    findings: &[Finding],
+    format: OutputFormat,
+    no_roast: bool,
+    messages: &MessageOverrides,
+) {
     match format {
         OutputFormat::Terminal => print_terminal(file, findings, no_roast, messages),
         OutputFormat::Json => print_json(file, findings),
@@ -144,7 +150,12 @@ fn print_terminal(file: &str, findings: &[Finding], no_roast: bool, messages: &M
                 println!("  {}      {}", " ".repeat(5), custom.italic());
             }
             if let Some(help) = help {
-                println!("  {}      {} {}", " ".repeat(5), "Help:".dimmed(), help.dimmed());
+                println!(
+                    "  {}      {} {}",
+                    " ".repeat(5),
+                    "Help:".dimmed(),
+                    help.dimmed()
+                );
             }
             println!();
         } else if !no_roast {
@@ -248,7 +259,11 @@ fn json_output(file: &str, findings: &[Finding]) -> JsonOutput {
 /// occurrences of the same rule and message in one file remain independently
 /// suppressible instead of collapsing into a single baseline entry.
 pub fn finding_fingerprint(file: &str, finding: &Finding) -> String {
-    let normalized_message = finding.message.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized_message = finding
+        .message
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     let material = format!(
         "droast-fingerprint-v2\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
         normalize_uri(file),
@@ -328,9 +343,16 @@ fn print_compact(file: &str, findings: &[Finding], messages: &MessageOverrides) 
         } else {
             String::new()
         };
-        let custom = messages.get(&f.rule).map(|override_| messages::render(
-            &override_.message, &f.rule, &f.severity.to_string(), file, f.line, &f.message,
-        ));
+        let custom = messages.get(&f.rule).map(|override_| {
+            messages::render(
+                &override_.message,
+                &f.rule,
+                &f.severity.to_string(),
+                file,
+                f.line,
+                &f.message,
+            )
+        });
         let text = match (messages.mode, custom) {
             (MessageMode::Replace, Some(custom)) => custom,
             (MessageMode::Append, Some(custom)) | (MessageMode::Message, Some(custom)) => {
@@ -343,7 +365,10 @@ fn print_compact(file: &str, findings: &[Finding], messages: &MessageOverrides) 
             Severity::Warning => "WARN".yellow().bold(),
             Severity::Info => "INFO".cyan(),
         };
-        println!("{}{}:{} [{}] {}", file, line_info, severity_colored, f.rule, text);
+        println!(
+            "{}{}:{} [{}] {}",
+            file, line_info, severity_colored, f.rule, text
+        );
     }
 }
 
@@ -539,12 +564,16 @@ mod tests {
     #[test]
     fn json_and_sarif_preserve_shellcheck_ids_and_ranges() {
         let finding = shellcheck_finding();
-        let json = serde_json::to_value(json_output("Dockerfile", &[finding.clone()])).unwrap();
+        let json = serde_json::to_value(json_output("Dockerfile", std::slice::from_ref(&finding)))
+            .unwrap();
         assert_eq!(json["findings"][0]["rule"], "SC2086");
         assert_eq!(json["findings"][0]["column"], 9);
 
-        let sarif: serde_json::Value =
-            serde_json::from_str(&build_sarif(&[("Dockerfile", &[finding.clone()])])).unwrap();
+        let sarif: serde_json::Value = serde_json::from_str(&build_sarif(&[(
+            "Dockerfile",
+            std::slice::from_ref(&finding),
+        )]))
+        .unwrap();
         assert_eq!(sarif["runs"][0]["results"][0]["ruleId"], "SC2086");
         assert_eq!(
             sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"]
@@ -553,7 +582,13 @@ mod tests {
         );
         assert_ne!(
             finding_fingerprint("Dockerfile", &finding),
-            finding_fingerprint("Dockerfile", &Finding { line: 99, ..finding })
+            finding_fingerprint(
+                "Dockerfile",
+                &Finding {
+                    line: 99,
+                    ..finding
+                }
+            )
         );
     }
 

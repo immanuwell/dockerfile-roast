@@ -16,6 +16,7 @@ Use this guide as a quick reference. Every section favors copy-paste examples ov
 - [Custom messages](#custom-messages)
 - [Copy-paste presets](#copy-paste-presets)
 - [Control rules and severity](#control-rules-and-severity)
+- [Safe deterministic fixes](#safe-deterministic-fixes)
 - [Output formats](#output-formats)
 - [CI integration](#ci-integration)
 - [Local development workflows](#local-development-workflows)
@@ -319,7 +320,9 @@ printf 'FROM alpine:latest\n' | droast -
 | `--preset NAME` | Apply `minimal`, `security`, `performance`, `production`, or `strict` |
 | `--category NAMES` | Run comma-separated rule categories |
 | `--skip-category NAMES` | Skip comma-separated rule categories |
-| `-f, --format FORMAT` | Select `terminal`, `json`, `github`, `compact`, or `sarif` |
+| `-f, --format FORMAT` | Select `terminal`, `json`, `github`, `compact`, or `sarif`; `diff` is available for fix previews |
+| `--fix [IDS]` | Apply all safe deterministic fixes, or only the optional comma-separated rule IDs |
+| `--dry-run` | Plan `--fix` edits without changing files |
 | `-s, --min-severity LEVEL` | Select `info`, `warning`, or `error` |
 | `--fail-on LEVEL` | Exit unsuccessfully for findings at or above `info`, `warning`, or `error` |
 | `--skip IDS` | Skip comma-separated rule IDs |
@@ -1249,6 +1252,74 @@ droast --skip DF012 .
 droast --skip df012 .
 ```
 
+## Safe deterministic fixes
+
+Fixes are disabled unless `--fix` is present. The initial fixer set deliberately excludes transformations that require policy or human judgment.
+
+Preview a repository patch without writing files:
+
+```bash
+droast --fix --dry-run --format diff .
+```
+
+Apply all available fixes to one file:
+
+```bash
+droast --fix Dockerfile
+```
+
+Select specific fixers:
+
+```bash
+droast --fix DF076,DF079 Dockerfile
+```
+
+The supported fixers are:
+
+| Rule | Change | Safety boundary |
+|---|---|---|
+| `DF076` | Normalize Dockerfile instruction keyword casing | Uses the first instruction that is already entirely uppercase or lowercase; does nothing when the file establishes no convention |
+| `DF078` | Lowercase an `EXPOSE` protocol | Changes only unquoted, literal `TCP` or `UDP` suffixes; variables, quoting, and unknown protocol text are untouched |
+| `DF079` | Match `AS` casing to `FROM` | Requires `FROM` to be entirely uppercase or lowercase and `AS` to be a literal case-insensitive keyword |
+| `DF083` | Remove `--platform=$TARGETPLATFORM` from `FROM` | Requires that exact variable value; fixed platforms and other expressions are untouched |
+
+Fix planning happens after normal rule selection and suppression processing. A finding hidden by `skip`, `only`, categories, minimum severity, or an inline suppression is not changed. Selecting a rule without a safe fixer is an error rather than a request for a best-effort rewrite.
+
+### Review and application guarantees
+
+Every planned edit uses zero-based UTF-8 byte offsets plus one-based line and byte-column positions. Applying a plan:
+
+- verifies the whole-file SHA-256 source hash
+- verifies that every edit still matches its recorded original text
+- rejects overlapping edits for the entire file
+- applies edits from the highest byte offset to the lowest
+- writes a same-directory temporary file, flushes it, rechecks the source, and atomically replaces the original
+- preserves the regular file's permission bits, line endings, final-newline state, and all untouched bytes
+- re-lints changed files and uses only remaining findings for the final exit status
+
+droast refuses to rewrite stdin, symlinks, hard-linked files, non-regular files, syntactically invalid Dockerfiles, stale plans, and baseline operations. A multi-file run plans and validates every file before it begins applying changes. Atomicity is per file; if an external process changes a later file during application, earlier files may already have been safely replaced.
+
+`--dry-run` exits successfully when planning succeeds and never changes files. Terminal output reports edit counts. `--format diff` emits a unified patch. `--format json` exposes the machine-readable protocol:
+
+```bash
+droast --fix --dry-run --format json Dockerfile
+```
+
+The top-level object for one file contains `protocol_version`, `file`, `source_hash`, and `fixes`. Each fix contains:
+
+- a stable `id` and numeric `version`
+- its originating `rule`
+- `applicability` (`safe`; the protocol reserves `review` and `none` for non-automatic integrations)
+- a human-readable `title` and `rationale`
+- behavioral, syntax, and cache `impact`
+- one or more non-overlapping edits with `start_byte`, `end_byte`, positions, `original`, and `replacement`
+
+Multiple files produce an array of these per-file plan objects. The complete contract is published as [`schemas/droast-fix-plan-v1.schema.json`](schemas/droast-fix-plan-v1.schema.json). Protocol version 1 applies only edits marked `safe`; future review-level suggestions will never become automatically applicable through `--fix`.
+
+The initial fixes have no intended behavioral impact. Their cache impact is conservatively reported as `may_invalidate` because changing Dockerfile source can cause a builder to recompute the affected instruction and later layers even when the resulting operation is equivalent.
+
+Fixing base-image digests, inventing a runtime `USER`, choosing package versions, combining `RUN` instructions, or creating a `HEALTHCHECK` is intentionally outside this safe fixer set.
+
 ### Inline suppression
 
 Use a governed exception directly above the affected instruction:
@@ -2067,6 +2138,7 @@ The public API includes:
 
 - `linter::lint_content` and `linter::lint_file` for linting
 - `parser::parse_document` for structured Dockerfile data
+- `fixes::plan`, `fixes::apply`, and the versioned fix protocol types for deterministic edits
 - `LintOptions` and `LintResult` for lint configuration and results
 - `Finding`, `Rule`, and `Severity` for working with findings and rules
 

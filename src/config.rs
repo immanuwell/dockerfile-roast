@@ -342,11 +342,9 @@ impl DroastConfig {
             }
         }
         crate::repository::ContainerEngine::parse(self.workflow.engine.as_deref())?;
+        let shellcheck_code = regex::Regex::new(r"^SC[0-9]{4}$").expect("valid static expression");
         for code in &self.shellcheck.exclude {
-            if !regex::Regex::new(r"^SC[0-9]{4}$")
-                .expect("valid static expression")
-                .is_match(&code.to_ascii_uppercase())
-            {
+            if !shellcheck_code.is_match(&code.to_ascii_uppercase()) {
                 bail!("Invalid ShellCheck exclusion '{code}'; expected an SC#### rule ID");
             }
         }
