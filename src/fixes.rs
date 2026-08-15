@@ -97,6 +97,42 @@ impl FixPlan {
     }
 }
 
+/// Keep a plan aligned when a presentation layer retains only a subset of the
+/// finalized findings (for example, `--only-new`).
+pub fn retain_for_findings(plan: &mut FixPlan, original: &[Finding], retained: &[Finding]) {
+    let retained = retained
+        .iter()
+        .map(finding_identity)
+        .collect::<std::collections::HashSet<_>>();
+    let mut fixes = plan.fixes.iter().map(Some).collect::<Vec<_>>();
+    let mut keep_ids = HashSet::new();
+    for finding in original {
+        if let Some((index, fix)) = fixes.iter().enumerate().find_map(|(index, fix)| {
+            fix.as_ref()
+                .filter(|fix| fix.rule == finding.rule)
+                .map(|fix| (index, *fix))
+        }) {
+            fixes[index] = None;
+            if retained.contains(&finding_identity(finding)) {
+                keep_ids.insert(fix.id.clone());
+            }
+        }
+    }
+    drop(fixes);
+    plan.fixes.retain(|fix| keep_ids.contains(&fix.id));
+}
+
+fn finding_identity(finding: &Finding) -> (&str, usize, usize, usize, usize, &str) {
+    (
+        &finding.rule,
+        finding.line,
+        finding.column,
+        finding.end_line,
+        finding.end_column,
+        &finding.message,
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppliedFixes {
     pub content: String,

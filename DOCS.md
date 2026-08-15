@@ -11,6 +11,7 @@ Use this guide as a quick reference. Every section favors copy-paste examples ov
 - [What droast understands](#what-droast-understands)
 - [Command line reference](#command-line-reference)
 - [Repository discovery](#repository-discovery)
+- [Effective build invocations](#effective-build-invocations)
 - [Configuration](#configuration)
 - [Hadolint replacement mode](#hadolint-replacement-mode)
 - [Custom messages](#custom-messages)
@@ -443,6 +444,21 @@ target "release" {
 droast resolves variables, inherited targets, local build contexts, and Dockerfile paths.
 
 Remote Compose or Bake contexts are not downloaded. droast reports local files it can resolve.
+
+## Effective build invocations
+
+Inspect the actual build variants represented by a repository without contacting a container daemon or the network:
+
+```bash
+droast invocations .
+droast invocations --format json .
+```
+
+Directly discovered Dockerfiles receive a default invocation. Compose services add effective arguments (map and list forms), targets, platforms, additional contexts, secrets, SSH, caches, and outputs. `.env` is loaded before the process environment, and null inherited values remain unresolved when no environment value exists. Bake targets add variables, inheritance, matrices, named contexts, caches, exporters, and attestations. Cyclic inheritance and conflicting parent values are reported instead of being hidden.
+
+Every value has ordered provenance and one of three states: `resolved`, `unresolved`, or `redacted`. An unresolved expression is never substituted with an empty string. Sensitive build-argument values are never serialized. Different targets, arguments, platforms, or contexts produce different stable invocation IDs even when they use the same Dockerfile. Dockerfile-specific ignore files and Docker/Podman ignore precedence are reflected in `effective_ignore_file`.
+
+The JSON document is deterministic and versioned independently of normal lint output. Its contract is [`schemas/droast-build-invocations-v1.schema.json`](schemas/droast-build-invocations-v1.schema.json). The Rust `invocation::lint` API evaluates findings per resolved invocation and merges them only when both the finding fingerprint and all effective inputs match, retaining every contributing invocation ID.
 
 ### Repository ignore rules
 
@@ -1259,6 +1275,7 @@ Fixes are disabled unless `--fix` is present. The initial fixer set deliberately
 Preview a repository patch without writing files:
 
 ```bash
+droast fixes Dockerfile
 droast --fix --dry-run --format diff .
 ```
 
@@ -1299,7 +1316,7 @@ Every planned edit uses zero-based UTF-8 byte offsets plus one-based line and by
 
 droast refuses to rewrite stdin, symlinks, hard-linked files, non-regular files, syntactically invalid Dockerfiles, stale plans, and baseline operations. A multi-file run plans and validates every file before it begins applying changes. Atomicity is per file; if an external process changes a later file during application, earlier files may already have been safely replaced.
 
-`--dry-run` exits successfully when planning succeeds and never changes files. Terminal output reports edit counts. `--format diff` emits a unified patch. `--format json` exposes the machine-readable protocol:
+`droast fixes` lists available changes and is always read-only. `--dry-run` exits successfully when planning succeeds and never changes files. Terminal output reports edit counts. `--format diff` emits a unified patch. `--format json` exposes the machine-readable protocol:
 
 ```bash
 droast --fix --dry-run --format json Dockerfile
@@ -1315,6 +1332,8 @@ The top-level object for one file contains `protocol_version`, `file`, `source_h
 - one or more non-overlapping edits with `start_byte`, `end_byte`, positions, `original`, and `replacement`
 
 Multiple files produce an array of these per-file plan objects. The complete contract is published as [`schemas/droast-fix-plan-v1.schema.json`](schemas/droast-fix-plan-v1.schema.json). Protocol version 1 applies only edits marked `safe`; future review-level suggestions will never become automatically applicable through `--fix`.
+
+Normal `--format json` findings carry their matching `fixes` array. SARIF results use the standard `fixes.artifactChanges.replacements` structure and retain complete Droast protocol objects under `properties.droastFixes`.
 
 The initial fixes have no intended behavioral impact. Their cache impact is conservatively reported as `may_invalidate` because changing Dockerfile source can cause a builder to recompute the affected instruction and later layers even when the resulting operation is equivalent.
 

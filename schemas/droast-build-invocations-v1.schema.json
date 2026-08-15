@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/immanuwell/dockerfile-roast/schemas/droast-build-invocations-v1.schema.json",
+  "title": "droast build invocation document v1",
+  "type": "object",
+  "required": ["schema_version", "invocations", "warnings"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "invocations": { "type": "array", "items": { "$ref": "#/$defs/invocation" } }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "provenance": {
+      "type": "object",
+      "required": ["kind", "source", "path", "precedence"],
+      "properties": {
+        "kind": { "type": "string" },
+        "source": { "type": "string" },
+        "path": { "type": "string" },
+        "precedence": { "type": "integer", "minimum": 0 },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "value": {
+      "type": "object",
+      "required": ["state", "provenance"],
+      "properties": {
+        "state": { "enum": ["resolved", "unresolved", "redacted"] },
+        "value": { "type": "string" },
+        "expression": { "type": "string" },
+        "provenance": { "type": "array", "items": { "$ref": "#/$defs/provenance" } }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "const": "resolved" } } }, "then": { "required": ["value"] } },
+        { "if": { "properties": { "state": { "const": "redacted" } } }, "then": { "not": { "anyOf": [{ "required": ["value"] }, { "required": ["expression"] }] } } }
+      ],
+      "additionalProperties": false
+    },
+    "declaredInput": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/value" },
+        "target": { "$ref": "#/$defs/value" }
+      },
+      "additionalProperties": false
+    },
+    "invocation": {
+      "type": "object",
+      "required": ["schema_version", "id", "origin", "dockerfile", "context", "build_args", "platforms", "named_contexts", "secrets", "ssh", "cache_from", "cache_to", "exporters", "attestations", "effective_ignore_file"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "id": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "origin": {
+          "type": "object",
+          "required": ["kind", "location"],
+          "properties": {
+            "kind": { "enum": ["direct", "compose", "bake"] },
+            "name": { "type": "string" },
+            "location": { "$ref": "#/$defs/provenance" }
+          },
+          "additionalProperties": false
+        },
+        "dockerfile": { "$ref": "#/$defs/value" },
+        "context": { "$ref": "#/$defs/value" },
+        "target": { "$ref": "#/$defs/value" },
+        "build_args": { "type": "object", "additionalProperties": { "$ref": "#/$defs/value" } },
+        "platforms": { "type": "array", "items": { "$ref": "#/$defs/value" } },
+        "named_contexts": { "type": "object", "additionalProperties": { "$ref": "#/$defs/value" } },
+        "secrets": { "type": "array", "items": { "$ref": "#/$defs/declaredInput" } },
+        "ssh": { "type": "array", "items": { "$ref": "#/$defs/declaredInput" } },
+        "cache_from": { "type": "array", "items": { "$ref": "#/$defs/value" } },
+        "cache_to": { "type": "array", "items": { "$ref": "#/$defs/value" } },
+        "exporters": { "type": "array", "items": { "$ref": "#/$defs/value" } },
+        "attestations": { "type": "array", "items": { "$ref": "#/$defs/value" } },
+        "effective_ignore_file": { "$ref": "#/$defs/value" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,6 +1,6 @@
 use dockerfile_roast::{
-    config, fixes, hadolint, hadolint_compat, linter, messages, output, repository, rules,
-    shellcheck,
+    config, fixes, hadolint, hadolint_compat, invocation, linter, messages, output, repository,
+    rules, shellcheck,
 };
 use std::collections::HashSet;
 use std::io::{self, Read, Write};
@@ -98,6 +98,24 @@ impl From<ShellArg> for Shell {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Show effective offline build invocations from Dockerfiles, Compose, and Bake
+    Invocations {
+        #[arg(value_name = "PATH")]
+        paths: Vec<PathBuf>,
+        /// Output format: terminal or json
+        #[arg(short, long, default_value = "terminal")]
+        format: String,
+    },
+
+    /// List safe deterministic fixes without changing files
+    Fixes {
+        #[arg(value_name = "FILE")]
+        files: Vec<PathBuf>,
+        /// Output format: terminal or json
+        #[arg(short, long, default_value = "terminal")]
+        format: String,
+    },
+
     /// Generate shell completion scripts
     ///
     /// Usage examples:
@@ -128,7 +146,7 @@ enum Commands {
     },
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 enum MessageCommands {
     /// Create a small, editable message override file
     Init {
@@ -364,11 +382,11 @@ fn main() -> Result<()> {
         anyhow::bail!("--fix cannot be combined with --list-rules");
     }
 
-    match cli.command {
+    match &cli.command {
         Some(Commands::Completion { shell }) => {
             let mut completion_command = cli_command();
             generate(
-                Shell::from(shell),
+                Shell::from(*shell),
                 &mut completion_command,
                 "droast",
                 &mut io::stdout(),
@@ -379,7 +397,13 @@ fn main() -> Result<()> {
             return cmd_init(from_hadolint.as_deref());
         }
         Some(Commands::Messages { command }) => {
-            return cmd_messages(command, cli.messages.as_deref())
+            return cmd_messages(command.clone(), cli.messages.as_deref())
+        }
+        Some(Commands::Fixes { files, format }) => {
+            return cmd_fixes(&cli, files, format);
+        }
+        Some(Commands::Invocations { paths, format }) => {
+            return cmd_invocations(&cli, paths, format);
         }
         None => {}
     }
@@ -492,7 +516,15 @@ fn main() -> Result<()> {
 
     if let Some(selected_rules) = &fix_rules {
         validate_fix_cli(&cli, format, diff_format)?;
-        let prepared = prepare_fixes(&files, &cfg, &cli, shellcheck_mode, engine, selected_rules)?;
+        let prepared = prepare_fixes(
+            &files,
+            &cfg,
+            &cli,
+            shellcheck_mode,
+            engine,
+            selected_rules,
+            true,
+        )?;
         if cli.dry_run {
             print_fix_preview(&prepared, format, diff_format)?;
             return Ok(());
@@ -510,13 +542,14 @@ fn main() -> Result<()> {
         let mut all_results: Vec<linter::LintResult> = Vec::new();
         for file in &files {
             let settings = effective_settings(&cfg, &cli, &file.dockerfile)?;
-            let opts = lint_options(
+            let mut opts = lint_options(
                 &settings,
                 &cli,
                 shellcheck_mode,
                 &cfg.shellcheck.exclude,
                 engine,
             )?;
+            opts.plan_fixes = true;
             let file_no_fail = cli.no_fail || settings.no_fail.unwrap_or(no_fail);
             match lint_one(file, &opts) {
                 Ok(mut result) => {
@@ -528,9 +561,13 @@ fn main() -> Result<()> {
                         any_error = true;
                     }
                     if cli.only_new {
+                        let original_findings = result.findings.clone();
                         result.findings.retain(|finding| {
                             is_new_finding(baseline.as_ref(), &result.file, finding)
                         });
+                        if let Some(plan) = &mut result.fix_plan {
+                            fixes::retain_for_findings(plan, &original_findings, &result.findings);
+                        }
                     }
                     all_results.push(result);
                 }
@@ -551,9 +588,9 @@ fn main() -> Result<()> {
             )?;
         }
         if format == OutputFormat::Sarif {
-            output::print_sarif(&pairs);
+            output::print_sarif_lint_results(&all_results);
         } else {
-            output::print_json_results(&pairs);
+            output::print_json_lint_results(&all_results);
         }
     } else {
         for file in &files {
@@ -756,6 +793,7 @@ fn lint_options(
             .iter()
             .map(|code| code.to_ascii_uppercase())
             .collect(),
+        plan_fixes: false,
     })
 }
 
@@ -1019,6 +1057,194 @@ struct PreparedFixes {
     plan: fixes::FixPlan,
 }
 
+fn cmd_invocations(cli: &Cli, paths: &[PathBuf], format: &str) -> anyhow::Result<()> {
+    if !matches!(format, "terminal" | "json") {
+        anyhow::bail!("droast invocations supports terminal or json output; got '{format}'");
+    }
+    let cfg = match &cli.config {
+        Some(path) => DroastConfig::load_from(path)?,
+        None => DroastConfig::try_load()?,
+    };
+    let engine = cli
+        .engine
+        .map(Into::into)
+        .unwrap_or(repository::ContainerEngine::parse(
+            cfg.workflow.engine.as_deref(),
+        )?);
+    let document = invocation::discover(paths, engine);
+    if format == "json" {
+        println!("{}", serde_json::to_string_pretty(&document)?);
+        return Ok(());
+    }
+    for warning in &document.warnings {
+        eprintln!("{} {}", "!".yellow(), warning);
+    }
+    if document.invocations.is_empty() {
+        println!("No build invocations found.");
+        return Ok(());
+    }
+    for invocation in &document.invocations {
+        let name = invocation.origin.name.as_deref().unwrap_or("direct");
+        println!("{}  {:?} {}", invocation.id, invocation.origin.kind, name);
+        println!(
+            "  Defined at: {} ({})",
+            invocation.origin.location.source, invocation.origin.location.path
+        );
+        println!(
+            "  Dockerfile: {}",
+            display_effective(&invocation.dockerfile)
+        );
+        println!("  Context:    {}", display_effective(&invocation.context));
+        if let Some(target) = &invocation.target {
+            println!("  Target:     {}", display_effective(target));
+        }
+        if !invocation.platforms.is_empty() {
+            println!(
+                "  Platforms:  {}",
+                invocation
+                    .platforms
+                    .iter()
+                    .map(display_effective)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        for (key, value) in &invocation.build_args {
+            println!("  Arg {key}: {}", display_effective(value));
+        }
+        for (key, value) in &invocation.named_contexts {
+            println!("  Context {key}: {}", display_effective(value));
+        }
+        print_effective_list("Cache from", &invocation.cache_from);
+        print_effective_list("Cache to", &invocation.cache_to);
+        print_effective_list("Exporter", &invocation.exporters);
+        print_effective_list("Attestation", &invocation.attestations);
+        for secret in &invocation.secrets {
+            println!(
+                "  Secret:     {}{}",
+                display_effective(&secret.id),
+                secret
+                    .target
+                    .as_ref()
+                    .map(|target| format!(" -> {}", display_effective(target)))
+                    .unwrap_or_default()
+            );
+        }
+        for ssh in &invocation.ssh {
+            println!(
+                "  SSH:        {}{}",
+                display_effective(&ssh.id),
+                ssh.target
+                    .as_ref()
+                    .map(|target| format!(" -> {}", display_effective(target)))
+                    .unwrap_or_default()
+            );
+        }
+        println!(
+            "  Ignore:     {}",
+            display_effective(&invocation.effective_ignore_file)
+        );
+    }
+    Ok(())
+}
+
+fn print_effective_list(label: &str, values: &[invocation::EffectiveValue]) {
+    for value in values {
+        println!("  {label}: {}", display_effective(value));
+    }
+}
+
+fn display_effective(value: &invocation::EffectiveValue) -> String {
+    value
+        .value
+        .clone()
+        .or_else(|| {
+            value
+                .expression
+                .as_ref()
+                .map(|expression| format!("<{:?}: {expression}>", value.state))
+        })
+        .unwrap_or_else(|| format!("<{:?}>", value.state))
+}
+
+fn cmd_fixes(cli: &Cli, paths: &[PathBuf], format: &str) -> anyhow::Result<()> {
+    if !matches!(format, "terminal" | "json") {
+        anyhow::bail!("droast fixes supports terminal or json output; got '{format}'");
+    }
+    let cfg = match &cli.config {
+        Some(path) => DroastConfig::load_from(path)?,
+        None => DroastConfig::try_load()?,
+    };
+    let shellcheck_mode = cli
+        .shellcheck
+        .map(Into::into)
+        .unwrap_or(shellcheck::Mode::parse(cfg.shellcheck.mode.as_deref())?);
+    let engine = cli
+        .engine
+        .map(Into::into)
+        .unwrap_or(repository::ContainerEngine::parse(
+            cfg.workflow.engine.as_deref(),
+        )?);
+    let discovery = repository::discover(paths, engine);
+    for warning in &discovery.warnings {
+        eprintln!("{} {}", "!".yellow(), warning);
+    }
+    if discovery.inputs.is_empty() {
+        anyhow::bail!("No Dockerfile(s) found");
+    }
+    let prepared = prepare_fixes(
+        &discovery.inputs,
+        &cfg,
+        cli,
+        shellcheck_mode,
+        engine,
+        &HashSet::new(),
+        false,
+    )?;
+    if format == "json" {
+        if let [item] = prepared.as_slice() {
+            println!("{}", serde_json::to_string_pretty(&item.plan)?);
+        } else {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &prepared.iter().map(|item| &item.plan).collect::<Vec<_>>()
+                )?
+            );
+        }
+        return Ok(());
+    }
+
+    for item in &prepared {
+        if item.plan.fixes.is_empty() {
+            println!("{}: no safe fixes available", item.path.display());
+            continue;
+        }
+        for fix in &item.plan.fixes {
+            let location = fix.edits.first().map_or_else(
+                || item.path.display().to_string(),
+                |edit| {
+                    format!(
+                        "{}:{}:{}",
+                        item.path.display(),
+                        edit.start.line,
+                        edit.start.column
+                    )
+                },
+            );
+            println!(
+                "{location}: {} [{}] {}",
+                fix.rule,
+                serde_json::to_value(fix.applicability)?
+                    .as_str()
+                    .unwrap_or("safe"),
+                fix.title
+            );
+        }
+    }
+    Ok(())
+}
+
 fn normalize_fix_request(cli: &Cli) -> anyhow::Result<Option<HashSet<String>>> {
     let Some(value) = cli.fix.clone() else {
         return Ok(None);
@@ -1122,6 +1348,7 @@ fn prepare_fixes(
     shellcheck_mode: shellcheck::Mode,
     engine: repository::ContainerEngine,
     selected_rules: &HashSet<String>,
+    require_rewrite_target: bool,
 ) -> anyhow::Result<Vec<PreparedFixes>> {
     let mut seen = HashSet::new();
     let mut prepared = Vec::new();
@@ -1129,7 +1356,9 @@ fn prepare_fixes(
         if !seen.insert(input.dockerfile.clone()) {
             continue;
         }
-        fixes::validate_rewrite_target(&input.dockerfile)?;
+        if require_rewrite_target {
+            fixes::validate_rewrite_target(&input.dockerfile)?;
+        }
         let source = std::fs::read_to_string(&input.dockerfile).map_err(|error| {
             anyhow::anyhow!("Failed to read '{}': {error}", input.dockerfile.display())
         })?;

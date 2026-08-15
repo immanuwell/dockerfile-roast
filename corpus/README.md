@@ -55,6 +55,10 @@ Runs droast and Hadolint over the same lexically sorted file list, interleaved, 
 | `benchmark.sh` | reproduces the speed and binary-size comparison |
 | `select-corpus.sh` | the original selection pass, kept for provenance |
 
+`scripts/run-compatibility-corpus.sh` verifies and scans a rehydrated corpus.
+It writes the lint report to `droast.sarif`, all read-only safe-fix plans to
+`fix-plans.json`, and aggregate fixable-finding counts to `fixability.json`.
+
 ## A note on `select-corpus.sh`
 
 This is the script that originally chose the corpus. It resolves each repository's **current** default branch and picks files from it, so running it today produces a *different* corpus than the one recorded in `manifest.tsv`. It is here to document how the sample was selected, not to reproduce it. Use `rehydrate.sh` for reproduction.

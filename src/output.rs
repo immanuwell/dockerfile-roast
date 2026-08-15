@@ -1,3 +1,5 @@
+use crate::fixes::{FixPlan, PlannedFix};
+use crate::linter::LintResult;
 use crate::messages::{self, MessageMode, MessageOverrides};
 use crate::rules::{Finding, Severity};
 use colored::*;
@@ -42,6 +44,8 @@ struct JsonFinding {
     end_column: Option<usize>,
     message: String,
     roast: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    fixes: Vec<PlannedFix>,
 }
 
 #[derive(Serialize)]
@@ -220,6 +224,14 @@ fn print_json(file: &str, findings: &[Finding]) {
 }
 
 fn json_output(file: &str, findings: &[Finding]) -> JsonOutput {
+    json_output_with_plan(file, findings, None)
+}
+
+fn json_output_with_plan(
+    file: &str,
+    findings: &[Finding],
+    fix_plan: Option<&FixPlan>,
+) -> JsonOutput {
     let errors = findings
         .iter()
         .filter(|f| f.severity == Severity::Error)
@@ -232,6 +244,7 @@ fn json_output(file: &str, findings: &[Finding]) -> JsonOutput {
         .iter()
         .filter(|f| f.severity == Severity::Info)
         .count();
+    let associated_fixes = fixes_for_findings(findings, fix_plan);
     JsonOutput {
         file: file.to_string(),
         total: findings.len(),
@@ -240,7 +253,8 @@ fn json_output(file: &str, findings: &[Finding]) -> JsonOutput {
         infos,
         findings: findings
             .iter()
-            .map(|f| JsonFinding {
+            .enumerate()
+            .map(|(index, f)| JsonFinding {
                 rule: f.rule.to_string(),
                 fingerprint: finding_fingerprint(file, f),
                 severity: f.severity.to_string(),
@@ -250,9 +264,30 @@ fn json_output(file: &str, findings: &[Finding]) -> JsonOutput {
                 end_column: (f.end_column > 0).then_some(f.end_column),
                 message: f.message.clone(),
                 roast: f.roast.clone(),
+                fixes: associated_fixes[index].clone(),
             })
             .collect(),
     }
+}
+
+fn fixes_for_findings(findings: &[Finding], plan: Option<&FixPlan>) -> Vec<Vec<PlannedFix>> {
+    let mut result = vec![Vec::new(); findings.len()];
+    let Some(plan) = plan else {
+        return result;
+    };
+    let mut used = vec![false; plan.fixes.len()];
+    for (finding_index, finding) in findings.iter().enumerate() {
+        if let Some((fix_index, fix)) = plan
+            .fixes
+            .iter()
+            .enumerate()
+            .find(|(index, fix)| !used[*index] && fix.rule == finding.rule)
+        {
+            used[fix_index] = true;
+            result[finding_index].push(fix.clone());
+        }
+    }
+    result
 }
 
 /// Stable baseline identity. Source location is part of the identity so two
@@ -289,6 +324,21 @@ pub fn print_json_results(results: &[(&str, &[Finding])]) {
         .map(|(file, findings)| json_output(file, findings))
         .collect::<Vec<_>>();
     println!("{}", serde_json::to_string_pretty(&output).unwrap());
+}
+
+/// Emit normal lint JSON enriched with safe-fix protocol metadata.
+pub fn print_json_lint_results(results: &[LintResult]) {
+    let output = results
+        .iter()
+        .map(|result| {
+            json_output_with_plan(&result.file, &result.findings, result.fix_plan.as_ref())
+        })
+        .collect::<Vec<_>>();
+    if let [single] = output.as_slice() {
+        println!("{}", serde_json::to_string_pretty(single).unwrap());
+    } else {
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    }
 }
 
 fn print_github(file: &str, findings: &[Finding], no_roast: bool) {
@@ -384,6 +434,30 @@ pub fn print_sarif(results: &[(&str, &[Finding])]) {
 }
 
 fn build_sarif(results: &[(&str, &[Finding])]) -> String {
+    build_sarif_with_plans(
+        &results
+            .iter()
+            .map(|(file, findings)| (*file, *findings, None))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Emit SARIF enriched with safe-fix protocol metadata.
+pub fn print_sarif_lint_results(results: &[LintResult]) {
+    let enriched = results
+        .iter()
+        .map(|result| {
+            (
+                result.file.as_str(),
+                result.findings.as_slice(),
+                result.fix_plan.as_ref(),
+            )
+        })
+        .collect::<Vec<_>>();
+    println!("{}", build_sarif_with_plans(&enriched));
+}
+
+fn build_sarif_with_plans(results: &[(&str, &[Finding], Option<&FixPlan>)]) -> String {
     let all_rule_meta = crate::rules::all_rules();
     let rule_desc: HashMap<&str, &str> = all_rule_meta
         .iter()
@@ -397,7 +471,7 @@ fn build_sarif(results: &[(&str, &[Finding])]) -> String {
     // Collect the ordered, deduplicated set of rule IDs that actually fired.
     // Sorted for deterministic output and so ruleIndex values are stable.
     let mut seen_ids = std::collections::BTreeSet::new();
-    for (_, findings) in results {
+    for (_, findings, _) in results {
         for f in *findings {
             seen_ids.insert(f.rule.clone());
         }
@@ -413,7 +487,7 @@ fn build_sarif(results: &[(&str, &[Finding])]) -> String {
 
     // Highest severity seen per rule — used for defaultConfiguration.level.
     let mut rule_max_sev: HashMap<String, Severity> = HashMap::new();
-    for (_, findings) in results {
+    for (_, findings, _) in results {
         for f in *findings {
             let entry = rule_max_sev.entry(f.rule.clone()).or_insert(Severity::Info);
             if f.severity > *entry {
@@ -445,9 +519,10 @@ fn build_sarif(results: &[(&str, &[Finding])]) -> String {
 
     // Build results array
     let mut sarif_results: Vec<serde_json::Value> = Vec::new();
-    for (file, findings) in results {
+    for (file, findings, plan) in results {
         let uri = normalize_uri(file);
-        for f in *findings {
+        let associated_fixes = fixes_for_findings(findings, *plan);
+        for (finding_index, f) in findings.iter().enumerate() {
             let idx = *rule_index.get(&f.rule).unwrap_or(&0);
             let mut result = serde_json::json!({
                 "ruleId": f.rule,
@@ -481,6 +556,15 @@ fn build_sarif(results: &[(&str, &[Finding])]) -> String {
                         serde_json::json!(f.end_column);
                 }
             }
+            let sarif_fixes = associated_fixes[finding_index]
+                .iter()
+                .map(|fix| sarif_fix(&uri, fix))
+                .collect::<Vec<_>>();
+            if !sarif_fixes.is_empty() {
+                result["fixes"] = serde_json::Value::Array(sarif_fixes);
+                result["properties"]["droastFixes"] =
+                    serde_json::to_value(&associated_fixes[finding_index]).unwrap();
+            }
             sarif_results.push(result);
         }
     }
@@ -488,7 +572,7 @@ fn build_sarif(results: &[(&str, &[Finding])]) -> String {
     // Artifacts — the list of scanned files (optional but useful for tooling).
     let artifacts: Vec<serde_json::Value> = results
         .iter()
-        .map(|(file, _)| {
+        .map(|(file, _, _)| {
             serde_json::json!({
                 "location": {
                     "uri": normalize_uri(file),
@@ -516,6 +600,31 @@ fn build_sarif(results: &[(&str, &[Finding])]) -> String {
     });
 
     serde_json::to_string_pretty(&doc).unwrap()
+}
+
+fn sarif_fix(uri: &str, fix: &PlannedFix) -> serde_json::Value {
+    let replacements = fix
+        .edits
+        .iter()
+        .map(|edit| {
+            serde_json::json!({
+                "deletedRegion": {
+                    "startLine": edit.start.line,
+                    "endLine": edit.end.line,
+                    "byteOffset": edit.start_byte,
+                    "byteLength": edit.end_byte - edit.start_byte
+                },
+                "insertedContent": { "text": edit.replacement }
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "description": { "text": fix.title },
+        "artifactChanges": [{
+            "artifactLocation": { "uri": uri, "uriBaseId": "%SRCROOT%" },
+            "replacements": replacements
+        }]
+    })
 }
 
 /// Map droast severity to the SARIF level string.

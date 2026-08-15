@@ -164,9 +164,14 @@ droast --format compact Dockerfile   # one line per finding
 droast --format sarif Dockerfile     # SARIF 2.1.0 for GitHub Advanced Security / IDEs
 
 # preview and apply deterministic fixes
+droast fixes Dockerfile
 droast --fix --dry-run --format diff Dockerfile
 droast --fix Dockerfile
 droast --fix DF076,DF079 Dockerfile
+
+# inspect effective builds without Docker or Podman
+droast invocations .
+droast invocations --format json .
 ```
 
 When given a directory—or no path at all—droast recursively discovers `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `*.dockerfile`, `Containerfile`, and `Containerfile.*`. It also reads Compose YAML and Docker Bake HCL/JSON files to find non-standard Dockerfile paths and their declared build contexts. In Podman mode, it additionally follows Quadlet `.build`/`.kube` units and local-image `*.kube.yaml` layouts. Repository ignore rules are respected, while hidden project directories such as `.devcontainer` remain discoverable.
@@ -187,6 +192,7 @@ Fixing is opt-in. `--fix` currently changes only four mechanical findings:
 Preview the exact patch before changing anything:
 
 ```bash
+droast fixes Dockerfile
 droast --fix --dry-run --format diff .
 ```
 
@@ -199,7 +205,18 @@ droast --fix DF076,DF079 Dockerfile
 
 Only reported findings are eligible, so configuration, `--only`, `--skip`, severity filtering, and inline suppressions are respected. Ambiguous casing and non-literal protocols are left unchanged. Files are hash-checked, edits must not overlap, and regular files are replaced atomically with their permissions preserved. Stdin, symlinks, and hard-linked files are deliberately not rewritten. After applying fixes, droast lints the updated files and bases its exit status on the findings that remain.
 
-For tooling, `droast --fix --dry-run --format json` emits the versioned fix protocol with applicability, stable fix ID and version, source hash, impact metadata, original text, replacement text, zero-based UTF-8 byte ranges, and one-based line/column positions. See [safe deterministic fixes](DOCS.md#safe-deterministic-fixes) for the complete contract and refusal behavior.
+For tooling, `droast fixes --format json` and `droast --fix --dry-run --format json` emit the versioned fix protocol with applicability, stable fix ID and version, source hash, impact metadata, original text, replacement text, zero-based UTF-8 byte ranges, and one-based line/column positions. Normal JSON findings include matching fix objects, and SARIF findings include standard artifact replacements plus the complete protocol metadata. See [safe deterministic fixes](DOCS.md#safe-deterministic-fixes) for the complete contract and refusal behavior.
+
+## effective build invocations
+
+`droast invocations .` resolves each distinct local build declared directly, through Compose, or through Bake. It stays offline and daemonless while reporting Dockerfile and context paths, targets, arguments, platform matrices, named contexts, secret and SSH declarations, caches, exporters, attestations, and the effective ignore file.
+
+```bash
+droast invocations .
+droast invocations --format json .
+```
+
+Values retain their definition and environment provenance. Missing substitutions remain explicitly `unresolved`; sensitive build arguments are `redacted` without retaining their value. Compose `.env` values have lower precedence than the process environment. Bake inheritance cycles and conflicting parent definitions are reported. The versioned JSON contract is [`schemas/droast-build-invocations-v1.schema.json`](schemas/droast-build-invocations-v1.schema.json).
 
 ## configuration
 

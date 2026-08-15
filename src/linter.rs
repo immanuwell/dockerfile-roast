@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::fixes::{self, FixPlan};
 use crate::parser;
 use crate::repository::{self, ContainerEngine, DockerignoreProblem};
 use crate::rules::{self, Finding, Severity};
@@ -31,6 +32,7 @@ pub struct LintOptions {
     pub strict_labels: bool,
     pub shellcheck_mode: shellcheck::Mode,
     pub shellcheck_exclude: Vec<String>,
+    pub plan_fixes: bool,
 }
 
 impl Default for LintOptions {
@@ -56,6 +58,7 @@ impl Default for LintOptions {
             strict_labels: false,
             shellcheck_mode: shellcheck::Mode::Off,
             shellcheck_exclude: Vec::new(),
+            plan_fixes: false,
         }
     }
 }
@@ -63,6 +66,8 @@ impl Default for LintOptions {
 pub struct LintResult {
     pub file: String,
     pub findings: Vec<Finding>,
+    /// Safe, deterministic fixes associated with the finalized findings.
+    pub fix_plan: Option<FixPlan>,
 }
 
 /// Lint Dockerfile content that has already been read into a string.
@@ -77,6 +82,15 @@ pub fn lint_content(content: &str, filename: &str, opts: &LintOptions) -> LintRe
         add_ignorefile_finding(&mut result, &stdin_marker, &context, opts);
     }
     finalize_findings(content, &mut result.findings, opts);
+    if opts.plan_fixes {
+        result.fix_plan = fixes::plan(
+            filename,
+            content,
+            &result.findings,
+            &std::collections::HashSet::new(),
+        )
+        .ok();
+    }
     result
 }
 
@@ -112,6 +126,7 @@ fn lint_content_without_context(content: &str, filename: &str, opts: &LintOption
     LintResult {
         file: filename.to_string(),
         findings,
+        fix_plan: None,
     }
 }
 
@@ -163,6 +178,15 @@ pub fn lint_file_with_context(
         contextualize_copy_all_findings(&mut result, path, context, opts);
     }
     finalize_findings(&content, &mut result.findings, opts);
+    if opts.plan_fixes {
+        result.fix_plan = fixes::plan(
+            &result.file,
+            &content,
+            &result.findings,
+            &std::collections::HashSet::new(),
+        )
+        .ok();
+    }
     Ok(result)
 }
 

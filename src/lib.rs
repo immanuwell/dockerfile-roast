@@ -12,6 +12,8 @@ pub mod hadolint;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub mod hadolint_compat;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub mod invocation;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub mod linter;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub mod messages;

@@ -30,6 +30,170 @@ fn policy_fixture(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn fixes_subcommand_is_read_only_and_normal_json_and_sarif_include_fixes() {
+    let root = policy_fixture("fix-metadata");
+    let dockerfile = root.join("Dockerfile");
+    let source = "from alpine AS build\nEXPOSE 8080/TCP\n";
+    std::fs::write(&dockerfile, source).unwrap();
+
+    let listed = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args(["fixes", "--format", "json", dockerfile.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        listed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let plan: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+    assert_eq!(plan["protocol_version"], 1);
+    assert!(plan["fixes"]
+        .as_array()
+        .is_some_and(|fixes| !fixes.is_empty()));
+    assert_eq!(std::fs::read_to_string(&dockerfile).unwrap(), source);
+
+    let json = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            "--format",
+            "json",
+            "--no-fail",
+            dockerfile.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert!(json["findings"].as_array().unwrap().iter().any(|finding| {
+        finding["fixes"]
+            .as_array()
+            .is_some_and(|fixes| !fixes.is_empty())
+    }));
+
+    let sarif = run_sarif(&[
+        "--format",
+        "sarif",
+        "--no-fail",
+        dockerfile.to_str().unwrap(),
+    ]);
+    assert!(sarif["runs"][0]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|finding| {
+            finding["fixes"]
+                .as_array()
+                .is_some_and(|fixes| !fixes.is_empty())
+                && finding["properties"]["droastFixes"].is_array()
+        }));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn compose_invocations_preserve_effective_values_and_redact_secrets() {
+    let root = policy_fixture("compose-invocations");
+    std::fs::write(root.join("Dockerfile"), "FROM alpine AS build\n").unwrap();
+    std::fs::write(root.join(".env"), "PUBLIC=from-dotenv\n").unwrap();
+    std::fs::write(
+        root.join("compose.yaml"),
+        r#"services:
+  first:
+    build:
+      context: .
+      args:
+        PUBLIC: ${PUBLIC}
+        API_TOKEN: must-not-appear
+        UNSET:
+      target: build
+      platforms: [linux/amd64, linux/arm64]
+      additional_contexts:
+        assets: ./assets
+      secrets:
+        - source: npm
+          target: npmrc
+  second:
+    build:
+      context: .
+      args: [MODE=release]
+"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args(["invocations", "--format", "json", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(!text.contains("must-not-appear"));
+    let document: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let invocations = document["invocations"].as_array().unwrap();
+    assert_eq!(invocations.len(), 2);
+    let first = invocations
+        .iter()
+        .find(|value| value["origin"]["name"] == "first")
+        .unwrap();
+    assert_eq!(first["build_args"]["PUBLIC"]["value"], "from-dotenv");
+    assert_eq!(first["build_args"]["API_TOKEN"]["state"], "redacted");
+    assert_eq!(first["build_args"]["UNSET"]["state"], "unresolved");
+    assert_eq!(first["platforms"].as_array().unwrap().len(), 2);
+    assert_eq!(first["target"]["value"], "build");
+    assert_eq!(first["secrets"][0]["id"]["value"], "npm");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn bake_inheritance_matrices_cycles_and_json_order_are_deterministic() {
+    let root = policy_fixture("bake-invocations");
+    std::fs::write(root.join("Dockerfile"), "FROM alpine\n").unwrap();
+    std::fs::write(
+        root.join("docker-bake.json"),
+        r#"{
+  "target": {
+    "base": {"context":".","dockerfile":"Dockerfile","args":{"MODE":"base"}},
+    "release": {"inherits":["base"],"matrix":{"arch":["amd64","arm64"]},"platforms":["linux/${arch}"],"output":["type=registry"]},
+    "cycle-a": {"inherits":["cycle-b"]},
+    "cycle-b": {"inherits":["cycle-a"]}
+  }
+}"#,
+    )
+    .unwrap();
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_droast"))
+            .args(["invocations", "--format", "json", root.to_str().unwrap()])
+            .output()
+            .unwrap()
+    };
+    let first = run();
+    let second = run();
+    assert!(first.status.success());
+    assert_eq!(first.stdout, second.stdout);
+    let document: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert!(document["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning.as_str().unwrap().contains("cyclic")));
+    let releases = document["invocations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|value| {
+            value["origin"]["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("release["))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(releases.len(), 2);
+    assert_eq!(releases[0]["build_args"]["MODE"]["value"], "base");
+    assert!(releases
+        .iter()
+        .all(|value| value["exporters"][0]["value"] == "type=registry"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn fix_applies_all_safe_fixes_and_is_idempotent() {
     let root = policy_fixture("fix-all");
     let dockerfile = root.join("Dockerfile");
