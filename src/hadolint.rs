@@ -153,8 +153,9 @@ fn apply_rule(
 }
 
 /// Hadolint rules with equivalent droast checks. One Hadolint rule may map to multiple checks.
-fn aliases(rule: &str) -> Option<&'static [&'static str]> {
+pub(crate) fn aliases(rule: &str) -> Option<&'static [&'static str]> {
     match rule.to_ascii_uppercase().as_str() {
+        "DL1000" => Some(&["DF071"]),
         "DL3000" => Some(&["DF009"]),
         "DL3001" => Some(&["DF060"]),
         "DL3002" => Some(&["DF002"]),
@@ -163,6 +164,7 @@ fn aliases(rule: &str) -> Option<&'static [&'static str]> {
         "DL3006" | "DL3007" => Some(&["DF001"]),
         "DL3008" | "DL3033" | "DL3037" | "DL3041" => Some(&["DF005"]),
         "DL3009" => Some(&["DF004"]),
+        "DL3011" => Some(&["DF040"]),
         "DL3012" => Some(&["DF041"]),
         "DL3013" => Some(&["DF051"]),
         "DL3014" => Some(&["DF015"]),
@@ -170,12 +172,14 @@ fn aliases(rule: &str) -> Option<&'static [&'static str]> {
         "DL3016" => Some(&["DF031"]),
         "DL3018" => Some(&["DF052"]),
         "DL3019" => Some(&["DF029"]),
+        "DL3020" => Some(&["DF006"]),
         "DL3021" => Some(&["DF048"]),
         "DL3022" => Some(&["DF049"]),
         "DL3023" => Some(&["DF050"]),
         "DL3024" => Some(&["DF042"]),
         "DL3025" => Some(&["DF018", "DF025"]),
         "DL3026" => Some(&["DF065"]),
+        "DL3027" => Some(&["DF059"]),
         "DL3028" => Some(&["DF053"]),
         "DL3029" => Some(&["DF061"]),
         "DL3030" => Some(&["DF027"]),

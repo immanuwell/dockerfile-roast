@@ -12,6 +12,7 @@ Use this guide as a quick reference. Every section favors copy-paste examples ov
 - [Command line reference](#command-line-reference)
 - [Repository discovery](#repository-discovery)
 - [Configuration](#configuration)
+- [Hadolint replacement mode](#hadolint-replacement-mode)
 - [Custom messages](#custom-messages)
 - [Copy-paste presets](#copy-paste-presets)
 - [Control rules and severity](#control-rules-and-severity)
@@ -924,6 +925,52 @@ These patterns are established in mature tooling:
 This is evidence of established team workflows, not a claim about private configuration inside any named company. Exact internal policies are rarely public.
 
 droast keeps all of this optional. With no `droast.toml`, no policy-specific rule activates and existing lint defaults remain unchanged.
+
+## Hadolint replacement mode
+
+Try droast in an existing Hadolint workflow without changing its policy file:
+
+```bash
+droast --hadolint-compatible Dockerfile
+```
+
+In this mode, `--config` refers to Hadolint YAML rather than `droast.toml`. Without `--config`, droast uses Hadolint's first existing config location, including the project-local `.hadolint.yaml` and `.hadolint.yml` paths. With no Dockerfile argument, input is read from stdin; use `-` explicitly when that is clearer in scripts.
+
+The compatibility CLI accepts:
+
+- `-c/--config`, `-f/--format`, `-o/--output`, and `--file-path-in-report`
+- `--ignore`, `--error`, `--warning`, `--info`, and `--style`
+- `--trusted-registry`, `--require-label`, and `--strict-labels`
+- `--disable-ignore-pragma`, `--no-color`, `--no-fail`, and `-V/--verbose`
+- `-t/--failure-threshold` with `error`, `warning`, `info`, `style`, `ignore`, or `none`
+
+It also reads `NO_COLOR` and the common `HADOLINT_*` variables: `HADOLINT_NOFAIL`, `HADOLINT_VERBOSE`, `HADOLINT_FORMAT`, `HADOLINT_FAILURE_THRESHOLD`, all four `HADOLINT_OVERRIDE_*` lists, `HADOLINT_IGNORE`, `HADOLINT_STRICT_LABELS`, `HADOLINT_DISABLE_IGNORE_PRAGMA`, `HADOLINT_TRUSTED_REGISTRIES`, and `HADOLINT_REQUIRE_LABELS`.
+
+Available formats are `tty`, `json`, `checkstyle`, `codeclimate`, `gitlab_codeclimate`, `gnu`, `codacy`, `sonarqube`, `sarif`, and `junit`:
+
+```bash
+droast --hadolint-compatible --format gitlab_codeclimate \
+  --file-path-in-report Dockerfile Dockerfile > gl-code-quality-report.json
+```
+
+Compatibility mode deliberately runs only checks with a declared Hadolint relationship, plus external ShellCheck checks when ShellCheck is installed. An equivalent check is reported under its `DL####` ID. If one droast check is broader than the Hadolint rule or differs in observable behavior, it keeps its `DF####` ID so downstream suppressions are not silently misrepresented. Referencing such a rule—or an unmatched rule or setting—in YAML, the environment, or flags prints a diagnostic on stderr while linting continues.
+
+Print the complete versioned mapping matrix with:
+
+```bash
+droast --hadolint-compatible --hadolint-compatibility-report
+```
+
+Hadolint's inline and global pragmas are supported:
+
+```dockerfile
+# hadolint global ignore=DL3006
+
+# hadolint ignore=DL3003
+RUN cd /tmp && make
+```
+
+Use `--disable-ignore-pragma` (or the corresponding YAML/environment setting) to audit suppressed findings.
 
 ## Custom messages
 

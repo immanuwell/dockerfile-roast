@@ -1,4 +1,4 @@
-use dockerfile_roast::{config, hadolint, linter, messages, output, repository, rules, shellcheck};
+use dockerfile_roast::{config, hadolint, hadolint_compat, linter, messages, output, repository, rules, shellcheck};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process;
@@ -39,27 +39,6 @@ impl From<SeverityArg> for Severity {
             SeverityArg::Error => Severity::Error,
             SeverityArg::Warning => Severity::Warning,
             SeverityArg::Info => Severity::Info,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum FormatArg {
-    Terminal,
-    Json,
-    Github,
-    Compact,
-    Sarif,
-}
-
-impl From<FormatArg> for OutputFormat {
-    fn from(f: FormatArg) -> Self {
-        match f {
-            FormatArg::Terminal => OutputFormat::Terminal,
-            FormatArg::Json => OutputFormat::Json,
-            FormatArg::Github => OutputFormat::Github,
-            FormatArg::Compact => OutputFormat::Compact,
-            FormatArg::Sarif => OutputFormat::Sarif,
         }
     }
 }
@@ -194,7 +173,7 @@ struct Cli {
     files: Vec<PathBuf>,
 
     /// Load project configuration from this path instead of discovering droast.toml
-    #[arg(long, value_name = "PATH")]
+    #[arg(short = 'c', long, value_name = "PATH")]
     config: Option<PathBuf>,
 
     /// Load optional terminal message overrides from this YAML file
@@ -213,9 +192,73 @@ struct Cli {
     #[arg(long, value_delimiter = ',', value_name = "CATEGORY")]
     skip_category: Vec<String>,
 
-    /// Output format: terminal, json, github, compact, or sarif
-    #[arg(short, long, value_enum)]
-    format: Option<FormatArg>,
+    /// Output format (Hadolint format names are enabled in compatibility mode)
+    #[arg(short, long, value_name = "FORMAT")]
+    format: Option<String>,
+
+    /// Accept Hadolint configuration, flags, environment variables, rule IDs, and output formats
+    #[arg(long)]
+    hadolint_compatible: bool,
+
+    /// Print the complete Hadolint rule compatibility matrix
+    #[arg(long, requires = "hadolint_compatible")]
+    hadolint_compatibility_report: bool,
+
+    /// Override the file path embedded in Hadolint-compatible reports
+    #[arg(long, value_name = "PATH", requires = "hadolint_compatible")]
+    file_path_in_report: Option<PathBuf>,
+
+    /// Write Hadolint-compatible output to this file
+    #[arg(short = 'o', long, value_name = "PATH", requires = "hadolint_compatible")]
+    output: Vec<PathBuf>,
+
+    /// Do not colorize Hadolint-compatible terminal output
+    #[arg(long, requires = "hadolint_compatible")]
+    no_color: bool,
+
+    /// Print effective Hadolint compatibility configuration to stderr
+    #[arg(long, requires = "hadolint_compatible")]
+    verbose: bool,
+
+    /// Override a Hadolint rule to error severity
+    #[arg(long, value_name = "RULE", requires = "hadolint_compatible")]
+    error: Vec<String>,
+
+    /// Override a Hadolint rule to warning severity
+    #[arg(long, value_name = "RULE", requires = "hadolint_compatible")]
+    warning: Vec<String>,
+
+    /// Override a Hadolint rule to info severity
+    #[arg(long, value_name = "RULE", requires = "hadolint_compatible")]
+    info: Vec<String>,
+
+    /// Override a Hadolint rule to style severity
+    #[arg(long, value_name = "RULE", requires = "hadolint_compatible")]
+    style: Vec<String>,
+
+    /// Ignore a Hadolint rule (repeatable; CLI list replaces config ignored list)
+    #[arg(long, value_name = "RULE", requires = "hadolint_compatible")]
+    ignore: Vec<String>,
+
+    /// Allow a registry in FROM instructions
+    #[arg(long, value_name = "REGISTRY", requires = "hadolint_compatible")]
+    trusted_registry: Vec<String>,
+
+    /// Require a label and format, for example maintainer:text
+    #[arg(long, value_name = "LABEL:FORMAT", requires = "hadolint_compatible")]
+    require_label: Vec<String>,
+
+    /// Reject labels not declared by --require-label or label-schema
+    #[arg(long, requires = "hadolint_compatible")]
+    strict_labels: bool,
+
+    /// Disable `# hadolint ignore=...` pragmas
+    #[arg(long, requires = "hadolint_compatible")]
+    disable_ignore_pragma: bool,
+
+    /// Hadolint failure threshold: error, warning, info, style, ignore, or none
+    #[arg(short = 't', long, value_name = "THRESHOLD", requires = "hadolint_compatible")]
+    failure_threshold: Option<String>,
 
     /// Minimum severity to report [default: info] [possible values: info, warning, error]
     #[arg(short = 's', long, value_enum)]
@@ -275,7 +318,21 @@ struct Cli {
 
 fn main() -> Result<()> {
     let command = cli_command();
-    let cli = Cli::from_arg_matches(&mut command.get_matches())?;
+    // Hadolint assigns -v to version and -V to verbose, while clap's native
+    // version flag uses -V. Translate only in compatibility mode so normal
+    // droast invocations keep their established -V behavior.
+    let mut args = std::env::args_os().collect::<Vec<_>>();
+    let compatibility = args.iter().any(|arg| arg == "--hadolint-compatible");
+    if compatibility {
+        for arg in &mut args {
+            if arg == "-V" {
+                *arg = "--verbose".into();
+            } else if arg == "-v" {
+                *arg = "--version".into();
+            }
+        }
+    }
+    let cli = Cli::from_arg_matches(&command.get_matches_from(args))?;
 
     match cli.command {
         Some(Commands::Completion { shell }) => {
@@ -295,8 +352,36 @@ fn main() -> Result<()> {
         None => {}
     }
 
+    if cli.hadolint_compatible {
+        let code = hadolint_compat::run(hadolint_compat::CliOptions {
+            files: cli.files.clone(),
+            config: cli.config.clone(),
+            format: cli.format.clone(),
+            outputs: cli.output.clone(),
+            file_path_in_report: cli.file_path_in_report.clone(),
+            no_fail: cli.no_fail,
+            no_color: cli.no_color,
+            verbose: cli.verbose,
+            error: cli.error.clone(),
+            warning: cli.warning.clone(),
+            info: cli.info.clone(),
+            style: cli.style.clone(),
+            ignore: cli.ignore.clone(),
+            trusted_registries: cli.trusted_registry.clone(),
+            required_labels: cli.require_label.clone(),
+            strict_labels: cli.strict_labels,
+            disable_ignore_pragma: cli.disable_ignore_pragma,
+            failure_threshold: cli.failure_threshold.clone(),
+            report: cli.hadolint_compatibility_report,
+        })?;
+        if code != 0 {
+            exit(code);
+        }
+        return Ok(());
+    }
+
     if cli.list_rules {
-        if matches!(cli.format, Some(FormatArg::Json)) {
+        if cli.format.as_deref() == Some("json") {
             print_rule_list_json();
         } else {
             print_rule_list();
@@ -326,7 +411,9 @@ fn main() -> Result<()> {
 
     let format: OutputFormat = cli
         .format
-        .map(Into::into)
+        .as_deref()
+        .map(parse_cli_format)
+        .transpose()?
         .or_else(|| parse_format(global_settings.format.as_deref()))
         .unwrap_or(OutputFormat::Terminal);
 
@@ -776,6 +863,10 @@ fn parse_format(s: Option<&str>) -> Option<OutputFormat> {
             None
         }
     }
+}
+
+fn parse_cli_format(value: &str) -> anyhow::Result<OutputFormat> {
+    value.parse().map_err(anyhow::Error::msg)
 }
 
 fn parse_severity(s: Option<&str>) -> Option<Severity> {

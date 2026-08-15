@@ -213,6 +213,14 @@ droast init --from-hadolint .hadolint.yaml
 
 Compatible settings and Hadolint `DL` rule aliases are imported; Droast reports every setting or rule that has no equivalent so the migration stays reviewable.
 
+Or replace a Hadolint invocation directly, without converting configuration:
+
+```bash
+droast --hadolint-compatible Dockerfile
+```
+
+Compatibility mode discovers `.hadolint.yaml`/`.hadolint.yml`, accepts Hadolint's common configuration environment variables and flags, understands Hadolint inline ignore pragmas, and supports `tty`, `json`, `checkstyle`, `codeclimate`, `gitlab_codeclimate`, `gnu`, `codacy`, `sonarqube`, `sarif`, and `junit` output. Equivalent checks report their original `DL####` identity. Broader checks retain their `DF####` identity, and configured rules or settings that are unmatched or behaviorally different are reported on stderr. Run `droast --hadolint-compatible --hadolint-compatibility-report` for the complete mapping matrix.
+
 Larger teams can add path-specific overrides, rule categories, inherited organization policy, registry and base-image allowlists, required OCI labels, and governed inline suppressions with mandatory reasons and expiration dates:
 
 ```dockerfile
