@@ -902,7 +902,8 @@ pub fn ignored_copy_sources(
     let mut builder = GitignoreBuilder::new(context);
     builder.add(&ignorefile);
     let matcher = builder.build().map_err(std::io::Error::other)?;
-    let root_excluded = context_root_excluded(&std::fs::read_to_string(&ignorefile)?);
+    let ignorefile_content = std::fs::read_to_string(&ignorefile)?;
+    let root_excluded = context_root_excluded(&ignorefile_content);
     let content = std::fs::read_to_string(dockerfile)?;
     let document = crate::parser::parse_document(&content);
     let mut ignored = Vec::new();
@@ -949,12 +950,46 @@ pub fn ignored_copy_sources(
             if matcher
                 .matched_path_or_any_parents(&candidate, false)
                 .is_ignore()
+                && !negation_may_rescue_children(&ignorefile_content, &cleaned)
             {
                 ignored.push((instruction.line, source.value.clone()));
             }
         }
     }
     Ok(ignored)
+}
+
+/// Whether a negation pattern in the ignore file could still rescue some file
+/// nested under `cleaned`. Unlike git, Docker's build-context filter does not
+/// prune matching once an ancestor directory is excluded: patterns are
+/// applied per file, so a later `!` pattern can re-include a file even though
+/// an earlier pattern (such as a bare `*`) excluded one of its parent
+/// directories. When such a pattern exists we cannot tell, without walking
+/// the real build context, whether every file under a directory source ends
+/// up excluded, so DF077 stays quiet rather than risk a false positive.
+fn negation_may_rescue_children(content: &str, cleaned: &str) -> bool {
+    let prefix = format!("{cleaned}/");
+    for (index, line) in content.lines().enumerate() {
+        let line = if index == 0 {
+            line.trim_start_matches('\u{feff}')
+        } else {
+            line
+        };
+        let pattern = line.trim();
+        let Some(negated) = pattern.strip_prefix('!') else {
+            continue;
+        };
+        let negated = negated.trim();
+        if negated.is_empty() {
+            continue;
+        }
+        let target = clean_context_path(negated);
+        let target = target.trim_start_matches('/');
+        if target.starts_with("**") || target.starts_with(&prefix) || target == cleaned {
+            return true;
+        }
+    }
+    false
 }
 
 /// Whether the ignore file excludes every entry at the build-context root.

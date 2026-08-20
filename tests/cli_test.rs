@@ -1063,6 +1063,78 @@ fn copy_ignored_file_uses_the_effective_build_context_ignore_file() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// Docker's build-context filter does not prune matching once an ancestor
+/// directory is excluded: a later `!` pattern can still rescue files nested
+/// under a directory that an earlier catch-all pattern excluded. DF077 must
+/// not flag a directory source in that case, since the directory is not
+/// actually empty in the real build context. https://github.com/immanuwell/dockerfile-roast/issues/56
+#[test]
+fn copy_ignored_file_does_not_flag_a_directory_rescued_by_a_nested_negation() {
+    let root = policy_fixture("copy-ignored-rescued");
+    let dockerfile = root.join("Dockerfile");
+    std::fs::write(&dockerfile, "FROM alpine:3.20\nCOPY ./src ./\n").unwrap();
+    std::fs::write(
+        root.join(".dockerignore"),
+        "*\n!src/my_app/*.py\n!src/my_app/assets/favicon.ico\n!src/my_app/components/*.py\n!src/my_app/pages/*.py\n!src/scripts/*.py\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--only",
+            "DF077",
+            "--format",
+            "json",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        result["findings"].as_array().unwrap().is_empty(),
+        "{result}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// When no negation pattern reaches inside the excluded directory, the whole
+/// source really is empty in the build context, so DF077 should still fire.
+#[test]
+fn copy_ignored_file_still_flags_a_directory_with_no_rescuing_negation() {
+    let root = policy_fixture("copy-ignored-not-rescued");
+    let dockerfile = root.join("Dockerfile");
+    std::fs::write(&dockerfile, "FROM alpine:3.20\nCOPY ./secret ./\n").unwrap();
+    std::fs::write(root.join(".dockerignore"), "*\n!other/*.py\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--only",
+            "DF077",
+            "--format",
+            "json",
+            "--no-fail",
+            "--check-dockerignore=false",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["findings"][0]["rule"], "DF077");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// The build-context root is not an entry that a pattern can exclude, so only a
 /// catch-all that empties the root makes `COPY .` copy nothing. This mirrors
 /// BuildKit's `CopyIgnoredFile` behaviour.
