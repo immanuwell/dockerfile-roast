@@ -6,9 +6,38 @@ on:
     types: [completed]
 
 jobs:
+  check:
+    # The Release workflow's overall conclusion can be "failure" even when its
+    # "release" job (which publishes the GitHub Release binaries this workflow
+    # needs) succeeded -- for example when the unrelated Homebrew tap update
+    # job fails. Gate on that specific job's conclusion instead of the whole
+    # workflow's, so an unrelated job failing elsewhere in Release doesn't
+    # skip publishing the extension.
+    if: github.event.workflow_run.conclusion != 'cancelled'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      should_publish: ${{ steps.gate.outputs.should_publish }}
+    steps:
+      - name: Check whether the release binaries were actually published
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          conclusion="$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs" \
+            --jq '.jobs[] | select(.name == "release") | .conclusion')"
+          if [[ "$conclusion" == "success" ]]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "release job concluded '$conclusion'; skipping VS Code publish" >&2
+          fi
+
   publish:
-    # Only run when the Release workflow succeeded (binaries exist in the release).
-    if: github.event.workflow_run.conclusion == 'success'
+    needs: check
+    if: needs.check.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
