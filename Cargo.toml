@@ -11,6 +11,18 @@ keywords = ["dockerfile", "linter", "docker", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 include = ["/src/**", "/tests/**", "/examples/**", "/schemas/**", "/Cargo.toml", "/Cargo.lock", "/build.rs", "/README.md", "/DOCS.md", "/LICENSE"]
 
+[package.metadata.binstall]
+pkg-fmt = "bin"
+
+[package.metadata.binstall.overrides]
+aarch64-apple-darwin.pkg-url       = "{repo}/releases/download/{version}/droast-macos-arm64"
+aarch64-unknown-linux-gnu.pkg-url  = "{repo}/releases/download/{version}/droast-linux-arm64"
+aarch64-unknown-linux-musl.pkg-url = "{repo}/releases/download/{version}/droast-linux-arm64"
+x86_64-apple-darwin.pkg-url        = "{repo}/releases/download/{version}/droast-macos-x86_64"
+x86_64-pc-windows-msvc.pkg-url     = "{repo}/releases/download/{version}/droast-windows-x86_64.exe"
+x86_64-unknown-linux-gnu.pkg-url   = "{repo}/releases/download/{version}/droast-linux-x86_64"
+x86_64-unknown-linux-musl.pkg-url  = "{repo}/releases/download/{version}/droast-linux-x86_64"
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
