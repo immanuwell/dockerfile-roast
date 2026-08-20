@@ -2,7 +2,7 @@
   "name": "droast",
   "displayName": "droast — Dockerfile Linter",
   "description": "Dockerfile linter with personality. Catches bad practices and tells you about them in the least diplomatic way possible.",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "publisher": "ImmanuelTikhonov",
   "license": "MIT",
   "icon": "icon.png",
