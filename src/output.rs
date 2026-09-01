@@ -94,11 +94,12 @@ fn severity_color(s: &Severity) -> ColoredString {
 
 fn print_terminal(file: &str, findings: &[Finding], no_roast: bool, messages: &MessageOverrides) {
     if findings.is_empty() {
-        println!(
-            "\n  {} {}\n",
-            "✓".green().bold(),
-            format!("{} passed with no issues. Impressive restraint.", file).green()
-        );
+        let message = if no_roast {
+            format!("{} passed with no issues.", file)
+        } else {
+            format!("{} passed with no issues. Impressive restraint.", file)
+        };
+        println!("\n  {} {}\n", "✓".green().bold(), message.green());
         return;
     }
 

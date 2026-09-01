@@ -1965,3 +1965,58 @@ fn dockerfile_specific_ignore_works_without_a_context_root_ignore() {
             .ends_with("docker/override.build")
     }));
 }
+
+#[test]
+fn no_roast_suppresses_roast_text_in_clean_terminal_output() {
+    let root = policy_fixture("no-roast-clean");
+    let dockerfile = root.join("Dockerfile");
+    std::fs::write(
+        &dockerfile,
+        "FROM alpine:3.19@sha256:c5b1261d6d3e43071626931fc004f70149baeba2c8ec672bd4f27761f8e1ad6b\n\
+         USER app\n\
+         HEALTHCHECK CMD true\n\
+         EXPOSE 8080\n\
+         CMD [\"true\"]\n",
+    )
+    .unwrap();
+
+    let roasted = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([dockerfile.to_str().unwrap(), "--check-dockerignore=false"])
+        .output()
+        .unwrap();
+    assert!(
+        roasted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&roasted.stderr)
+    );
+    let roasted_stdout = String::from_utf8_lossy(&roasted.stdout);
+    assert!(
+        roasted_stdout.contains("passed with no issues. Impressive restraint."),
+        "default clean output should keep the roast: {roasted_stdout}"
+    );
+
+    let plain = Command::new(env!("CARGO_BIN_EXE_droast"))
+        .args([
+            dockerfile.to_str().unwrap(),
+            "--check-dockerignore=false",
+            "--no-roast",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        plain.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    let plain_stdout = String::from_utf8_lossy(&plain.stdout);
+    assert!(
+        plain_stdout.contains("passed with no issues."),
+        "clean output should still confirm success: {plain_stdout}"
+    );
+    assert!(
+        !plain_stdout.contains("Impressive restraint"),
+        "--no-roast should drop the roast from clean output: {plain_stdout}"
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
