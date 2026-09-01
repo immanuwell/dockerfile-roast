@@ -92,14 +92,21 @@ fn severity_color(s: &Severity) -> ColoredString {
     }
 }
 
+fn terminal_success_message(file: &str, no_roast: bool) -> String {
+    let mut message = format!("{file} passed with no issues.");
+    if !no_roast {
+        message.push_str(" Impressive restraint.");
+    }
+    message
+}
+
 fn print_terminal(file: &str, findings: &[Finding], no_roast: bool, messages: &MessageOverrides) {
     if findings.is_empty() {
-        let message = if no_roast {
-            format!("{} passed with no issues.", file)
-        } else {
-            format!("{} passed with no issues. Impressive restraint.", file)
-        };
-        println!("\n  {} {}\n", "✓".green().bold(), message.green());
+        println!(
+            "\n  {} {}\n",
+            "✓".green().bold(),
+            terminal_success_message(file, no_roast).green()
+        );
         return;
     }
 
@@ -655,7 +662,9 @@ fn normalize_uri(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_sarif, finding_fingerprint, github_annotation, json_output};
+    use super::{
+        build_sarif, finding_fingerprint, github_annotation, json_output, terminal_success_message,
+    };
     use crate::rules::{Finding, Severity};
 
     fn shellcheck_finding() -> Finding {
@@ -708,5 +717,17 @@ mod tests {
         let rendered = github_annotation("Dockerfile", &finding, true);
         assert!(rendered.ends_with(&finding.message));
         assert!(!rendered.contains(&finding.roast));
+    }
+
+    #[test]
+    fn terminal_success_output_honors_no_roast() {
+        assert_eq!(
+            terminal_success_message("Dockerfile", true),
+            "Dockerfile passed with no issues."
+        );
+        assert_eq!(
+            terminal_success_message("Dockerfile", false),
+            "Dockerfile passed with no issues. Impressive restraint."
+        );
     }
 }
