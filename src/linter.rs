@@ -329,19 +329,33 @@ fn contextualize_copy_all_findings(
     context: &Path,
     opts: &LintOptions,
 ) {
-    if !repository::ignores_common_copy_all_hazards(dockerfile, context, opts.engine)
-        .unwrap_or(false)
-    {
+    let Ok(Some(unignored)) =
+        repository::unignored_common_copy_all_hazards(dockerfile, context, opts.engine)
+    else {
+        // No effective ignore file: the default "consider a .dockerignore
+        // file" wording is accurate, so leave the finding untouched.
         return;
-    }
+    };
     for finding in result
         .findings
         .iter_mut()
         .filter(|finding| finding.rule == "DF007")
     {
-        finding.message =
-            "COPY . uses a protected build context but still broadens cache invalidation".into();
-        finding.roast = "Your ignore file keeps .git, node_modules, .env, and dist out of the build context. Nice. COPY . still makes every included file part of this layer's cache key, so prefer explicit copies when practical.".into();
+        if unignored.is_empty() {
+            finding.message =
+                "COPY . uses a protected build context but still broadens cache invalidation"
+                    .into();
+            finding.roast = "Your ignore file keeps .git, node_modules, .env, and dist out of the build context. Nice. COPY . still makes every included file part of this layer's cache key, so prefer explicit copies when practical.".into();
+        } else {
+            finding.message = format!(
+                "COPY . copies the entire build context — the effective ignore file still lets {} through",
+                unignored.join(", ")
+            );
+            finding.roast = format!(
+                "You have a .dockerignore, but it never mentions {}. COPY . scoops all of that into the image and the layer cache anyway. Widen the ignore file or copy explicit paths.",
+                unignored.join(", ")
+            );
+        }
     }
 }
 

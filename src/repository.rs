@@ -1048,6 +1048,14 @@ fn clean_context_path(value: &str) -> String {
     }
 }
 
+/// The common broad-copy hazards used as a narrow signal for diagnostic wording.
+const COMMON_COPY_ALL_HAZARDS: [(&str, bool); 4] = [
+    (".git", true),
+    ("node_modules", true),
+    (".env", false),
+    ("dist", true),
+];
+
 /// Whether the effective ignore file excludes the common broad-copy hazards
 /// `.git`, `node_modules`, `.env`, and `dist`. This is deliberately a narrow
 /// signal for diagnostic wording, not proof that `COPY .` is optimal.
@@ -1056,24 +1064,38 @@ pub fn ignores_common_copy_all_hazards(
     context: &Path,
     engine: ContainerEngine,
 ) -> std::io::Result<bool> {
+    Ok(
+        unignored_common_copy_all_hazards(dockerfile, context, engine)?
+            .is_some_and(|unignored| unignored.is_empty()),
+    )
+}
+
+/// The common broad-copy hazards that the effective ignore file does *not*
+/// exclude. Returns `None` when there is no effective ignore file at all, so
+/// callers can distinguish "no ignore file" from "ignore file misses some
+/// hazards".
+pub fn unignored_common_copy_all_hazards(
+    dockerfile: &Path,
+    context: &Path,
+    engine: ContainerEngine,
+) -> std::io::Result<Option<Vec<&'static str>>> {
     let Some(ignorefile) = effective_ignorefile(dockerfile, context, engine) else {
-        return Ok(false);
+        return Ok(None);
     };
     let mut builder = GitignoreBuilder::new(context);
     builder.add(ignorefile);
     let matcher = builder.build().map_err(std::io::Error::other)?;
-    Ok([
-        (".git", true),
-        ("node_modules", true),
-        (".env", false),
-        ("dist", true),
-    ]
-    .into_iter()
-    .all(|(path, is_dir)| {
-        matcher
-            .matched_path_or_any_parents(context.join(path), is_dir)
-            .is_ignore()
-    }))
+    Ok(Some(
+        COMMON_COPY_ALL_HAZARDS
+            .into_iter()
+            .filter(|(path, is_dir)| {
+                !matcher
+                    .matched_path_or_any_parents(context.join(path), *is_dir)
+                    .is_ignore()
+            })
+            .map(|(path, _)| path)
+            .collect(),
+    ))
 }
 
 fn has_exclusion_pattern(content: &str) -> bool {
@@ -1402,5 +1424,43 @@ mod tests {
             interpolate_path("cost-$$5", &environment),
             Some("cost-$5".into())
         );
+    }
+
+    #[test]
+    fn unignored_hazards_distinguish_missing_partial_and_complete_ignore_files() {
+        use super::{unignored_common_copy_all_hazards, ContainerEngine};
+
+        let root =
+            std::env::temp_dir().join(format!("droast-unignored-hazards-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let dockerfile = root.join("Dockerfile");
+        std::fs::write(&dockerfile, "FROM alpine:3.20\nCOPY . .\n").unwrap();
+
+        // No ignore file at all: caller cannot re-word, gets None.
+        assert_eq!(
+            unignored_common_copy_all_hazards(&dockerfile, &root, ContainerEngine::Docker).unwrap(),
+            None
+        );
+
+        // Partial ignore file: the missed hazards are reported.
+        std::fs::write(root.join(".dockerignore"), "target/\nbin/\n").unwrap();
+        assert_eq!(
+            unignored_common_copy_all_hazards(&dockerfile, &root, ContainerEngine::Docker).unwrap(),
+            Some(vec![".git", "node_modules", ".env", "dist"])
+        );
+
+        // Complete ignore file: nothing left unignored.
+        std::fs::write(
+            root.join(".dockerignore"),
+            ".git\nnode_modules\n.env\ndist\n",
+        )
+        .unwrap();
+        assert_eq!(
+            unignored_common_copy_all_hazards(&dockerfile, &root, ContainerEngine::Docker).unwrap(),
+            Some(Vec::new())
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
