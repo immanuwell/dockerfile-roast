@@ -336,6 +336,78 @@ fn df007_clear_on_specific_copy() {
     assert!(no_rule(&lint(df), "DF007"));
 }
 
+// ─── DF089: copy entire filesystem from another stage ───────────────────────
+
+#[test]
+fn df089_fires_on_copying_an_entire_stage_filesystem() {
+    let df = "FROM alpine:3.20 AS build\nRUN echo build\nFROM alpine:3.20\nCOPY --from=build / /\n";
+    assert!(has_rule(&lint(df), "DF089"));
+}
+
+#[test]
+fn df089_fires_on_copying_an_entire_external_image_filesystem() {
+    let df = "FROM alpine:3.20\nCOPY --from=busybox:1.36 / /.\n";
+    assert!(has_rule(&lint(df), "DF089"));
+}
+
+#[test]
+fn df089_clear_on_copying_a_specific_path() {
+    let df = "FROM alpine:3.20 AS build\nRUN echo build\nFROM alpine:3.20\nCOPY --from=build /app /app\n";
+    assert!(no_rule(&lint(df), "DF089"));
+}
+
+// ─── DF090: use SHELL instead of replacing /bin/sh ──────────────────────────
+
+#[test]
+fn df090_fires_when_run_replaces_the_default_shell() {
+    let df = "FROM alpine:3.20\nRUN apk add --no-cache bash\nRUN ln -sfv /bin/bash /bin/sh\n";
+    assert!(has_rule(&lint(df), "DF090"));
+}
+
+#[test]
+fn df090_accepts_long_symbolic_link_flags() {
+    let df = "FROM alpine:3.20\nRUN ln --symbolic --force /bin/bash /bin/sh\n";
+    assert!(has_rule(&lint(df), "DF090"));
+}
+
+#[test]
+fn df090_fires_regardless_of_the_link_source() {
+    let df = "FROM alpine:3.20\nRUN ln -s /opt/custom-shell /bin/sh\n";
+    assert!(has_rule(&lint(df), "DF090"));
+}
+
+#[test]
+fn df090_does_not_require_a_symbolic_link_flag() {
+    let df = "FROM alpine:3.20\nRUN ln -f /opt/custom-shell /bin/sh\n";
+    assert!(has_rule(&lint(df), "DF090"));
+}
+
+#[test]
+fn df090_clear_when_using_shell_or_installing_bash() {
+    let df = "FROM alpine:3.20\nRUN apk add --no-cache bash\nSHELL [\"/bin/bash\", \"-c\"]\nRUN echo ok\n";
+    assert!(no_rule(&lint(df), "DF090"));
+}
+
+// ─── DF091: Hadolint ignore comments ────────────────────────────────────────
+
+#[test]
+fn df091_fires_on_hadolint_ignore_comment() {
+    let df = "# hadolint ignore=DL3007\nFROM ubuntu:latest\n";
+    assert!(has_rule(&lint(df), "DF091"));
+}
+
+#[test]
+fn df091_accepts_spacing_and_case_variations() {
+    let df = "  # HADOLINT  IGNORE = DL3007,DL3008\nFROM alpine:3.20\n";
+    assert!(has_rule(&lint(df), "DF091"));
+}
+
+#[test]
+fn df091_ignores_other_comments_and_droast_suppressions() {
+    let df = "# ordinary comment\n# droast ignore=DF001\nFROM alpine:3.20\n";
+    assert!(no_rule(&lint(df), "DF091"));
+}
+
 // ─── DF009: relative WORKDIR ─────────────────────────────────────────────────
 
 #[test]
@@ -1154,6 +1226,18 @@ fn df027_fires_on_yum_without_y() {
 #[test]
 fn df027_clear_on_yum_with_y() {
     let df = "FROM centos:7\nRUN yum install -y curl && yum clean all\n";
+    assert!(no_rule(&lint(df), "DF027"));
+}
+
+#[test]
+fn df027_fires_on_dnf_without_y() {
+    let df = "FROM fedora:40\nRUN dnf install curl\n";
+    assert!(has_rule(&lint(df), "DF027"));
+}
+
+#[test]
+fn df027_clear_on_dnf_with_y() {
+    let df = "FROM fedora:40\nRUN dnf install -y curl\n";
     assert!(no_rule(&lint(df), "DF027"));
 }
 
@@ -2746,6 +2830,12 @@ fn df084_is_a_warning_for_the_reserved_scratch_alias() {
 }
 
 #[test]
+fn df084_is_a_warning_for_the_reserved_context_alias() {
+    let findings = lint("FROM alpine:3.20 AS context\nCOPY app /app\n");
+    assert_eq!(finding(&findings, "DF084").severity, Severity::Warning);
+}
+
+#[test]
 fn docker_variable_checks_distinguish_declared_and_undefined_variables() {
     let findings = lint("ARG TAG=3.20\nFROM scratch AS build\nCOPY ${MISSING} /app/\n");
     assert!(no_rule(&findings, "DF086"));
@@ -2753,6 +2843,27 @@ fn docker_variable_checks_distinguish_declared_and_undefined_variables() {
 
     let findings = lint("FROM alpine:${TAG}\n");
     assert!(has_rule(&findings, "DF086"));
+}
+
+#[test]
+fn df088_accepts_allowed_label_key_characters() {
+    let df = "FROM alpine:3.20\nLABEL org.example/app_name-v1=value plain.key=value\n";
+    assert!(no_rule(&lint(df), "DF088"));
+}
+
+#[test]
+fn df088_fires_on_invalid_label_key_characters() {
+    let df =
+        "FROM alpine:3.20\nLABEL org.example/app_name-v1=value LABEL +?not..valid--key=\"foo\"\n";
+    assert!(has_rule(&lint(df), "DF088"));
+}
+
+#[test]
+fn df088_checks_legacy_label_keys_without_treating_value_as_a_key() {
+    let valid = "FROM alpine:3.20\nLABEL org.example/title \"A label value\"\n";
+    let invalid = "FROM alpine:3.20\nLABEL org.example:title \"A label value\"\n";
+    assert!(no_rule(&lint(valid), "DF088"));
+    assert!(has_rule(&lint(invalid), "DF088"));
 }
 
 #[test]

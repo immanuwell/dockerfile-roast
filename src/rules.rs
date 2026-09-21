@@ -86,9 +86,8 @@ pub fn categories_for(id: &str) -> &'static [&'static str] {
         }
         "DF072" | "DF074" => &["correctness", "security"],
         "DF075" => &["correctness", "reliability"],
-        "DF076" | "DF077" | "DF078" | "DF079" | "DF082" | "DF084" | "DF085" | "DF086" | "DF087" => {
-            &["correctness", "reliability"]
-        }
+        "DF076" | "DF077" | "DF078" | "DF079" | "DF082" | "DF084" | "DF085" | "DF086" | "DF087"
+        | "DF088" | "DF089" | "DF090" | "DF091" => &["correctness", "reliability"],
         "DF083" => &["correctness", "reproducibility"],
         _ => &[],
     }
@@ -297,7 +296,7 @@ pub fn all_rules() -> Vec<Rule> {
         Rule {
             id: "DF027",
             severity: Severity::Error,
-            description: "Do not use yum without -y flag",
+            description: "Do not use yum or dnf without -y flag",
             func: rule_yum_no_y,
         },
         Rule {
@@ -606,6 +605,30 @@ pub fn all_rules() -> Vec<Rule> {
             description: "Declare Dockerfile variables before using them",
             func: rule_undefined_variable,
         },
+        Rule {
+            id: "DF088",
+            severity: Severity::Error,
+            description: "Use valid characters in LABEL keys",
+            func: rule_label_key_characters,
+        },
+        Rule {
+            id: "DF089",
+            severity: Severity::Warning,
+            description: "Do not copy an entire filesystem from another stage",
+            func: rule_copy_entire_filesystem,
+        },
+        Rule {
+            id: "DF090",
+            severity: Severity::Warning,
+            description: "Use SHELL instead of replacing /bin/sh",
+            func: rule_shell_overwrite,
+        },
+        Rule {
+            id: "DF091",
+            severity: Severity::Warning,
+            description: "Avoid Hadolint ignore comments",
+            func: rule_hadolint_ignore_pragma,
+        },
     ]
 }
 
@@ -790,6 +813,47 @@ fn rule_legacy_key_value_format(instrs: &[Instruction], _raw: &str) -> Vec<Findi
         }).collect()
 }
 
+fn rule_label_key_characters(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "LABEL")
+        .into_iter()
+        .flat_map(|instruction| {
+            let modern_syntax = instruction.words.iter().any(|word| word.value.contains('='));
+            let keys = if modern_syntax {
+                instruction
+                    .words
+                    .iter()
+                    .filter_map(|word| word.value.split_once('=').map(|(key, _)| (key, word)))
+                    .collect::<Vec<_>>()
+            } else {
+                instruction
+                    .words
+                    .first()
+                    .map(|word| vec![(word.value.as_str(), word)])
+                    .unwrap_or_default()
+            };
+
+            keys.into_iter()
+                .filter(|(key, _)| {
+                    key.is_empty()
+                        || !key.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric()
+                                || matches!(byte, b'.' | b'_' | b'/' | b'-')
+                        })
+                })
+                .map(|(key, word)| {
+                    finding_at_span(
+                        "DF088",
+                        Severity::Error,
+                        word.span,
+                        format!("LABEL key '{key}' contains invalid characters"),
+                        "Label keys are not a junk drawer. Use only letters, numbers, '.', '_', '/', and '-'.",
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 fn rule_redundant_target_platform(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     instrs_of(instrs, "FROM")
         .into_iter()
@@ -819,9 +883,9 @@ fn rule_redundant_target_platform(instrs: &[Instruction], _raw: &str) -> Vec<Fin
 fn rule_reserved_stage_name(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
     instrs_of(instrs, "FROM").into_iter().filter_map(|instruction| {
         let alias = parse_from_arguments(&instruction.arguments)?.alias?;
-        (alias.eq_ignore_ascii_case("scratch")).then(|| instruction.words.iter().find(|word| word.value == alias).map(|word|
-            finding_at_span("DF084", Severity::Warning, word.span, "Stage name 'scratch' is reserved".into(),
-                "Calling a stage scratch can confuse readers with Docker's special empty image. Use a descriptive stage name."))).flatten()
+        (alias.eq_ignore_ascii_case("scratch") || alias.eq_ignore_ascii_case("context")).then(|| instruction.words.iter().find(|word| word.value == alias).map(|word|
+            finding_at_span("DF084", Severity::Warning, word.span, format!("Stage name '{alias}' is reserved"),
+                "Stage names 'scratch' and 'context' are reserved in Docker. Use a descriptive stage name."))).flatten()
     }).collect()
 }
 
@@ -1694,6 +1758,93 @@ fn rule_copy_all(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
         });
     }
     findings
+}
+
+fn rule_copy_entire_filesystem(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "COPY")
+        .into_iter()
+        .filter(|instruction| {
+            instruction
+                .flags
+                .iter()
+                .any(|flag| flag.name.eq_ignore_ascii_case("from"))
+                && matches!(instruction_operands(instruction).first(), Some(&"/" | &"/."))
+        })
+        .map(|instruction| Finding {
+            column: 0,
+            end_line: 0,
+            end_column: 0,
+            rule: "DF089".into(),
+            severity: Severity::Warning,
+            line: instruction.line,
+            message: "COPY --from copies the entire source filesystem".to_string(),
+            roast: "Copying an entire image filesystem will bring more crap than you probably want. Bring over only the paths the final image actually needs.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_shell_overwrite(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
+    instrs_of(instrs, "RUN")
+        .into_iter()
+        .filter(|instruction| {
+            instruction
+                .arguments
+                .split([';', '&', '|'])
+                .any(shell_overwrite_command)
+        })
+        .map(|instruction| Finding {
+            column: 0,
+            end_line: 0,
+            end_column: 0,
+            rule: "DF090".into(),
+            severity: Severity::Warning,
+            line: instruction.line,
+            message: "Use SHELL to change the default shell instead of replacing /bin/sh".to_string(),
+            roast: "You think overwriting /bin/sh to change Docker's default shell is a clever hack... but it's not. Use the built-in SHELL command, that's what it's there for.".to_string(),
+        })
+        .collect()
+}
+
+fn rule_hadolint_ignore_pragma(_instrs: &[Instruction], raw: &str) -> Vec<Finding> {
+    let directive = Regex::new(r"(?i)^\s*#\s*hadolint\s+ignore\s*=\s*\S+").unwrap();
+    raw.lines()
+        .enumerate()
+        .filter(|(_, line)| directive.is_match(line))
+        .map(|(line_index, _)| Finding {
+            column: 0,
+            end_line: 0,
+            end_column: 0,
+            rule: "DF091".into(),
+            severity: Severity::Warning,
+            line: line_index + 1,
+            message: "Hadolint ignore comment suppresses a lint rule".to_string(),
+            roast: "A Hadolint ignore comment makes the warning disappear from view, but it does not make it less true. Fix the Dockerfile or document the exception through the project's lint policy.".to_string(),
+        })
+        .collect()
+}
+
+fn shell_overwrite_command(command: &str) -> bool {
+    let tokens = command.split_whitespace().collect::<Vec<_>>();
+    let Some(ln_index) = tokens.iter().position(|token| {
+        let command = token.trim_matches(['\'', '"']);
+        command == "ln" || command.ends_with("/ln")
+    }) else {
+        return false;
+    };
+
+    let mut operands = Vec::new();
+    for token in tokens.into_iter().skip(ln_index + 1) {
+        let token = token.trim_matches(['\'', '"']);
+        if token.starts_with('-') && operands.is_empty() {
+            continue;
+        }
+        operands.push(token);
+        if operands.len() == 2 {
+            break;
+        }
+    }
+
+    operands.len() == 2 && operands[1] == "/bin/sh"
 }
 
 fn rule_cd_instead_of_workdir(instrs: &[Instruction], _raw: &str) -> Vec<Finding> {
