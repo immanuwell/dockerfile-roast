@@ -1152,6 +1152,21 @@ fn copy_ignored_file_treats_the_build_context_root_as_a_root() {
         ("root-relative-child", ".*\n", "./src", 0),
         ("root-relative-dotfile", ".*\n", "./.env", 1),
         ("root-child-trailing-slash", "src\n", "src/", 1),
+        ("unanchored-root-file", "*.lock\n", "app.lock", 1),
+        ("unanchored-nested-file", "*.lock\n", "sub/app.lock", 0),
+        ("allowlist-file-in-dir", "*\n!tools\n", "tools/run.sh", 0),
+        (
+            "allowlist-dir-then-exclude",
+            "*\n!tools\ntools/secret.sh\n",
+            "tools/secret.sh",
+            1,
+        ),
+        (
+            "dir-contents-then-negated-dir",
+            "tools/*\n!tools\n",
+            "tools/run.sh",
+            1,
+        ),
     ] {
         let root = policy_fixture(name);
         let dockerfile = root.join("Dockerfile");

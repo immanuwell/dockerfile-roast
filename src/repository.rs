@@ -899,10 +899,19 @@ pub fn ignored_copy_sources(
     let Some(ignorefile) = effective_ignorefile(dockerfile, context, engine) else {
         return Ok(Vec::new());
     };
-    let mut builder = GitignoreBuilder::new(context);
-    builder.add(&ignorefile);
-    let matcher = builder.build().map_err(std::io::Error::other)?;
     let ignorefile_content = std::fs::read_to_string(&ignorefile)?;
+    let mut builder = GitignoreBuilder::new(context);
+    for (index, line) in ignorefile_content.lines().enumerate() {
+        let line = if index == 0 {
+            line.trim_start_matches('\u{feff}')
+        } else {
+            line
+        };
+        builder
+            .add_line(Some(ignorefile.clone()), &anchor_ignore_pattern(line))
+            .map_err(std::io::Error::other)?;
+    }
+    let matcher = builder.build().map_err(std::io::Error::other)?;
     let root_excluded = context_root_excluded(&ignorefile_content);
     let content = std::fs::read_to_string(dockerfile)?;
     let document = crate::parser::parse_document(&content);
@@ -957,6 +966,23 @@ pub fn ignored_copy_sources(
         }
     }
     Ok(ignored)
+}
+
+/// Docker matches every ignore pattern against the whole path from the
+/// context root, so `*.lock` excludes `app.lock` but not `sub/app.lock`.
+/// Git matches a pattern without a slash at any depth; anchoring it with a
+/// leading `/` gives Docker's behaviour.
+fn anchor_ignore_pattern(line: &str) -> String {
+    let pattern = line.trim();
+    if pattern.is_empty() || pattern.starts_with('#') {
+        return pattern.to_string();
+    }
+    let (negation, body) = match pattern.strip_prefix('!') {
+        Some(body) => ("!", body.trim()),
+        None => ("", pattern),
+    };
+    let body = body.trim_start_matches("./").trim_start_matches('/');
+    format!("{negation}/{body}")
 }
 
 /// Whether a negation pattern in the ignore file could still rescue some file
