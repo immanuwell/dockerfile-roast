@@ -953,6 +953,10 @@ fn parse_form(
 
     match serde_json::from_str::<Vec<String>>(command) {
         Ok(values) => InstructionForm::Json(values),
+        // `RUN [ "$x" = y ]` is a `test` command with a quoted operand
+        Err(_) if keyword == "RUN" && is_test_with_quoted_operand(command) => {
+            InstructionForm::Shell
+        }
         Err(error) => {
             let target = words
                 .get(command_word)
@@ -966,6 +970,31 @@ fn parse_form(
             InstructionForm::InvalidJson
         }
     }
+}
+
+/// Whether a RUN that failed to parse as JSON is `[ "..." ...` with a space
+/// after `[` and no `,` after the first quoted word: a `test` command, not a
+/// broken exec array like `[ "echo", 'hi' ]`.
+fn is_test_with_quoted_operand(command: &str) -> bool {
+    let Some(rest) = command.strip_prefix('[') else {
+        return false;
+    };
+    if !rest.starts_with(char::is_whitespace) {
+        return false;
+    }
+    let mut chars = rest.trim_start().chars();
+    if chars.next() != Some('"') {
+        return false;
+    }
+    let mut escaped = false;
+    for ch in chars.by_ref() {
+        match ch {
+            '\\' if !escaped => escaped = true,
+            '"' if !escaped => break,
+            _ => escaped = false,
+        }
+    }
+    !chars.as_str().trim_start().starts_with(',')
 }
 
 fn can_contain_heredoc(keyword: &str, command: &str, form: &InstructionForm) -> bool {

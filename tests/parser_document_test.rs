@@ -140,8 +140,7 @@ fn json_and_shell_forms_are_distinguished_and_validated() {
 
 #[test]
 fn run_posix_test_command_is_not_misparsed_as_json() {
-    let source =
-        "FROM debian:trixie\nRUN [ ! -f /marker ] || touch /marker\nRUN [\"echo\", \"ok\"]\n";
+    let source = "FROM debian:trixie\nRUN [ ! -f /marker ] || touch /marker\nRUN [\"echo\", \"ok\"]\nRUN [ \"$(uname -m)\" != \"ppc64le\" ] || echo ppc\n";
     let document = parse_document(source);
 
     assert_eq!(document.instructions[1].form, InstructionForm::Shell);
@@ -149,6 +148,10 @@ fn run_posix_test_command_is_not_misparsed_as_json() {
         document.instructions[2].form,
         InstructionForm::Json(vec!["echo".into(), "ok".into()])
     );
+    assert_eq!(document.instructions[3].form, InstructionForm::Shell);
+
+    let broken = parse_document("FROM debian:trixie\nRUN [ \"echo\", 'hi' ]\n");
+    assert_eq!(broken.instructions[1].form, InstructionForm::InvalidJson);
     assert!(document
         .diagnostics
         .iter()
