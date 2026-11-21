@@ -27,6 +27,7 @@ Use this guide as a quick reference. Every section favors copy-paste examples ov
 - [Web version](#web-version)
 - [Rust library](#rust-library)
 - [Parser API](#parser-api)
+- [Evaluate the image configuration](#evaluate-the-image-configuration)
 - [Rule catalog](#rule-catalog)
 - [Adoption recipes](#adoption-recipes)
 - [Troubleshooting](#troubleshooting)
@@ -2157,6 +2158,7 @@ The public API includes:
 
 - `linter::lint_content` and `linter::lint_file` for linting
 - `parser::parse_document` for structured Dockerfile data
+- `evaluate::evaluate` for the image configuration a Dockerfile produces
 - `fixes::plan`, `fixes::apply`, and the versioned fix protocol types for deterministic edits
 - `LintOptions` and `LintResult` for lint configuration and results
 - `Finding`, `Rule`, and `Severity` for working with findings and rules
@@ -2223,6 +2225,40 @@ let options = LintOptions {
     ..LintOptions::default()
 };
 ```
+
+## Evaluate the image configuration
+
+`evaluate::evaluate` statically computes the configuration of the image a Dockerfile builds, without running any instruction. It takes a parsed document and `EvalOptions`, which holds the `--build-arg` pairs and an optional `--target` stage name.
+
+```rust
+use dockerfile_roast::evaluate::{evaluate, EvalOptions};
+use dockerfile_roast::parser::parse_document;
+
+fn main() {
+    let source = "ARG TAG=3.20
+FROM alpine:${TAG} AS base
+ENV APP=demo
+EXPOSE 8080
+CMD echo $APP
+";
+    let options = EvalOptions {
+        build_args: vec![("TAG".to_string(), "3.19".to_string())],
+        target: None,
+    };
+
+    let config = evaluate(&parse_document(source), &options).unwrap();
+    assert_eq!(config.base_image.as_deref(), Some("alpine:3.19"));
+    assert_eq!(config.exposed_ports, ["8080/tcp"]);
+}
+```
+
+The result is an `ImageConfig` with `env`, `labels`, `user`, `base_image`, `cmd`, `entrypoint`, `workdir`, `shell`, and `exposed_ports`. The only errors are `EvalError::UnknownTarget` and `EvalError::NoStages`.
+
+- The target defaults to the last stage and matches stage names without regard to case.
+- `FROM` a lowercase name of an earlier stage continues from that stage's configuration and variables. Any other image is recorded in `base_image`. A stage built `FROM scratch` starts with the Linux `PATH` that Docker sets.
+- `ARG`, `ENV`, and `LABEL` values are expanded, including `$V`, `${V}`, `${V:-w}`, `${V-w}`, `${V:+w}`, `${V+w}`, quotes, and escapes. One `ARG` line sees its own earlier values, while `ENV` and `LABEL` lines see only what was set before the line.
+- `CMD`, `ENTRYPOINT`, and `SHELL` are never expanded. Shell-form commands are wrapped in the shell in effect at their line.
+- `RUN`, `COPY`, `ADD`, and the other instructions do not change the result. Other `${V...}` modifiers give the plain value.
 
 ## Parser API
 
